@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Visualizer</title>
+
+  <!-- TradingView Lightweight Charts (MIT) -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --txt:       #e6edf3;
+      --txt-dim:   #8b949e;
+      --accent:    #58a6ff;
+      --green:     #3fb950;
+      --red:       #f85149;
+      --yellow:    #d29922;
+      --radius:    6px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--txt);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* ── Top bar ──────────────────────────────────────────────────────────── */
+    #topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+
+    #search-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+
+    #search-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--txt);
+      padding: 5px 10px;
+      width: 210px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    #search-input:focus { border-color: var(--accent); }
+    #search-input::placeholder { color: var(--txt-dim); }
+
+    #search-btn {
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius);
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 5px 12px;
+      transition: opacity .15s;
+    }
+    #search-btn:hover { opacity: .85; }
+
+    /* autocomplete dropdown */
+    #autocomplete {
+      position: absolute;
+      top: 44px;
+      left: 14px;
+      z-index: 999;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      min-width: 280px;
+      max-height: 260px;
+      overflow-y: auto;
+      display: none;
+      box-shadow: 0 8px 24px #0008;
+    }
+    .ac-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+    }
+    .ac-item:hover { background: var(--border); }
+    .ac-sym  { font-weight: 700; color: var(--accent); font-size: 13px; min-width: 60px; }
+    .ac-name { color: var(--txt-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Period buttons ───────────────────────────────────────────────────── */
+    #period-bar {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      flex: 0 0 auto;
+    }
+    .pbtn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: var(--txt-dim);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 4px 9px;
+      transition: all .15s;
+    }
+    .pbtn:hover { border-color: var(--border); color: var(--txt); }
+    .pbtn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* ── Price panel ──────────────────────────────────────────────────────── */
+    #price-panel {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-left: auto;
+      flex-wrap: wrap;
+    }
+    #ticker-label   { font-size: 16px; font-weight: 700; color: var(--accent); }
+    #company-label  { font-size: 12px; color: var(--txt-dim); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #price-label    { font-size: 20px; font-weight: 700; }
+    #change-label   { font-size: 13px; font-weight: 600; }
+
+    /* ── Market status badge ──────────────────────────────────────────────── */
+    #status-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 20px;
+      border: 1px solid;
+      letter-spacing: .5px;
+    }
+    #status-badge.open   { color: var(--green); border-color: var(--green); background: #3fb95015; }
+    #status-badge.closed { color: var(--txt-dim); border-color: var(--border); background: transparent; }
+
+    /* ── Chart area ───────────────────────────────────────────────────────── */
+    #chart-wrap {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+    #chart { width: 100%; height: 100%; }
+
+    /* ── Volume sub-chart ─────────────────────────────────────────────────── */
+    /* Volume is rendered on a separate pane inside the same chart container */
+
+    /* ── Footer ───────────────────────────────────────────────────────────── */
+    #footer {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 4px 14px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 11px;
+      color: var(--txt-dim);
+      flex-shrink: 0;
+    }
+    #footer span { display: flex; align-items: center; gap: 4px; }
+    #live-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.5s infinite;
+    }
+    #live-dot.off { background: var(--txt-dim); animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .3; }
+    }
+
+    /* ── Loading overlay ──────────────────────────────────────────────────── */
+    #loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      z-index: 10;
+      font-size: 15px;
+      color: var(--txt-dim);
+      gap: 10px;
+    }
+    #loading.hidden { display: none; }
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error toast ──────────────────────────────────────────────────────── */
+    #error-toast {
+      position: fixed;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #5a0000;
+      border: 1px solid var(--red);
+      border-radius: var(--radius);
+      color: var(--red);
+      padding: 8px 18px;
+      font-size: 13px;
+      z-index: 999;
+      display: none;
+    }
+    #error-toast.show { display: block; }
+
+    /* ── OHLCV tooltip ────────────────────────────────────────────────────── */
+    #ohlcv-tooltip {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: #161b22cc;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 11px;
+      pointer-events: none;
+      display: none;
+      gap: 8px;
+      flex-wrap: wrap;
+      max-width: 340px;
+    }
+    #ohlcv-tooltip.visible { display: flex; }
+    .ov { color: var(--txt-dim); margin-right: 2px; }
+    .oval { color: var(--txt); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
+  <div id="topbar">
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="Ticker or company…" autocomplete="off" />
+      <button id="search-btn">Go</button>
+    </div>
+    <div id="autocomplete"></div>
+
+    <div id="period-bar"></div>
+
+    <div id="price-panel">
+      <span id="ticker-label">—</span>
+      <span id="company-label"></span>
+      <span id="price-label">—</span>
+      <span id="change-label"></span>
+      <span id="status-badge" class="closed">CLOSED</span>
+    </div>
+  </div>
+
+  <!-- ── Chart + overlays ─────────────────────────────────────────────────── -->
+  <div id="chart-wrap">
+    <div id="chart"></div>
+    <div id="loading"><div class="spinner"></div> Loading data…</div>
+    <div id="ohlcv-tooltip"></div>
+  </div>
+
+  <!-- ── Footer ───────────────────────────────────────────────────────────── -->
+  <div id="footer">
+    <span><div id="live-dot" class="off"></div> <span id="live-label">Live updates off</span></span>
+    <span>Updated: <span id="updated-label">—</span></span>
+    <span>Interval: <span id="interval-label">—</span></span>
+    <span id="clock-label" title="Internet-calibrated Eastern Time + clock offset">ET — (syncing…)</span>
+    <span>Source: Yahoo Finance</span>
+  </div>
+</div>
+
+<div id="error-toast"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════════════════════════════
+const PERIODS = ["1d","5d","1mo","3mo","6mo","1y","2y","5y","max"];
+const REFRESH_MS      = 6000;    // live poll interval (ms)
+const CLOCK_RESYNC_MS = 1800000; // re-fetch /api/time_info every 30 min
+
+let state = {
+  ticker:    "",
+  period:    "1d",
+  liveTimer: null,
+  // Populated after first chart load from exchange_schedule in API response.
+  // Shape: { code, name, tz, open:[h,m], close:[h,m], break_start, break_end, approximate }
+  exchange:  null,
+};
+
+// ── Internet clock calibration ────────────────────────────────────────────────
+// clockOffsetMs = internet_utc_ms − Date.now()
+// Add this to Date.now() whenever you need an internet-accurate UTC timestamp.
+let clockOffsetMs  = 0;
+let clockSyncSource = "not yet synced";
+
+async function syncClock() {
+  try {
+    const t0  = Date.now();
+    // Include ticker so the server can return the correct exchange schedule
+    const url = state.ticker ? `/api/time_info?ticker=${encodeURIComponent(state.ticker)}` : "/api/time_info";
+    const res  = await fetch(url);
+    const t1  = Date.now();
+    const info = await res.json();
+    // Compensate for half the fetch round-trip to centre on the server timestamp
+    const rttHalf   = (t1 - t0) / 2;
+    clockOffsetMs   = info.offset_ms - rttHalf;
+    clockSyncSource = info.sync_source || "server";
+    // Adopt exchange schedule from the time_info response if not yet set
+    // (will be overwritten by renderChart on first data load anyway)
+    if (!state.exchange && info.exchange_schedule) {
+      state.exchange = info.exchange_schedule;
+    }
+    updateClockLabel();
+  } catch (_) {
+    clockSyncSource = "sync failed — using last offset";
+    updateClockLabel();
+  }
+}
+
+function internetNow() {
+  return new Date(Date.now() + clockOffsetMs);
+}
+
+/**
+ * Market-open check using the exchange schedule stored in state.exchange.
+ * Uses Intl.DateTimeFormat with the exchange's own IANA timezone — handles
+ * DST automatically for every market, no library needed.
+ * Falls back to NYSE hours if state.exchange is not yet populated.
+ */
+function isMarketOpenNow() {
+  const exch = state.exchange || { tz:"America/New_York", open:[9,30], close:[16,0] };
+  const now   = internetNow();
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: exch.tz,
+    weekday:  "short",
+    hour:     "numeric",
+    minute:   "numeric",
+    hour12:   false,
+  }).formatToParts(now);
+
+  const get     = type => parts.find(p => p.type === type)?.value ?? "";
+  const weekday = get("weekday");
+  if (weekday === "Sat" || weekday === "Sun") return false;
+
+  const h        = parseInt(get("hour"),   10);
+  const m        = parseInt(get("minute"), 10);
+  const totalMin = h * 60 + m;
+  const openMin  = exch.open[0]  * 60 + exch.open[1];
+  const closeMin = exch.close[0] * 60 + exch.close[1];
+  if (totalMin < openMin || totalMin >= closeMin) return false;
+
+  // Midday break (JP, HK, CN, SG …)
+  if (exch.break_start && exch.break_end) {
+    const bsMin = exch.break_start[0] * 60 + exch.break_start[1];
+    const beMin = exch.break_end[0]   * 60 + exch.break_end[1];
+    if (totalMin >= bsMin && totalMin < beMin) return false;
+  }
+
+  return true;
+}
+
+function updateClockLabel() {
+  const $cl = document.getElementById("clock-label");
+  if (!$cl) return;
+  const exch = state.exchange || { tz: "America/New_York", name: "NYSE" };
+  const now  = internetNow();
+  const timeStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: exch.tz,
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(now);
+  const offsetSec = Math.round(clockOffsetMs / 1000);
+  const approxNote = exch.approximate ? " ⚠ approx holidays" : "";
+  $cl.textContent =
+    `${exch.name || ""}  ${timeStr}  (Δ${offsetSec >= 0 ? "+" : ""}${offsetSec}s via ${clockSyncSource.split(" (")[0]}${approxNote})`;
+  $cl.title = `Exchange: ${exch.name}  Timezone: ${exch.tz}  Clock offset: ${offsetSec >= 0 ? "+" : ""}${offsetSec}s`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  DOM refs
+// ══════════════════════════════════════════════════════════════════════════════
+const $searchInput  = document.getElementById("search-input");
+const $searchBtn    = document.getElementById("search-btn");
+const $autocomplete = document.getElementById("autocomplete");
+const $periodBar    = document.getElementById("period-bar");
+const $loading      = document.getElementById("loading");
+const $tickerLabel  = document.getElementById("ticker-label");
+const $companyLabel = document.getElementById("company-label");
+const $priceLabel   = document.getElementById("price-label");
+const $changeLabel  = document.getElementById("change-label");
+const $statusBadge  = document.getElementById("status-badge");
+const $liveDot      = document.getElementById("live-dot");
+const $liveLabel    = document.getElementById("live-label");
+const $updatedLabel = document.getElementById("updated-label");
+const $intervalLabel= document.getElementById("interval-label");
+const $errorToast   = document.getElementById("error-toast");
+const $ohlcvTooltip = document.getElementById("ohlcv-tooltip");
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Build period buttons
+// ══════════════════════════════════════════════════════════════════════════════
+PERIODS.forEach(p => {
+  const btn = document.createElement("button");
+  btn.className = "pbtn";
+  btn.textContent = p.toUpperCase();
+  btn.dataset.period = p;
+  btn.addEventListener("click", () => {
+    // Activate cooldown so the zoom-subscription doesn't immediately override
+    // the explicit period the user just picked.
+    _zoomCooldown = true;
+    setTimeout(() => { _zoomCooldown = false; }, 1500);
+    state.period = p;
+    updatePeriodButtons();
+    loadChart();
+  });
+  $periodBar.appendChild(btn);
+});
+
+function updatePeriodButtons() {
+  document.querySelectorAll(".pbtn").forEach(b => {
+    b.classList.toggle("active", b.dataset.period === state.period);
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Lightweight Charts setup
+// ══════════════════════════════════════════════════════════════════════════════
+const chartEl = document.getElementById("chart");
+
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: {
+    background:  { color: "#0d1117" },
+    textColor:   "#8b949e",
+  },
+  grid: {
+    vertLines: { color: "#1c2128" },
+    horzLines: { color: "#1c2128" },
+  },
+  crosshair: {
+    mode: LightweightCharts.CrosshairMode.Normal,
+  },
+  rightPriceScale: {
+    borderColor: "#30363d",
+    scaleMargins: { top: 0.05, bottom: 0.25 },
+  },
+  timeScale: {
+    borderColor: "#30363d",
+    timeVisible: true,
+    secondsVisible: false,
+  },
+  handleScroll:  true,
+  handleScale:   true,
+});
+
+// Candlestick series
+const candleSeries = chart.addCandlestickSeries({
+  upColor:          "#3fb950",
+  downColor:        "#f85149",
+  borderUpColor:    "#3fb950",
+  borderDownColor:  "#f85149",
+  wickUpColor:      "#3fb950",
+  wickDownColor:    "#f85149",
+});
+
+// Volume histogram on a separate (shorter) pane — achieved via price scale margin
+const volumeSeries = chart.addHistogramSeries({
+  color:          "#58a6ff44",
+  priceFormat:    { type: "volume" },
+  priceScaleId:   "volume",
+});
+chart.priceScale("volume").applyOptions({
+  scaleMargins: { top: 0.80, bottom: 0.00 },
+});
+
+// Resize chart when window resizes
+const ro = new ResizeObserver(entries => {
+  const { width, height } = entries[0].contentRect;
+  chart.resize(width, height);
+});
+ro.observe(chartEl);
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Dynamic zoom: auto-switch period & granularity on scroll
+//
+//  When the user scrolls / pinch-zooms, the visible time span changes.
+//  We map that span to the best-matching period, and if it differs from the
+//  current one we fetch new data at the right granularity and highlight the
+//  matching period button.
+//
+//  Guard rails:
+//    _ignoreRangeChange — suppressed during programmatic fitContent / setVisibleRange
+//    _zoomCooldown      — 1.5 s dead-zone after each auto-switch to avoid flicker
+// ══════════════════════════════════════════════════════════════════════════════
+
+const SPAN_TO_PERIOD = [
+  // [maxCalendarDays, period]
+  //  Thresholds are set slightly above the natural data span of each period
+  //  so the switch feels like "you clearly need more/less data now."
+  [1.5,      "1d"],      // ≤ 1.5 days   → 1-min bars
+  [7,        "5d"],      // ≤ 7 days     → 5-min bars
+  [35,       "1mo"],     // ≤ 35 days    → 1-hour bars
+  [100,      "3mo"],     // ≤ 100 days   → daily bars
+  [200,      "6mo"],     // ≤ 200 days   → daily bars
+  [400,      "1y"],      // ≤ 400 days   → daily bars
+  [800,      "2y"],      // ≤ 800 days   → weekly bars
+  [2000,     "5y"],      // ≤ 2000 days  → weekly bars
+];
+// Anything wider → "max" (monthly bars)
+
+function spanToPeriod(spanDays) {
+  for (const [maxDays, p] of SPAN_TO_PERIOD) {
+    if (spanDays <= maxDays) return p;
+  }
+  return "max";
+}
+
+let _zoomDebounce       = null;
+let _zoomCooldown       = false;
+let _ignoreRangeChange  = false;
+
+chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+  // Skip null ranges, missing ticker, programmatic changes, and cooldown
+  if (!range || range.from == null || range.to == null) return;
+  if (!state.ticker || _ignoreRangeChange || _zoomCooldown) return;
+
+  clearTimeout(_zoomDebounce);
+  _zoomDebounce = setTimeout(() => {
+    const spanDays = (range.to - range.from) / 86400;
+    const newPeriod = spanToPeriod(spanDays);
+
+    if (newPeriod !== state.period) {
+      // Activate cooldown to prevent rapid bounce between adjacent periods
+      _zoomCooldown = true;
+      setTimeout(() => { _zoomCooldown = false; }, 1500);
+
+      state.period = newPeriod;
+      updatePeriodButtons();
+      loadChart();
+    }
+  }, 400);   // 400 ms debounce — fast enough to feel responsive, slow enough to batch wheel ticks
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  OHLCV crosshair tooltip
+// ══════════════════════════════════════════════════════════════════════════════
+chart.subscribeCrosshairMove(param => {
+  if (!param.point || !param.time) {
+    $ohlcvTooltip.classList.remove("visible");
+    return;
+  }
+  const bar = param.seriesData.get(candleSeries);
+  if (!bar) { $ohlcvTooltip.classList.remove("visible"); return; }
+
+  const { open: o, high: h, low: l, close: c } = bar;
+  const chg   = c - o;
+  const chgPct= ((chg / o) * 100).toFixed(2);
+  const color = chg >= 0 ? "#3fb950" : "#f85149";
+  const fmt   = v => typeof v === "number" ? v.toFixed(2) : "—";
+
+  $ohlcvTooltip.innerHTML =
+    `<span><span class="ov">O</span><span class="oval">${fmt(o)}</span></span>
+     <span><span class="ov">H</span><span class="oval">${fmt(h)}</span></span>
+     <span><span class="ov">L</span><span class="oval">${fmt(l)}</span></span>
+     <span><span class="ov">C</span><span class="oval" style="color:${color}">${fmt(c)}</span></span>
+     <span><span class="ov">Δ</span><span class="oval" style="color:${color}">${chg>=0?"+":""}${fmt(chg)} (${chgPct}%)</span></span>`;
+  $ohlcvTooltip.classList.add("visible");
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Data loading
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadChart() {
+  if (!state.ticker) return;
+
+  $loading.classList.remove("hidden");
+  clearLiveTimer();
+
+  try {
+    const res  = await fetch(`/api/data?ticker=${encodeURIComponent(state.ticker)}&period=${state.period}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    renderChart(data);
+    scheduleLive();
+  } catch (err) {
+    showError("Failed to load: " + err.message);
+  } finally {
+    $loading.classList.add("hidden");
+  }
+}
+
+function renderChart(data) {
+  const { meta, records, interval, fetched_at, market_open, exchange_schedule } = data;
+
+  // Keep exchange schedule in sync — used by isMarketOpenNow() between polls
+  if (exchange_schedule) {
+    state.exchange = exchange_schedule;
+    updateClockLabel();
+  }
+
+  // ── Price series ─────────────────────────────────────────────────────────
+  const candles = records.map(r => ({
+    time:  r.t,    // Unix epoch — Lightweight Charts accepts this directly
+    open:  r.o,
+    high:  r.h,
+    low:   r.l,
+    close: r.c,
+  }));
+  const volumes = records.map(r => ({
+    time:  r.t,
+    value: r.v,
+    color: r.c >= r.o ? "#3fb95044" : "#f8514944",
+  }));
+
+  candleSeries.setData(candles);
+  volumeSeries.setData(volumes);
+
+  // Suppress the zoom-subscription while we programmatically fit the view
+  _ignoreRangeChange = true;
+  chart.timeScale().fitContent();
+  setTimeout(() => { _ignoreRangeChange = false; }, 250);
+
+  // ── Price panel ───────────────────────────────────────────────────────────
+  if (records.length >= 2) {
+    const last  = records[records.length - 1];
+    const first = records[0];
+    const chg   = last.c - first.o;
+    const chgPct= ((chg / first.o) * 100).toFixed(2);
+    const color = chg >= 0 ? "#3fb950" : "#f85149";
+
+    $tickerLabel.textContent  = meta.ticker || "—";
+    $companyLabel.textContent = meta.short_name || "";
+    $priceLabel.textContent   = last.c.toFixed(2);
+    $priceLabel.style.color   = color;
+    $changeLabel.textContent  = `${chg >= 0 ? "+" : ""}${chg.toFixed(2)} (${chgPct}%)`;
+    $changeLabel.style.color  = color;
+    document.title            = `${meta.ticker} ${last.c.toFixed(2)} — Stock Visualizer`;
+  }
+
+  // ── Status / footer ───────────────────────────────────────────────────────
+  const exchName = exchange_schedule?.name || "";
+  if (market_open) {
+    $statusBadge.textContent = exchName ? `${exchName} OPEN` : "OPEN";
+    $statusBadge.className   = "open";
+  } else {
+    $statusBadge.textContent = exchName ? `${exchName} CLOSED` : "CLOSED";
+    $statusBadge.className   = "closed";
+  }
+
+  const updatedDate = new Date(fetched_at + "Z"); // treat as UTC
+  $updatedLabel.textContent  = updatedDate.toLocaleTimeString();
+  $intervalLabel.textContent = interval;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Live polling
+//
+//  Market-open decision uses isMarketOpenNow() — the browser's own Intl-based
+//  ET check on a clock calibrated against the internet (clockOffsetMs).
+//  The server's market_open field is used only as a cross-check / fallback.
+// ══════════════════════════════════════════════════════════════════════════════
+
+function scheduleLive() {
+  clearLiveTimer();
+  const open = isMarketOpenNow();
+
+  if (open) {
+    $liveDot.classList.remove("off");
+    $liveLabel.textContent = "Live (6 s)";
+    state.liveTimer = setInterval(async () => {
+      // Re-evaluate market status every tick using calibrated clock
+      if (!isMarketOpenNow()) {
+        scheduleLive();   // will flip to "off" branch
+        return;
+      }
+      try {
+        const res  = await fetch(`/api/data?ticker=${encodeURIComponent(state.ticker)}&period=${state.period}`);
+        const data = await res.json();
+        if (!data.error) renderChart(data);
+      } catch (_) { /* silent — keep polling */ }
+      updateClockLabel();
+    }, REFRESH_MS);
+  } else {
+    $liveDot.classList.add("off");
+    $liveLabel.textContent = "Live updates off";
+  }
+}
+
+function clearLiveTimer() {
+  if (state.liveTimer) { clearInterval(state.liveTimer); state.liveTimer = null; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Search / autocomplete
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _acTimer = null;
+
+$searchInput.addEventListener("input", () => {
+  clearTimeout(_acTimer);
+  const q = $searchInput.value.trim();
+  if (q.length < 2) { hideAc(); return; }
+  _acTimer = setTimeout(() => fetchAc(q), 300);
+});
+
+async function fetchAc(q) {
+  try {
+    const res  = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const list = await res.json();
+    showAc(list);
+  } catch (_) { hideAc(); }
+}
+
+function showAc(items) {
+  if (!items.length) { hideAc(); return; }
+  $autocomplete.innerHTML = "";
+  items.forEach(item => {
+    const div = document.createElement("div");
+    div.className = "ac-item";
+    div.innerHTML = `<span class="ac-sym">${item.symbol}</span><span class="ac-name">${item.name}</span>`;
+    div.addEventListener("mousedown", e => {
+      e.preventDefault();
+      selectTicker(item.symbol);
+    });
+    $autocomplete.appendChild(div);
+  });
+  $autocomplete.style.display = "block";
+}
+
+function hideAc() {
+  $autocomplete.style.display = "none";
+}
+
+$searchInput.addEventListener("blur",  () => setTimeout(hideAc, 150));
+$searchInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); triggerSearch(); }
+});
+
+$searchBtn.addEventListener("click", triggerSearch);
+
+async function triggerSearch() {
+  const q = $searchInput.value.trim();
+  if (!q) return;
+  hideAc();
+  try {
+    const res  = await fetch(`/api/resolve?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    selectTicker(data.ticker);
+  } catch (_) {
+    selectTicker(q.toUpperCase());
+  }
+}
+
+function selectTicker(ticker) {
+  state.ticker = ticker.toUpperCase();
+  $searchInput.value = state.ticker;
+  hideAc();
+  // Update browser URL bar without reload
+  const url = new URL(window.location.href);
+  url.searchParams.set("ticker", state.ticker);
+  url.searchParams.set("period", state.period);
+  history.replaceState(null, "", url.toString());
+  loadChart();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Error toast
+// ══════════════════════════════════════════════════════════════════════════════
+let _errorTimer = null;
+function showError(msg) {
+  $errorToast.textContent = msg;
+  $errorToast.classList.add("show");
+  clearTimeout(_errorTimer);
+  _errorTimer = setTimeout(() => $errorToast.classList.remove("show"), 5000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Boot: sync clock, then read URL params and load chart
+// ══════════════════════════════════════════════════════════════════════════════
+(async function boot() {
+  const params = new URLSearchParams(window.location.search);
+  const t = params.get("ticker") || "";
+  const p = params.get("period") || "1d";
+
+  state.period = PERIODS.includes(p) ? p : "1d";
+  updatePeriodButtons();
+
+  // Calibrate clock against internet before deciding market status
+  await syncClock();
+  // Re-calibrate every 30 min while the page is open
+  setInterval(syncClock, CLOCK_RESYNC_MS);
+  // Tick the ET clock display every second
+  setInterval(updateClockLabel, 1000);
+
+  if (t) {
+    state.ticker   = t.toUpperCase();
+    $searchInput.value = state.ticker;
+    loadChart();
+  } else {
+    $loading.classList.add("hidden");
+    $searchInput.focus();
+  }
+})();
+</script>
+</body>
+</html>
