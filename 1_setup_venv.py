@@ -4,6 +4,7 @@
 Creates the .venv virtual environment and installs all dependencies.
 Run this ONCE before using 2_stock_visualizer.py.
 
+
 Usage:
     python 1_setup_venv.py
 """
