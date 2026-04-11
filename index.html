@@ -25,7 +25,8 @@
        wrapper divs would otherwise flash a browser outline on click). */
     #webgl-layer, #billboards-layer, #billboards-layer > * { outline: none; }
     #menu-panel, #menu-panel *, #period-topbar, #period-topbar *,
-    #ticker-input-group, #ticker-input-group * {
+    #ticker-input-group, #ticker-input-group *,
+    #ring-size-controls, #ring-size-controls * {
       user-select: auto; -webkit-user-select: auto;
     }
 
@@ -192,6 +193,45 @@
       font-weight: 600;
     }
 
+    /* Ring-size +/- controls — sit at the far left of the period topbar.
+       "+" adds a billboard at the position closest to the camera; "−"
+       removes the billboard currently closest to the camera. Disabled
+       visual state is handled by the :disabled pseudo-class. */
+    #ring-size-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding-right: 8px;
+      margin-right: 4px;
+      border-right: 1px solid #30363d;
+    }
+    #ring-size-controls button {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all .15s;
+    }
+    #ring-size-controls button:hover:not(:disabled) {
+      border-color: #58a6ff;
+      color: #58a6ff;
+    }
+    #ring-size-controls button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
     /* Ticker input group — sits on the LEFT side of the period topbar,
        separated from the period buttons by a thin divider. Reflects the
        ticker of the billboard closest to the camera; typing + Go (or
@@ -314,6 +354,10 @@
        The ticker input group sits on the LEFT, period buttons are
        appended to the right by the module script below. -->
   <div id="period-topbar">
+    <div id="ring-size-controls">
+      <button id="ring-minus" type="button" title="Remove the billboard closest to the camera">−</button>
+      <button id="ring-plus"  type="button" title="Add a billboard at the position closest to the camera">+</button>
+    </div>
     <div id="ticker-input-group">
       <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
       <button id="ticker-go" type="button">Go</button>
@@ -538,16 +582,20 @@
       div.style.pointerEvents = 'none';
       return div;
     }
+    // The center billboard is tracked by reference so ring-only operations
+    // (redistribute / add / remove) can filter it out.
+    let centerBillboard = null;
     {
       const el = makeCenterPlaceholder();
       el.style.display = 'none';
       billboardsLayer.appendChild(el);
-      billboards.push({
+      centerBillboard = {
         element:     el,
         worldPos:    new THREE.Vector3(0, 0, 0),
         interactive: false,
         ticker:      '',
-      });
+      };
+      billboards.push(centerBillboard);
     }
 
     // 2) CIRCLE_COUNT chart iframes evenly spaced on a circle in the XZ plane.
@@ -883,6 +931,130 @@
     $tickerInput.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); runTickerUpdate(); }
     });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  RING SIZE CONTROLS  (+  /  −)
+    //
+    //  "+"  adds a new interactive billboard at the position closest to the
+    //       camera along the ring, then redistributes every ring billboard
+    //       evenly around the circle so one slot always faces the camera.
+    //  "−"  removes whichever ring billboard is currently closest to the
+    //       camera, then redistributes the rest evenly.
+    //  Bounds: ring size is clamped to [1, 100].
+    //
+    //  "Closest to the camera" here means at the angle on the ring that
+    //  minimizes distance to the camera: atan2(camera.z, camera.x) in the XZ
+    //  plane (the analytic solution for a point on a radius-R circle).
+    // ══════════════════════════════════════════════════════════════════════════
+    const RING_MIN = 1;
+    const RING_MAX = 100;
+
+    function getRingBillboards() {
+      return billboards.filter(b => b !== centerBillboard);
+    }
+
+    function findClosestRingBillboard() {
+      let best = null, bestD = Infinity;
+      for (const b of billboards) {
+        if (b === centerBillboard) continue;
+        const d = b.worldPos.distanceTo(camera.position);
+        if (d < bestD) { bestD = d; best = b; }
+      }
+      return best;
+    }
+
+    /**
+     * Redistribute every ring billboard evenly around CIRCLE_RADIUS so that
+     * slot 0 sits at the angle on the ring closest to the camera. If
+     * `priority` is given and is a ring billboard, it is placed at slot 0;
+     * the rest keep their existing relative order and fill slots 1..n-1.
+     */
+    function recomputeRingPositions(priority) {
+      const ring = getRingBillboards();
+      const n = ring.length;
+      if (n === 0) return;
+
+      let ordered;
+      if (priority && ring.includes(priority)) {
+        ordered = [priority, ...ring.filter(b => b !== priority)];
+      } else {
+        ordered = ring;
+      }
+
+      const cameraAngle = Math.atan2(camera.position.z, camera.position.x);
+      for (let i = 0; i < n; i++) {
+        const angle = cameraAngle + (i / n) * Math.PI * 2;
+        ordered[i].worldPos.set(
+          Math.cos(angle) * CIRCLE_RADIUS,
+          0,
+          Math.sin(angle) * CIRCLE_RADIUS,
+        );
+      }
+    }
+
+    /**
+     * Create a fresh interactive iframe with no ticker and add it to the
+     * ring. The resulting billboard is placed at slot 0 (closest to camera).
+     * No-op when already at RING_MAX.
+     */
+    function addClosestRingBillboard() {
+      if (getRingBillboards().length >= RING_MAX) return;
+      const iframe = document.createElement('iframe');
+      iframe.className   = 'chart-frame';
+      // No ticker param → template shows an empty chart. The user can fill
+      // it via the ticker input beside this button.
+      iframe.src         = `${CHART_URL}?period=${encodeURIComponent(currentPeriod)}`;
+      iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
+      iframe.style.height = IFRAME_HEIGHT_PX + 'px';
+      iframe.setAttribute('allow', 'fullscreen');
+      iframe.setAttribute('loading', 'eager');
+      attachFocusSanitizer(iframe);
+      iframe.style.display = 'none';  // hidden until the next projection frame
+      billboardsLayer.appendChild(iframe);
+      const b = {
+        element:     iframe,
+        worldPos:    new THREE.Vector3(),
+        interactive: true,
+        ticker:      '',
+      };
+      billboards.push(b);
+      recomputeRingPositions(b);
+      _lastClosestBillboard = null;   // force ticker input to refresh
+      updateRingButtonState();
+    }
+
+    /**
+     * Remove whichever ring billboard is currently closest to the camera,
+     * then redistribute the survivors. No-op when already at RING_MIN.
+     */
+    function removeClosestRingBillboard() {
+      const ring = getRingBillboards();
+      if (ring.length <= RING_MIN) return;
+      const target = findClosestRingBillboard();
+      if (!target) return;
+      // Detach from the DOM and splice from the master billboards array.
+      if (target.element && target.element.parentNode) {
+        target.element.parentNode.removeChild(target.element);
+      }
+      const idx = billboards.indexOf(target);
+      if (idx >= 0) billboards.splice(idx, 1);
+      if (_lastClosestBillboard === target) _lastClosestBillboard = null;
+      recomputeRingPositions();
+      updateRingButtonState();
+    }
+
+    const $ringMinus = document.getElementById('ring-minus');
+    const $ringPlus  = document.getElementById('ring-plus');
+
+    function updateRingButtonState() {
+      const n = getRingBillboards().length;
+      $ringMinus.disabled = (n <= RING_MIN);
+      $ringPlus.disabled  = (n >= RING_MAX);
+    }
+
+    $ringPlus .addEventListener('click', addClosestRingBillboard);
+    $ringMinus.addEventListener('click', removeClosestRingBillboard);
+    updateRingButtonState();
 
     // ══════════════════════════════════════════════════════════════════════════
     //  ZOOM CLAMP — keep a background margin around every billboard
