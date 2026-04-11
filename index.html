@@ -15,32 +15,47 @@
       color: #e6edf3;
       font-family: 'Segoe UI', system-ui, sans-serif;
       /* Kill text-selection and mobile tap-highlight flashes when clicking
-         on the CSS3D background layer. The HUD slider still works because
-         <input> elements opt back in via the #hud rule below. */
+         on the billboards background layer. The HUD slider still works
+         because <input> elements opt back in via the #hud rule below. */
       user-select: none;
       -webkit-user-select: none;
       -webkit-tap-highlight-color: transparent;
     }
-    /* Remove focus rings on non-input elements (the CSS3D layer and its
+    /* Remove focus rings on non-input elements (the layers and their
        wrapper divs would otherwise flash a browser outline on click). */
-    #webgl-layer, #css3d-layer, #css3d-layer > div { outline: none; }
+    #webgl-layer, #billboards-layer, #billboards-layer > * { outline: none; }
     #hud, #hud * { user-select: auto; -webkit-user-select: auto; }
 
     /* Stacked renderer layers.
        - WebGL canvas sits behind with pointer-events: none so it doesn't
          intercept clicks destined for the iframe billboards or OrbitControls.
-       - CSS3D container sits on top with pointer-events: auto so its DOM
+       - Billboards layer sits on top with pointer-events: auto so its DOM
          children (the iframes) can receive events, and OrbitControls
          (attached to this container) receives drags on empty background. */
-    #webgl-layer, #css3d-layer {
+    #webgl-layer, #billboards-layer {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
     }
-    #webgl-layer { pointer-events: none; z-index: 1; }
-    #css3d-layer { pointer-events: auto; z-index: 2; }
+    #webgl-layer     { pointer-events: none; z-index: 1; }
+    #billboards-layer { pointer-events: auto; z-index: 2; }
+
+    /* Each billboard element is absolutely positioned; its left/top/transform
+       are rewritten every frame by the projector in JS. We intentionally AVOID
+       any 3D transform here — plain 2D translate + scale — so each iframe's
+       hit-box is exactly its visible rectangle on screen. That's the whole
+       point of the manual-projection approach: Chrome's CSS3D iframe hit-test
+       uses a 2D AABB of the transformed quad which leaks far beyond the
+       visible area, breaking pointer events on other billboards. */
+    #billboards-layer > * {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform-origin: 50% 50%;
+      will-change: transform, left, top;
+    }
 
     /* Floating HUD with the orbit-speed slider */
     #hud {
@@ -83,7 +98,9 @@
     }
 
     /* Blank-slot placeholder shown when there aren't enough tickers.
-       Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX. */
+       Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
+       Non-interactive on purpose — scroll/click over it should reach
+       OrbitControls on the billboards layer behind, just like empty bg. */
     .blank-slot {
       background: #000;
       border: 1px solid #30363d;
@@ -94,6 +111,7 @@
       font-family: 'Courier New', monospace;
       font-size: 24px;
       letter-spacing: 0.15em;
+      pointer-events: none;
     }
 
     /* The iframes themselves: dark backdrop, thin border matching the chart theme. */
@@ -145,7 +163,13 @@
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-    import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
+    // NOTE: we deliberately do NOT use CSS3DRenderer here. Chrome hit-tests
+    // CSS3D-transformed iframes by the 2D AABB of their transformed quad,
+    // which leaks far beyond the visible area once the camera gets close to
+    // a billboard — so clicks/wheels on other billboards fall through to the
+    // wrong target. Instead we project each billboard's 3D world position to
+    // 2D screen coordinates manually and use a plain translate+scale, which
+    // gives each iframe a pixel-accurate hit-box.
 
     // ══════════════════════════════════════════════════════════════════════════
     //  CONFIGURATION
@@ -174,8 +198,9 @@
     const CHART_URL         = "_outputs/templates/1_chart_template.html";
 
     // Camera placed far enough back that the full ring + center fit on
-    // screen with empty CSS3D space around them — required for OrbitControls
-    // drag-to-rotate to receive pointerdowns (iframes capture their own).
+    // screen with empty background space around them — required for
+    // OrbitControls drag-to-rotate to receive pointerdowns (iframes
+    // capture their own).
     const MIN_ORBIT_DISTANCE = 8;
     const MAX_ORBIT_DISTANCE = 40;
     const CAMERA_START_POS   = new THREE.Vector3(0, 5, 16);
@@ -204,15 +229,14 @@
     webglRenderer.domElement.id = 'webgl-layer';
     document.body.appendChild(webglRenderer.domElement);
 
-    // CSS3D renderer — draws the interactive iframe billboards.
-    // Its DOM element is a plain <div> that receives its own CSS to sit on top.
-    const cssRenderer = new CSS3DRenderer();
-    cssRenderer.setSize(window.innerWidth, window.innerHeight);
-    cssRenderer.domElement.id = 'css3d-layer';
-    // Explicitly enable pointer events on this layer so OrbitControls can
-    // see drags on empty space, and iframes still handle their own events.
-    cssRenderer.domElement.style.pointerEvents = 'auto';
-    document.body.appendChild(cssRenderer.domElement);
+    // Billboards layer — a plain <div> that holds every iframe/placeholder
+    // as an absolutely-positioned child. Each frame we compute the child's
+    // screen position/scale from its world position + the camera, and write
+    // it into left/top/transform/zIndex. OrbitControls is attached here so
+    // drags and wheels on empty background reach the camera controller.
+    const billboardsLayer = document.createElement('div');
+    billboardsLayer.id = 'billboards-layer';
+    document.body.appendChild(billboardsLayer);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  LIGHTS (kept for any future 3D content — CSS3DObjects ignore lighting,
@@ -268,9 +292,14 @@
     scene.add(camera);                  // required for the camera child to render
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  BILLBOARDS (CSS3DObject wrapping either an iframe or a blank <div>)
+    //  BILLBOARDS (manually projected from 3D world → 2D screen every frame)
+    //
+    //  Each entry is: { element, worldPos: Vector3, interactive: bool }
+    //    element      — DOM node (iframe or div) absolutely positioned in the
+    //                   billboards layer
+    //    worldPos     — fixed 3D position (center of ring / ring slots)
+    //    interactive  — true for chart iframes, false for placeholders
     // ══════════════════════════════════════════════════════════════════════════
-
     const billboards = [];
 
     function makeChartElement(ticker) {
@@ -295,14 +324,41 @@
       return iframe;
     }
 
-    function addBillboard(ticker, position) {
-      const el  = makeChartElement(ticker);
-      const obj = new CSS3DObject(el);
-      obj.position.copy(position);
-      obj.scale.set(BILLBOARD_SCALE, BILLBOARD_SCALE, BILLBOARD_SCALE);
-      scene.add(obj);
-      billboards.push(obj);
-      return obj;
+    // ══════════════════════════════════════════════════════════════════════════
+    //  FOCUS SANITIZER
+    //
+    //  Even with the 2D projection fix, Chrome still holds keyboard focus on
+    //  whichever iframe was last clicked. That by itself is fine, but it can
+    //  leave a subtly-stale wheel-event target in some edge cases. Releasing
+    //  focus on pointerleave makes scroll routing deterministic — the next
+    //  wheel event always hit-tests fresh against the element under cursor.
+    //
+    //  We preserve focus when an <input>/<textarea> inside the iframe has it
+    //  so the user can keep typing in the search box while moving the cursor.
+    // ══════════════════════════════════════════════════════════════════════════
+    function attachFocusSanitizer(iframe) {
+      iframe.addEventListener('pointerleave', () => {
+        if (document.activeElement !== iframe) return;
+        try {
+          const inner = iframe.contentDocument && iframe.contentDocument.activeElement;
+          if (inner && (inner.tagName === 'INPUT' || inner.tagName === 'TEXTAREA')) return;
+        } catch (_) { /* cross-origin safety — same origin in practice */ }
+        iframe.blur();
+      });
+    }
+
+    function addBillboard(ticker, worldPos) {
+      const el = makeChartElement(ticker);
+      const isIframe = el.tagName === 'IFRAME';
+      if (isIframe) attachFocusSanitizer(el);
+      // Hide until the first projection frame so nothing flashes at (0,0).
+      el.style.display = 'none';
+      billboardsLayer.appendChild(el);
+      billboards.push({
+        element:     el,
+        worldPos:    worldPos.clone(),
+        interactive: isIframe,
+      });
     }
 
     // 1) MainObject at origin — placeholder div (NOT a ticker chart).
@@ -313,14 +369,20 @@
       div.style.width  = IFRAME_WIDTH_PX  + 'px';
       div.style.height = IFRAME_HEIGHT_PX + 'px';
       div.textContent  = '— placeholder —';
+      // No interactive content → pointer-events:none so it can't block
+      // scroll/click events destined for ring billboards behind it.
+      div.style.pointerEvents = 'none';
       return div;
     }
     {
-      const obj = new CSS3DObject(makeCenterPlaceholder());
-      obj.position.set(0, 0, 0);
-      obj.scale.set(BILLBOARD_SCALE, BILLBOARD_SCALE, BILLBOARD_SCALE);
-      scene.add(obj);
-      billboards.push(obj);
+      const el = makeCenterPlaceholder();
+      el.style.display = 'none';
+      billboardsLayer.appendChild(el);
+      billboards.push({
+        element:     el,
+        worldPos:    new THREE.Vector3(0, 0, 0),
+        interactive: false,
+      });
     }
 
     // 2) CIRCLE_COUNT chart iframes evenly spaced on a circle in the XZ plane.
@@ -340,11 +402,11 @@
     // ══════════════════════════════════════════════════════════════════════════
     //  ORBIT CONTROLS
     // ══════════════════════════════════════════════════════════════════════════
-    // Attach to the CSS3D container (top layer) so it receives drags on
+    // Attach to the billboards layer (top layer) so it receives drags on
     // empty background space. Events inside an iframe are trapped by the
     // iframe's own browsing context and never reach OrbitControls — so
     // clicks on period buttons, search, scroll-zoom etc. all reach the chart.
-    const controls = new OrbitControls(camera, cssRenderer.domElement);
+    const controls = new OrbitControls(camera, billboardsLayer);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.enablePan     = false;                 // stay focused on the ring
@@ -371,7 +433,7 @@
     // Suppress the browser's native context menu on the 3D layer so the
     // right-click-drag doesn't pop a menu mid-orbit. The HUD is a sibling
     // above this layer so its controls are unaffected.
-    cssRenderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+    billboardsLayer.addEventListener('contextmenu', (e) => e.preventDefault());
     webglRenderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -386,8 +448,8 @@
       const d = ev.data;
       if (!d || d.type !== 'sv-period' || typeof d.period !== 'string') return;
       for (const b of billboards) {
+        if (!b.interactive) continue;                    // skip placeholders
         const el = b.element;
-        if (el.tagName !== 'IFRAME') continue;           // skip placeholders
         if (el.contentWindow === ev.source) continue;    // skip originator
         try {
           el.contentWindow.postMessage({ type: 'sv-period', period: d.period }, '*');
@@ -405,20 +467,76 @@
     });
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  BILLBOARD PROJECTOR
+    //
+    //  For each billboard:
+    //    1. Project its fixed world position into normalized device coords
+    //       via camera.projectionMatrix × camera.matrixWorldInverse.
+    //    2. If it's behind the camera or outside the near/far clip, hide it.
+    //    3. Convert NDC to screen pixels and write to element.style.left/top.
+    //    4. Compute the perspective-correct scale so a 1-world-unit object
+    //       appears at its proper on-screen size, then apply as a plain 2D
+    //       translate(-50%,-50%) + scale(s) transform.
+    //    5. Assign zIndex by distance so closer billboards paint on top.
+    //
+    //  Because the final transform is 2D only, each iframe's hit-box equals
+    //  its visible rectangle — no CSS3D AABB leakage, no pointer-event
+    //  crosstalk between billboards regardless of camera angle.
+    // ══════════════════════════════════════════════════════════════════════════
+    const _ndc = new THREE.Vector3();
+    function updateBillboardProjection() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      // World pixels per world unit, one unit from the camera, at this FOV.
+      // Derivation: at distance d, a world-size s projects to s*(h/(2*d*tan(fov/2)))
+      // on screen. Our iframe has a native pixel width IFRAME_WIDTH_PX and a
+      // desired world width IFRAME_WIDTH_PX*BILLBOARD_SCALE, so its CSS
+      // scale factor at distance d is BILLBOARD_SCALE * h / (2*d*tan(fov/2)).
+      const fovRad        = camera.fov * Math.PI / 180;
+      const halfFovTan    = Math.tan(fovRad * 0.5);
+      const scaleNumerator = BILLBOARD_SCALE * h / (2 * halfFovTan);
+
+      // Track sort order for zIndex. Farthest gets lowest zIndex.
+      const ordered = billboards
+        .map((b, i) => ({ b, i, d: b.worldPos.distanceTo(camera.position) }))
+        .sort((a, b) => b.d - a.d);
+
+      for (let rank = 0; rank < ordered.length; rank++) {
+        const { b, d } = ordered[rank];
+        const el = b.element;
+
+        // Project world position → NDC
+        _ndc.copy(b.worldPos).project(camera);
+        // project() returns (x,y in [-1,1], z in [-1,1] when in front; >1 means
+        // behind camera or past the far plane)
+        const inFront = _ndc.z > -1 && _ndc.z < 1;
+        if (!inFront) {
+          if (el.style.display !== 'none') el.style.display = 'none';
+          continue;
+        }
+        if (el.style.display === 'none') el.style.display = '';
+
+        const sx = ( _ndc.x * 0.5 + 0.5) * w;
+        const sy = (-_ndc.y * 0.5 + 0.5) * h;
+        const scale = scaleNumerator / d;
+
+        el.style.left      = sx + 'px';
+        el.style.top       = sy + 'px';
+        el.style.transform = `translate(-50%, -50%) scale(${scale})`;
+        el.style.zIndex    = String(rank + 1);
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  ANIMATION LOOP
     // ══════════════════════════════════════════════════════════════════════════
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
-
-      // Billboard behavior: every CSS3DObject's rotation matches the camera's,
-      // so iframes always face the viewer (Unity LookAtCamera equivalent).
-      for (const b of billboards) {
-        b.quaternion.copy(camera.quaternion);
-      }
+      camera.updateMatrixWorld();
 
       webglRenderer.render(scene, camera);
-      cssRenderer.render(scene, camera);
+      updateBillboardProjection();
     }
     animate();
 
@@ -431,7 +549,8 @@
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       webglRenderer.setSize(w, h);
-      cssRenderer.setSize(w, h);
+      // billboardsLayer is CSS-sized (100%/100%), so no resize call needed;
+      // updateBillboardProjection() will re-project on the next frame.
     });
   </script>
 </body>
