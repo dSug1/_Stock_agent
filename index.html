@@ -24,7 +24,9 @@
     /* Remove focus rings on non-input elements (the layers and their
        wrapper divs would otherwise flash a browser outline on click). */
     #webgl-layer, #billboards-layer, #billboards-layer > * { outline: none; }
-    #hud, #hud * { user-select: auto; -webkit-user-select: auto; }
+    #menu-panel, #menu-panel *, #period-topbar, #period-topbar * {
+      user-select: auto; -webkit-user-select: auto;
+    }
 
     /* Stacked renderer layers.
        - WebGL canvas sits behind with pointer-events: none so it doesn't
@@ -57,44 +59,136 @@
       will-change: transform, left, top;
     }
 
-    /* Floating HUD with the orbit-speed slider */
-    #hud {
+    /* ── Hamburger menu toggle (top-left) ──────────────────────────────── */
+    #menu-toggle {
       position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 10;
-      background: rgba(22, 27, 34, 0.85);
+      top: 14px;
+      left: 14px;
+      z-index: 20;
+      width: 36px;
+      height: 36px;
+      background: rgba(22, 27, 34, 0.70);
       border: 1px solid #30363d;
       border-radius: 6px;
-      padding: 10px 14px;
-      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
-      user-select: none;
+      padding: 0;
     }
-    #hud label {
+    #menu-toggle svg {
+      width: 20px;
+      height: 20px;
+      stroke: #ffffff;
+      stroke-width: 2;
+      stroke-linecap: round;
+      fill: none;
+    }
+    /* The two icon SVGs swap visibility via the .open class on the body. */
+    #menu-toggle .icon-close  { display: none; }
+    body.menu-open #menu-toggle .icon-bars  { display: none; }
+    body.menu-open #menu-toggle .icon-close { display: block; }
+
+    /* ── Slide-in menu panel (left side) ───────────────────────────────── */
+    #menu-panel {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      width: 260px;
+      z-index: 15;
+      background: rgba(22, 27, 34, 0.92);
+      border-right: 1px solid #30363d;
+      padding: 66px 20px 20px 20px;
+      font-size: 13px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      transform: translateX(-100%);
+      transition: transform 0.25s ease-out;
+      box-shadow: 4px 0 24px #0006;
+    }
+    body.menu-open #menu-panel { transform: translateX(0); }
+
+    #menu-panel label {
       display: flex;
       align-items: center;
       gap: 8px;
       white-space: nowrap;
+      margin-bottom: 8px;
     }
-    #hud input[type=range] {
+    #menu-panel label:last-of-type { margin-bottom: 0; }
+    #menu-panel input[type=range] {
       width: 140px;
       accent-color: #58a6ff;
     }
-    #hud .val {
+    #menu-panel .val {
       display: inline-block;
       min-width: 34px;
       text-align: right;
       font-variant-numeric: tabular-nums;
       color: #8b949e;
     }
-    #hud .title {
+    #menu-panel .title {
       color: #8b949e;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       margin-bottom: 6px;
+      margin-top: 14px;
+    }
+    #menu-panel .title:first-child { margin-top: 0; }
+    #menu-panel .menu-btn {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      padding: 7px 14px;
+      transition: all .15s;
+    }
+    #menu-panel .menu-btn:hover {
+      background: #30363d;
+      border-color: #58a6ff;
+    }
+
+    /* ── Top period-button bar (centered at the top of the screen) ─────── */
+    #period-topbar {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      background: rgba(22, 27, 34, 0.85);
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 6px 8px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    #period-topbar .pbtn {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: #8b949e;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 4px 10px;
+      font-family: inherit;
+      transition: all .15s;
+    }
+    #period-topbar .pbtn:hover { border-color: #30363d; color: #e6edf3; }
+    #period-topbar .pbtn.active {
+      background: #58a6ff;
+      border-color: #58a6ff;
+      color: #ffffff;
+      font-weight: 600;
     }
 
     /* Blank-slot placeholder shown when there aren't enough tickers.
@@ -151,14 +245,33 @@
 </head>
 <body>
 
-  <div id="hud">
+  <!-- Hamburger toggle: three white bars → white X when menu is open. -->
+  <button id="menu-toggle" type="button" aria-label="Toggle menu">
+    <svg class="icon-bars"  viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+    <svg class="icon-close" viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+  </button>
+
+  <!-- Slide-in menu panel on the left. Contains the orbit-speed and
+       scroll-gain sliders plus the reset-view button. -->
+  <div id="menu-panel">
     <div class="title">Camera</div>
     <label>
       Orbit speed
       <input id="orbit-speed" type="range" min="0.1" max="3" step="0.05" value="1">
       <span id="orbit-speed-val" class="val">1.00</span>
     </label>
+    <label>
+      Scroll gain
+      <input id="scroll-gain" type="range" min="0.1" max="3" step="0.05" value="0.8">
+      <span id="scroll-gain-val" class="val">0.80</span>
+    </label>
+
+    <div class="title">View</div>
+    <button id="reset-view" class="menu-btn" type="button">Reset view</button>
   </div>
+
+  <!-- Top-of-screen period buttons — control every billboard at once. -->
+  <div id="period-topbar"></div>
 
   <script type="module">
     import * as THREE from 'three';
@@ -252,39 +365,41 @@
     scene.add(dirLight.target);
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  BACKGROUND IMAGE (blue gradient, parented to the camera)
+    //  BACKGROUND IMAGE (PNG from Utilities/Renderer/, parented to the camera)
     //
     //  Parenting to the camera means it always orbits with the camera and the
     //  camera always faces it — it behaves like a skybox card. We use
     //  MeshBasicMaterial so lighting doesn't affect it, and push it far out
     //  (large plane at local z = -120) so nothing in the scene ever clips it.
     //  depthWrite:false + renderOrder:-999 keep it behind everything else.
+    //
+    //  The image is served by Flask via /utilities/renderer/<filename> (see
+    //  2_stock_visualizer.py → utilities_renderer route). Filename contains
+    //  spaces so we encodeURI it explicitly.
     // ══════════════════════════════════════════════════════════════════════════
-    function makeGradientTexture() {
-      const c = document.createElement('canvas');
-      c.width  = 16;
-      c.height = 512;
-      const ctx = c.getContext('2d');
-      const g = ctx.createLinearGradient(0, 0, 0, c.height);
-      g.addColorStop(0.00, '#0b2346');  // top — deep navy
-      g.addColorStop(0.45, '#153a6e');  // upper mid — brighter blue
-      g.addColorStop(0.75, '#0a1b36');  // lower mid — darker
-      g.addColorStop(1.00, '#04080f');  // bottom — near black
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, c.width, c.height);
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      return tex;
-    }
+    const BG_IMAGE_URL = '/utilities/renderer/' + encodeURIComponent('Screenshot 2025-07-12 083355.png');
+
+    const bgMaterial = new THREE.MeshBasicMaterial({
+      color:      0xffffff,
+      depthWrite: false,
+      depthTest:  false,
+      toneMapped: false,
+    });
+
+    new THREE.TextureLoader().load(
+      BG_IMAGE_URL,
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        bgMaterial.map = tex;
+        bgMaterial.needsUpdate = true;
+      },
+      undefined,
+      (err) => console.warn('Background image failed to load:', err)
+    );
 
     const bgPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(400, 240),
-      new THREE.MeshBasicMaterial({
-        map:        makeGradientTexture(),
-        depthWrite: false,
-        depthTest:  false,
-        toneMapped: false,
-      })
+      bgMaterial
     );
     bgPlane.position.set(0, 0, -120);   // local to the camera → in front of it
     bgPlane.renderOrder = -999;
@@ -410,11 +525,11 @@
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.enablePan     = false;                 // stay focused on the ring
-    // Wheel events on the background reach OrbitControls and dolly the camera.
     // Wheel events inside a chart iframe are trapped by the iframe's own
     // document and never bubble out — so scrolling on a billboard zooms the
-    // chart's time range (which then broadcasts a period change, below),
-    // while scrolling on empty background moves the camera.
+    // chart's time range (which then broadcasts a period change), while
+    // scrolling on empty background or over a non-interactive placeholder
+    // bubbles up to OrbitControls and dollies the camera.
     controls.enableZoom    = true;
     controls.zoomSpeed     = 0.8;
     controls.minDistance   = MIN_ORBIT_DISTANCE;
@@ -447,6 +562,7 @@
     window.addEventListener('message', (ev) => {
       const d = ev.data;
       if (!d || d.type !== 'sv-period' || typeof d.period !== 'string') return;
+      // Forward to every other iframe so they all sync up.
       for (const b of billboards) {
         if (!b.interactive) continue;                    // skip placeholders
         const el = b.element;
@@ -455,16 +571,236 @@
           el.contentWindow.postMessage({ type: 'sv-period', period: d.period }, '*');
         } catch (_) { /* cross-origin safety net — same-origin in practice */ }
       }
+      // Update the top-bar highlight so it reflects chart-initiated changes
+      // (e.g. wheel-zoom inside a billboard that auto-switches period).
+      if (typeof setGlobalPeriod === 'function') {
+        setGlobalPeriod(d.period, /*fromBroadcast=*/true);
+      }
     });
 
-    // Orbit-speed slider
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HAMBURGER MENU toggle (top-left)
+    //
+    //  Clicking the bars icon slides the panel in from the left and swaps the
+    //  icon to a white X. Clicking again closes. CSS handles the icon swap and
+    //  the slide animation via the body.menu-open class.
+    // ══════════════════════════════════════════════════════════════════════════
+    const $menuToggle = document.getElementById('menu-toggle');
+    $menuToggle.addEventListener('click', () => {
+      document.body.classList.toggle('menu-open');
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  USER PREFERENCES (persisted in localStorage across sessions)
+    //
+    //  The orbit-speed and scroll-gain sliders are treated as user preferences:
+    //  every edit is immediately written to localStorage under the keys below,
+    //  and at page load we read them back and apply them before showing the UI.
+    //  They are INTENTIONALLY not touched by the "Reset view" button, which is
+    //  scoped to camera position/target only.
+    // ══════════════════════════════════════════════════════════════════════════
+    const LS_ORBIT_SPEED_KEY = 'sv.orbitSpeed';
+    const LS_SCROLL_GAIN_KEY = 'sv.scrollGain';
+    const DEFAULT_ORBIT_SPEED = 1.0;
+    const DEFAULT_SCROLL_GAIN = 0.8;
+
+    // Safe localStorage accessors — fall back silently if storage is disabled
+    // (private browsing, iframe with blocked 3rd-party storage, etc.).
+    function lsGetNumber(key, fallback, min, max) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return fallback;
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v)) return fallback;
+        return Math.min(max, Math.max(min, v));
+      } catch (_) { return fallback; }
+    }
+    function lsSet(key, value) {
+      try { localStorage.setItem(key, String(value)); } catch (_) {}
+    }
+
+    // Orbit-speed slider (lives inside the menu panel).
     const $speed    = document.getElementById('orbit-speed');
     const $speedVal = document.getElementById('orbit-speed-val');
+    function applyOrbitSpeed(v, persist) {
+      controls.rotateSpeed    = v;
+      $speed.value            = String(v);
+      $speedVal.textContent   = v.toFixed(2);
+      if (persist) lsSet(LS_ORBIT_SPEED_KEY, v);
+    }
     $speed.addEventListener('input', () => {
-      const v = parseFloat($speed.value);
-      controls.rotateSpeed = v;
-      $speedVal.textContent = v.toFixed(2);
+      applyOrbitSpeed(parseFloat($speed.value), /*persist=*/true);
     });
+
+    // Scroll-gain slider — controls OrbitControls.zoomSpeed, i.e. how many
+    // world units the camera dollies per wheel tick.
+    const $scroll    = document.getElementById('scroll-gain');
+    const $scrollVal = document.getElementById('scroll-gain-val');
+    function applyScrollGain(v, persist) {
+      controls.zoomSpeed    = v;
+      $scroll.value         = String(v);
+      $scrollVal.textContent = v.toFixed(2);
+      if (persist) lsSet(LS_SCROLL_GAIN_KEY, v);
+    }
+    $scroll.addEventListener('input', () => {
+      applyScrollGain(parseFloat($scroll.value), /*persist=*/true);
+    });
+
+    // Restore saved preferences (or defaults) before the first render.
+    // persist=false because we're replaying the stored value, not overwriting it.
+    applyOrbitSpeed(lsGetNumber(LS_ORBIT_SPEED_KEY, DEFAULT_ORBIT_SPEED, 0.1, 3), false);
+    applyScrollGain(lsGetNumber(LS_SCROLL_GAIN_KEY, DEFAULT_SCROLL_GAIN, 0.1, 3), false);
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  RESET VIEW
+    //
+    //  Restores the original camera position and orbit target. Billboards
+    //  themselves sit at fixed world positions (a ring around the origin),
+    //  so snapping the camera back to CAMERA_START_POS also snaps every
+    //  billboard back to its initial screen position/size.
+    //
+    //  NOTE: the orbit-speed and scroll-gain sliders are NOT touched here —
+    //  they are user preferences persisted across sessions in localStorage
+    //  and must survive a view reset.
+    // ══════════════════════════════════════════════════════════════════════════
+    const DEFAULT_TARGET = new THREE.Vector3(0, 0, 0);
+    const $resetView = document.getElementById('reset-view');
+    $resetView.addEventListener('click', () => {
+      camera.position.copy(CAMERA_START_POS);
+      controls.target.copy(DEFAULT_TARGET);
+      // Flush any residual rotation damping from OrbitControls so the
+      // reset is instantaneous.
+      controls.update();
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  TOP PERIOD BAR
+    //
+    //  Controls every billboard's time window at once. Click a button → we
+    //  update the local active state and broadcast {type:'sv-period', period}
+    //  directly to every chart iframe. The period-sync hub above forwards any
+    //  iframe-initiated period change (wheel zoom inside a chart) to the others,
+    //  AND we listen for those here so the top-bar highlight stays in sync.
+    // ══════════════════════════════════════════════════════════════════════════
+    const PERIODS = ['1d','5d','1mo','3mo','6mo','1y','2y','5y','max'];
+    let currentPeriod = PERIODS.includes(TIMEWINDOW) ? TIMEWINDOW : '1mo';
+
+    const $periodTopbar = document.getElementById('period-topbar');
+    const periodButtons = {};
+    PERIODS.forEach(p => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pbtn';
+      btn.textContent = p.toUpperCase();
+      btn.dataset.period = p;
+      btn.addEventListener('click', () => setGlobalPeriod(p, /*fromBroadcast=*/false));
+      $periodTopbar.appendChild(btn);
+      periodButtons[p] = btn;
+    });
+
+    function updatePeriodHighlight() {
+      for (const p of PERIODS) {
+        periodButtons[p].classList.toggle('active', p === currentPeriod);
+      }
+    }
+    updatePeriodHighlight();
+
+    function broadcastPeriodToAll(p) {
+      for (const b of billboards) {
+        if (!b.interactive) continue;
+        try {
+          b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, '*');
+        } catch (_) { /* same-origin safety net */ }
+      }
+    }
+
+    function setGlobalPeriod(p, fromBroadcast) {
+      if (!PERIODS.includes(p) || p === currentPeriod) return;
+      currentPeriod = p;
+      updatePeriodHighlight();
+      if (!fromBroadcast) broadcastPeriodToAll(p);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  ZOOM CLAMP — keep a background margin around every billboard
+    //
+    //  OrbitControls' minDistance clamps distance-to-target, not
+    //  distance-to-nearest-billboard. Since the ring billboards sit 7 units
+    //  from the origin, the camera can still get arbitrarily close to one of
+    //  them even while respecting minDistance. If it does, the billboard's
+    //  rendered size balloons and the iframe fills the whole screen, leaving
+    //  no background pixels under the cursor — the user can no longer right-
+    //  click-drag to orbit or scroll-wheel to zoom out.
+    //
+    //  Approach: for a given camera view direction (unit vector v from the
+    //  orbit target), find the smallest camera-to-target radius r such that
+    //  EVERY billboard is at least dMinRequired away from the camera. This
+    //  is the minimum orbit radius along the current view ray.
+    //
+    //  Geometry: camera at target + r*v, billboard offset d_p = billboard - target.
+    //  Distance² = |r*v - d_p|² = r² − 2r(v·d_p) + |d_p|². We need this ≥ dMin².
+    //    r² − 2r(v·d_p) + (|d_p|² − dMin²) ≥ 0
+    //  Upward parabola in r, roots at r = (v·d_p) ± √((v·d_p)² − |d_p|² + dMin²).
+    //  The "safe far side" root is r_high = dot + √disc; if disc ≤ 0 the
+    //  billboard is always far enough regardless of r. Take max(r_high) over
+    //  all billboards and clamp to [MIN_ORBIT_DISTANCE, MAX_ORBIT_DISTANCE].
+    //
+    //  Called from the animation loop, so both wheel-driven dolly and
+    //  right-click orbit into a tighter configuration push the camera out
+    //  whenever it would otherwise let a billboard fill the screen.
+    // ══════════════════════════════════════════════════════════════════════════
+    const BILLBOARD_MAX_SCREEN_FRAC = 0.85; // billboard may fill ≤ 85% of each axis
+
+    function computeMarginDMin() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const fovRad     = camera.fov * Math.PI / 180;
+      const halfFovTan = Math.tan(fovRad * 0.5);
+      // scale_px = IFRAME_DIM_PX * BILLBOARD_SCALE * h / (2 * d * halfFovTan)
+      // Want scale_px ≤ viewportDim * frac → solve for d.
+      const dMinWidth =
+        (IFRAME_WIDTH_PX  * BILLBOARD_SCALE * h) /
+        (2 * w * BILLBOARD_MAX_SCREEN_FRAC * halfFovTan);
+      const dMinHeight =
+        (IFRAME_HEIGHT_PX * BILLBOARD_SCALE * h) /
+        (2 * h * BILLBOARD_MAX_SCREEN_FRAC * halfFovTan);
+      return Math.max(dMinWidth, dMinHeight);
+    }
+
+    const _viewDir = new THREE.Vector3();
+    const _offset  = new THREE.Vector3();
+
+    function computeEnforcedMinRadius() {
+      _viewDir.subVectors(camera.position, controls.target);
+      const viewLen = _viewDir.length();
+      if (viewLen < 1e-6) return MIN_ORBIT_DISTANCE;
+      _viewDir.multiplyScalar(1 / viewLen);
+
+      const dMin    = computeMarginDMin();
+      const dMinSq  = dMin * dMin;
+
+      let minR = MIN_ORBIT_DISTANCE;
+      for (const b of billboards) {
+        _offset.subVectors(b.worldPos, controls.target);
+        const dot    = _viewDir.dot(_offset);
+        const offLen = _offset.lengthSq();
+        const disc   = dot * dot - offLen + dMinSq;
+        if (disc <= 0) continue;                 // always safe regardless of r
+        const rHigh = dot + Math.sqrt(disc);     // minimum safe r for this billboard
+        if (rHigh > minR) minR = rHigh;
+      }
+      return Math.min(MAX_ORBIT_DISTANCE, minR);
+    }
+
+    function enforceBillboardMargin() {
+      const enforcedMin = computeEnforcedMinRadius();
+      _viewDir.subVectors(camera.position, controls.target);
+      const curR = _viewDir.length();
+      if (curR < 1e-6) return;
+      if (curR >= enforcedMin) return;
+      _viewDir.multiplyScalar(1 / curR);
+      camera.position.copy(controls.target).addScaledVector(_viewDir, enforcedMin);
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  BILLBOARD PROJECTOR
@@ -533,6 +869,7 @@
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
+      enforceBillboardMargin();          // push camera out if any billboard too close
       camera.updateMatrixWorld();
 
       webglRenderer.render(scene, camera);

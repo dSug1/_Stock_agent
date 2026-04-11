@@ -270,8 +270,6 @@
     </div>
     <div id="autocomplete"></div>
 
-    <div id="period-bar"></div>
-
     <div id="price-panel">
       <span id="ticker-label">—</span>
       <span id="company-label"></span>
@@ -412,7 +410,6 @@ function updateClockLabel() {
 const $searchInput  = document.getElementById("search-input");
 const $searchBtn    = document.getElementById("search-btn");
 const $autocomplete = document.getElementById("autocomplete");
-const $periodBar    = document.getElementById("period-bar");
 const $loading      = document.getElementById("loading");
 const $tickerLabel  = document.getElementById("ticker-label");
 const $companyLabel = document.getElementById("company-label");
@@ -427,31 +424,12 @@ const $errorToast   = document.getElementById("error-toast");
 const $ohlcvTooltip = document.getElementById("ohlcv-tooltip");
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  Build period buttons
+//  Period UI (no buttons here anymore — the 3D scene parent (index.html)
+//  renders a single top-of-screen period bar that controls every billboard
+//  via postMessage. Wheel-zoom inside the chart still auto-switches period
+//  and broadcasts the change so the parent's top bar stays in sync.)
 // ══════════════════════════════════════════════════════════════════════════════
-PERIODS.forEach(p => {
-  const btn = document.createElement("button");
-  btn.className = "pbtn";
-  btn.textContent = p.toUpperCase();
-  btn.dataset.period = p;
-  btn.addEventListener("click", () => {
-    // Activate cooldown so the zoom-subscription doesn't immediately override
-    // the explicit period the user just picked.
-    _zoomCooldown = true;
-    setTimeout(() => { _zoomCooldown = false; }, 1500);
-    state.period = p;
-    updatePeriodButtons();
-    loadChart();
-    broadcastPeriod(p);
-  });
-  $periodBar.appendChild(btn);
-});
-
-function updatePeriodButtons() {
-  document.querySelectorAll(".pbtn").forEach(b => {
-    b.classList.toggle("active", b.dataset.period === state.period);
-  });
-}
+function updatePeriodButtons() { /* no-op: buttons moved to parent scene */ }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  Lightweight Charts setup

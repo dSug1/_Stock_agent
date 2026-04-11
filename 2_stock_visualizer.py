@@ -394,6 +394,13 @@ def index():
     return send_from_directory(str(ROOT), "index.html")
 
 
+@app.route("/utilities/renderer/<path:filename>")
+def utilities_renderer(filename):
+    # Serves static assets (e.g. the background PNG) from Utilities/Renderer/.
+    # Used by index.html to load the scene background image.
+    return send_from_directory(str(ROOT / "Utilities" / "Renderer"), filename)
+
+
 @app.route("/_outputs/templates/1_chart_template.html")
 def chart_template():
     # Served under its on-disk path so the iframe src in index.html
@@ -489,9 +496,43 @@ def _open_browser(url: str) -> None:
     webbrowser.open(url)
 
 
+# Hardcoded tickers and period used when the user picks Debug mode at startup.
+DEBUG_TICKERS = ["TCRX", "BCYC", "TTE", "AAPL", "GOOGL", "MCD"]
+DEBUG_PERIOD  = "3mo"
+
+
+def _prefetch(tickers: list[str], period: str) -> None:
+    """Resolve + pre-fetch data for each ticker, printing progress."""
+    for t in tickers:
+        print(f"  Pre-fetching {period} data for {t} …", end="", flush=True)
+        try:
+            get_chart_data(t, period)
+            print(" done (cached).")
+        except Exception as exc:
+            print(f" WARNING: {exc}")
+
+
+def _prompt_mode() -> str:
+    """
+    Ask the user whether to run in Debug or Production mode.
+    Returns 'debug' or 'production'.  Defaults to 'production' on blank input.
+    """
+    print()
+    print("╔══════════════════════════════════════════════════════╗")
+    print("║      Stock Visualizer — 3D Scene  v1.3               ║")
+    print("╠══════════════════════════════════════════════════════╣")
+    print("║  Run mode:                                           ║")
+    print("║    [1] Production  (interactive — prompt for input)  ║")
+    print("║    [2] Debug       (hardcoded TCRX,BCYC,TTE,AAPL,    ║")
+    print("║                     GOOGL,MCD  @ 3mo)                ║")
+    print("╚══════════════════════════════════════════════════════╝")
+    raw = input("  Mode [1/2] (↵=1): ").strip()
+    return "debug" if raw == "2" else "production"
+
+
 def _prompt_and_prefetch() -> tuple[list[str], str]:
     """
-    Interactive terminal prompt.
+    Production-mode interactive prompt.
 
     Returns (tickers, period):
       tickers — up to 6 resolved symbols that fill the ring billboards
@@ -504,16 +545,9 @@ def _prompt_and_prefetch() -> tuple[list[str], str]:
     the correct data.
     """
     print()
-    print("╔══════════════════════════════════════════════════════╗")
-    print("║      Stock Visualizer — 3D Scene  v1.2               ║")
-    print("╠══════════════════════════════════════════════════════╣")
-    print("║  Enter up to 6 tickers / company names,              ║")
-    print("║  comma-separated.  They fill the ring of billboards  ║")
-    print("║  around the central placeholder object.              ║")
-    print("║  Leave blank for an all-empty scene.                  ║")
-    print("║                                                      ║")
-    print("║  e.g.  AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA           ║")
-    print("╚══════════════════════════════════════════════════════╝")
+    print("  Enter up to 6 tickers / company names, comma-separated.")
+    print("  Leave blank for an all-empty scene.")
+    print("  e.g.  AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA")
     print()
 
     raw_tickers = input("  Tickers (comma-separated): ").strip()
@@ -537,15 +571,18 @@ def _prompt_and_prefetch() -> tuple[list[str], str]:
                 break
 
         print()
-        for t in tickers:
-            print(f"  Pre-fetching {period} data for {t} …", end="", flush=True)
-            try:
-                get_chart_data(t, period)
-                print(" done (cached).")
-            except Exception as exc:
-                print(f" WARNING: {exc}")
+        _prefetch(tickers, period)
 
     return tickers, period
+
+
+def _debug_prefetch() -> tuple[list[str], str]:
+    """Debug mode: skip prompts, use hardcoded tickers + period."""
+    print()
+    print(f"  [debug] tickers={DEBUG_TICKERS}  period={DEBUG_PERIOD}")
+    print()
+    _prefetch(DEBUG_TICKERS, DEBUG_PERIOD)
+    return list(DEBUG_TICKERS), DEBUG_PERIOD
 
 
 if __name__ == "__main__":
@@ -557,7 +594,11 @@ if __name__ == "__main__":
     threading.Thread(target=lambda: (time.sleep(CLOCK_SYNC_INTERVAL), _clock_sync_loop()),
                      daemon=True).start()
 
-    tickers, period = _prompt_and_prefetch()
+    mode = _prompt_mode()
+    if mode == "debug":
+        tickers, period = _debug_prefetch()
+    else:
+        tickers, period = _prompt_and_prefetch()
 
     url = f"http://localhost:{PORT}/"
     qs  = [f"period={period}"]
