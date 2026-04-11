@@ -525,12 +525,12 @@
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.enablePan     = false;                 // stay focused on the ring
-    // Wheel events inside a chart iframe are trapped by the iframe's own
-    // document and never bubble out — so scrolling on a billboard zooms the
-    // chart's time range (which then broadcasts a period change), while
-    // scrolling on empty background or over a non-interactive placeholder
-    // bubbles up to OrbitControls and dollies the camera.
-    controls.enableZoom    = true;
+    // Wheel zoom is handled by our own inertia model below (not OrbitControls)
+    // so each wheel tick kicks a velocity that decays over several frames,
+    // giving the camera a coasting/gliding feel between detents. Wheel events
+    // inside a chart iframe are trapped by the iframe's own document and never
+    // bubble out, so the chart's time-range zoom is unaffected.
+    controls.enableZoom    = false;
     controls.zoomSpeed     = 0.8;
     controls.minDistance   = MIN_ORBIT_DISTANCE;
     controls.maxDistance   = MAX_ORBIT_DISTANCE;
@@ -550,6 +550,53 @@
     // above this layer so its controls are unaffected.
     billboardsLayer.addEventListener('contextmenu', (e) => e.preventDefault());
     webglRenderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  ZOOM INERTIA (custom wheel handler)
+    //
+    //  Pure impulse-and-decay: each wheel tick adds to a zoom VELOCITY, and
+    //  every animation frame we apply the velocity to the camera radius and
+    //  multiply the velocity by a friction factor. When friction brings the
+    //  velocity near zero the camera naturally coasts to a stop.
+    //
+    //  Working in log-radius means the motion looks the same whether zooming
+    //  in or out — a kick of +v shrinks r by the same visual fraction that a
+    //  kick of −v grows it by.
+    // ══════════════════════════════════════════════════════════════════════════
+    let _zoomVel = 0;                           // velocity in log(r) / frame
+    const ZOOM_KICK_PER_PIXEL = 0.00018;        // impulse added per wheel pixel
+    const ZOOM_FRICTION       = 0.88;           // per-frame velocity retention
+    const ZOOM_VEL_EPS        = 1e-5;           // below this, clamp to 0
+
+    billboardsLayer.addEventListener('wheel', (ev) => {
+      ev.preventDefault();
+      // Normalize deltaY across input devices.
+      //   deltaMode 0 = pixels (most mice ≈ ±100 per notch)
+      //   deltaMode 1 = lines  (older Firefox)
+      //   deltaMode 2 = pages
+      let dy = ev.deltaY;
+      if (ev.deltaMode === 1) dy *= 16;
+      if (ev.deltaMode === 2) dy *= 400;
+      // dy > 0 means wheel-down → zoom out → log(r) should grow.
+      _zoomVel += dy * ZOOM_KICK_PER_PIXEL * controls.zoomSpeed;
+    }, { passive: false });
+
+    // Apply the current zoom velocity to the camera once per frame, then decay.
+    const _zoomDir = new THREE.Vector3();
+    function stepZoomInertia() {
+      if (_zoomVel === 0) return;
+      _zoomDir.subVectors(camera.position, controls.target);
+      const r = _zoomDir.length();
+      if (r > 1e-6) {
+        let newR = r * Math.exp(_zoomVel);
+        if (newR < MIN_ORBIT_DISTANCE) { newR = MIN_ORBIT_DISTANCE; _zoomVel = 0; }
+        if (newR > MAX_ORBIT_DISTANCE) { newR = MAX_ORBIT_DISTANCE; _zoomVel = 0; }
+        _zoomDir.setLength(newR);
+        camera.position.copy(controls.target).add(_zoomDir);
+      }
+      _zoomVel *= ZOOM_FRICTION;
+      if (Math.abs(_zoomVel) < ZOOM_VEL_EPS) _zoomVel = 0;
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  PERIOD-SYNC HUB
@@ -869,6 +916,7 @@
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
+      stepZoomInertia();                 // apply & decay zoom velocity
       enforceBillboardMargin();          // push camera out if any billboard too close
       camera.updateMatrixWorld();
 
