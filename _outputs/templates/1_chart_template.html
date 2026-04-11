@@ -13,6 +13,9 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
+      /* Let system color keywords (CanvasText, etc.) follow the user's
+         OS dark/light preference — used by #ticker-label. */
+      color-scheme: light dark;
       --bg:        #0d1117;
       --surface:   #161b22;
       --border:    #30363d;
@@ -86,7 +89,10 @@
       margin-left: auto;
       flex-wrap: wrap;
     }
-    #ticker-label   { font-size: 16px; font-weight: 700; color: var(--accent); }
+    /* Ticker label intentionally uses the OS default text color (white in
+       dark mode, black in light mode) — this is the single exception to the
+       accent-theme rule driven by the parent page's theme selector. */
+    #ticker-label   { font-size: 16px; font-weight: 700; color: CanvasText; }
     #company-label  { font-size: 12px; color: var(--txt-dim); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #price-label    { font-size: 20px; font-weight: 700; }
     #change-label   { font-size: 13px; font-weight: 600; }
@@ -678,12 +684,35 @@ function showError(msg) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  Theme: accent color is controlled by the parent page. Read the initial
+//  value from the URL so the first paint comes up in the right color, then
+//  listen for {type:'sv-theme'} postMessages for live updates when the user
+//  changes the theme selector without reloading the iframe.
+// ══════════════════════════════════════════════════════════════════════════════
+const THEME_ACCENTS = { blue: '#58a6ff', orange: '#f38d20' };
+function applyTheme(name) {
+  const accent = THEME_ACCENTS[name] || THEME_ACCENTS.blue;
+  document.documentElement.style.setProperty('--accent', accent);
+  // The volume series color is baked in at chart creation time — if the
+  // chart already exists, restyle it to match the new accent.
+  if (typeof volumeSeries !== 'undefined' && volumeSeries) {
+    try { volumeSeries.applyOptions({ color: accent + '44' }); } catch (_) {}
+  }
+}
+window.addEventListener('message', (ev) => {
+  const d = ev && ev.data;
+  if (d && d.type === 'sv-theme') applyTheme(d.theme);
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  Boot: sync clock, then read URL params and load chart
 // ══════════════════════════════════════════════════════════════════════════════
 (async function boot() {
   const params = new URLSearchParams(window.location.search);
-  const t = params.get("ticker") || "";
-  const p = params.get("period") || "1d";
+  const t     = params.get("ticker") || "";
+  const p     = params.get("period") || "1d";
+  const theme = params.get("theme")  || "blue";
+  applyTheme(theme);
 
   state.period = PERIODS.includes(p) ? p : "1d";
   updatePeriodButtons();

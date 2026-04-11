@@ -6,6 +6,14 @@
   <title>Stock Visualizer — 3D Scene</title>
 
   <style>
+    /* ── Theme tokens ────────────────────────────────────────────────────
+       --accent is re-written by JS when the user picks a theme in the
+       menu panel. Everything in the UI that used to be hard-coded
+       #58a6ff now reads var(--accent) instead, so a single property
+       write re-skins the whole page. */
+    :root {
+      --accent: #58a6ff;
+    }
     html, body {
       margin: 0;
       padding: 0;
@@ -123,8 +131,20 @@
     #menu-panel label:last-of-type { margin-bottom: 0; }
     #menu-panel input[type=range] {
       width: 140px;
-      accent-color: #58a6ff;
+      accent-color: var(--accent);
     }
+    #menu-panel select {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      padding: 5px 8px;
+      outline: none;
+    }
+    #menu-panel select:focus { border-color: var(--accent); }
     #menu-panel .val {
       display: inline-block;
       min-width: 34px;
@@ -154,7 +174,7 @@
     }
     #menu-panel .menu-btn:hover {
       background: #30363d;
-      border-color: #58a6ff;
+      border-color: var(--accent);
     }
 
     /* ── Top period-button bar (centered at the top of the screen) ─────── */
@@ -187,8 +207,8 @@
     }
     #period-topbar .pbtn:hover { border-color: #30363d; color: #e6edf3; }
     #period-topbar .pbtn.active {
-      background: #58a6ff;
-      border-color: #58a6ff;
+      background: var(--accent);
+      border-color: var(--accent);
       color: #ffffff;
       font-weight: 600;
     }
@@ -224,8 +244,8 @@
       transition: all .15s;
     }
     #ring-size-controls button:hover:not(:disabled) {
-      border-color: #58a6ff;
-      color: #58a6ff;
+      border-color: var(--accent);
+      color: var(--accent);
     }
     #ring-size-controls button:disabled {
       opacity: 0.35;
@@ -255,10 +275,10 @@
       font-size: 12px;
       outline: none;
     }
-    #ticker-input:focus { border-color: #58a6ff; }
+    #ticker-input:focus { border-color: var(--accent); }
     #ticker-input::placeholder { color: #8b949e; }
     #ticker-go {
-      background: #58a6ff;
+      background: var(--accent);
       border: none;
       border-radius: 4px;
       color: #ffffff;
@@ -348,6 +368,15 @@
 
     <div class="title">View</div>
     <button id="reset-view" class="menu-btn" type="button">Reset view</button>
+
+    <div class="title">Theme</div>
+    <label class="theme-label">
+      Accent
+      <select id="theme-select">
+        <option value="blue">Blue</option>
+        <option value="orange">Orange</option>
+      </select>
+    </label>
   </div>
 
   <!-- Top-of-screen period buttons — control every billboard at once.
@@ -355,8 +384,10 @@
        appended to the right by the module script below. -->
   <div id="period-topbar">
     <div id="ring-size-controls">
+      <button id="ring-left"  type="button" title="Swap the closest billboard with its left neighbor and recenter">←</button>
       <button id="ring-minus" type="button" title="Remove the billboard closest to the camera">−</button>
       <button id="ring-plus"  type="button" title="Add a billboard at the position closest to the camera">+</button>
+      <button id="ring-right" type="button" title="Swap the closest billboard with its right neighbor and recenter">→</button>
     </div>
     <div id="ticker-input-group">
       <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
@@ -382,15 +413,12 @@
     // Tickers and time window are provided by run.bat (→ 2_stock_visualizer.py)
     // via URL query params: ?tickers=AAPL,MSFT,GOOGL&period=1mo
     // The Python launcher prompts the user interactively, resolves ticker
-    // symbols, pre-fetches data, then opens the browser at this URL.
-    const _params     = new URLSearchParams(location.search);
-    const TICKERS     = (_params.get('tickers') || '')
-                          .split(',')
-                          .map(s => s.trim())
-                          .filter(Boolean);
-    const TIMEWINDOW  = _params.get('period') || '1mo';
+    // symbols, pre-fetches data, then opens the browser at this URL. When
+    // the URL has no tickers/period params, the session-restore block below
+    // falls back to the last cached session in localStorage.
+    const _params = new URLSearchParams(location.search);
 
-    const CIRCLE_COUNT      = 6;        // objects around the MainObject
+    const CIRCLE_COUNT      = 6;        // default ring size on very first launch
     const CIRCLE_RADIUS     = 7;        // world units — ring radius around the center
     const IFRAME_WIDTH_PX   = 800;      // iframe pixel width
     const IFRAME_HEIGHT_PX  = 500;      // iframe pixel height
@@ -400,6 +428,164 @@
     // while still staying readable when viewed from ~14 units away.
     const BILLBOARD_SCALE   = 0.004;
     const CHART_URL         = "_outputs/templates/1_chart_template.html";
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  THEME
+    //
+    //  Two themes are supported. Switching rewrites --accent on the document
+    //  root (which re-skins every CSS rule referencing var(--accent)) AND
+    //  broadcasts the new theme to every chart iframe via postMessage so
+    //  they can re-skin their own UI in lock-step. Initial iframe src also
+    //  carries ?theme=<name> so freshly-loaded iframes come up in the right
+    //  theme without a flash of wrong color.
+    //
+    //  Persistence: menu selection is written to localStorage under
+    //  LS_THEME_KEY and restored on next page load.
+    // ══════════════════════════════════════════════════════════════════════════
+    const THEMES = {
+      blue:   { accent: '#58a6ff' },
+      orange: { accent: '#f38d20' },
+    };
+    const LS_THEME_KEY   = 'sv.theme';
+    const DEFAULT_THEME  = 'blue';
+    function resolveInitialTheme() {
+      try {
+        const raw = localStorage.getItem(LS_THEME_KEY);
+        if (raw && THEMES[raw]) return raw;
+      } catch (_) { /* storage disabled — fall through */ }
+      return DEFAULT_THEME;
+    }
+    let currentTheme = resolveInitialTheme();
+
+    function applyTheme(name) {
+      if (!THEMES[name]) name = DEFAULT_THEME;
+      currentTheme = name;
+      document.documentElement.style.setProperty('--accent', THEMES[name].accent);
+    }
+    // Apply the initial theme immediately so the UI renders in the right
+    // accent from the first paint.
+    applyTheme(currentTheme);
+
+    // Push the current theme into every live chart iframe. Iframes that were
+    // already open at the time of a theme change can't be re-created without
+    // losing scroll/zoom state, so they listen for a 'sv-theme' postMessage
+    // and swap their --accent CSS variable at runtime.
+    function broadcastTheme() {
+      if (typeof billboards === 'undefined') return;
+      for (const b of billboards) {
+        if (!b || !b.interactive) continue;
+        const el = b.element;
+        if (!el || el.tagName !== 'IFRAME') continue;
+        try {
+          el.contentWindow.postMessage(
+            { type: 'sv-theme', theme: currentTheme }, '*');
+        } catch (_) { /* cross-origin safety */ }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  USER PREFERENCES — localStorage helpers
+    //
+    //  Everything a user can adjust (orbit speed, scroll gain, theme, period,
+    //  ring size, per-slot tickers) is persisted to localStorage on every
+    //  change and restored at startup, so a "production mode" launch comes up
+    //  exactly how the previous session was left.
+    //
+    //  URL query params from the Python launcher (?tickers=…&period=…) count
+    //  as fresh intent for *this* session and override the cached session
+    //  when present — but they are also written back to the cache so the
+    //  next blank launch picks them up.
+    // ══════════════════════════════════════════════════════════════════════════
+    const LS_ORBIT_SPEED_KEY  = 'sv.orbitSpeed';
+    const LS_SCROLL_GAIN_KEY  = 'sv.scrollGain';
+    const LS_SESSION_KEY      = 'sv.session';      // {period, ringTickers:[...]}
+    const DEFAULT_ORBIT_SPEED = 1.0;
+    const DEFAULT_SCROLL_GAIN = 0.8;
+
+    // Safe localStorage accessors — fall back silently if storage is disabled
+    // (private browsing, iframe with blocked 3rd-party storage, etc.).
+    function lsSet(key, value) {
+      try { localStorage.setItem(key, String(value)); } catch (_) {}
+    }
+    function lsGetNumber(key, fallback, min, max) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return fallback;
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v)) return fallback;
+        return Math.min(max, Math.max(min, v));
+      } catch (_) { return fallback; }
+    }
+    function lsSetJSON(key, obj) {
+      try { localStorage.setItem(key, JSON.stringify(obj)); } catch (_) {}
+    }
+    function lsGetJSON(key) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return null;
+        return JSON.parse(raw);
+      } catch (_) { return null; }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  SESSION RESTORE
+    //
+    //  Decide the initial period + ring tickers by combining URL query params
+    //  (Python launcher) with the cached session. URL params win when present
+    //  and non-empty; otherwise we replay the cache; otherwise we fall back
+    //  to CIRCLE_COUNT blank slots.
+    // ══════════════════════════════════════════════════════════════════════════
+    const PERIODS = ['1d','5d','1mo','3mo','6mo','1y','2y','5y','max'];
+    const DEFAULT_PERIOD = '1mo';
+
+    const _cachedSession = lsGetJSON(LS_SESSION_KEY);
+    const _urlTickersRaw = _params.get('tickers');     // null | "" | "A,B,C"
+    const _urlPeriodRaw  = _params.get('period');      // null | "1mo" | …
+
+    // Resolve initial ring tickers. Empty string in a slot means "blank
+    // interactive iframe ready for the Go button" — NOT a non-interactive
+    // placeholder (those are only for the center slot).
+    let initialRingTickers;
+    if (_urlTickersRaw !== null && _urlTickersRaw.trim().length > 0) {
+      // Python launcher provided a non-empty ticker list — use it verbatim.
+      initialRingTickers = _urlTickersRaw
+        .split(',').map(s => s.trim()).filter(Boolean);
+    } else if (
+      _cachedSession &&
+      Array.isArray(_cachedSession.ringTickers) &&
+      _cachedSession.ringTickers.length > 0
+    ) {
+      initialRingTickers = _cachedSession.ringTickers
+        .map(t => (typeof t === 'string' ? t : ''));
+    } else {
+      initialRingTickers = new Array(CIRCLE_COUNT).fill('');
+    }
+
+    // Resolve initial period.
+    let initialPeriod = DEFAULT_PERIOD;
+    if (_urlPeriodRaw && PERIODS.includes(_urlPeriodRaw)) {
+      initialPeriod = _urlPeriodRaw;
+    } else if (_cachedSession && PERIODS.includes(_cachedSession.period)) {
+      initialPeriod = _cachedSession.period;
+    }
+
+    // Snapshot the current session state to localStorage. Called after every
+    // user-driven mutation (period change, ticker update, ring +/-) AND once
+    // after the initial billboard loop completes, so URL-launch state is
+    // captured into the cache on the first blank-launch.
+    //
+    // Safe to reference `billboards` and `getRingBillboards` even though they
+    // are declared later — persistSession is only invoked at event-time, by
+    // which point the entire module has finished executing.
+    function persistSession() {
+      if (typeof billboards === 'undefined') return;
+      if (typeof getRingBillboards !== 'function') return;
+      const ringTickers = getRingBillboards().map(b => (b && b.ticker) || '');
+      lsSetJSON(LS_SESSION_KEY, {
+        period:      currentPeriod,
+        ringTickers: ringTickers,
+      });
+    }
 
     // Camera placed far enough back that the full ring + center fit on
     // screen with empty background space around them — required for
@@ -509,21 +695,18 @@
     // ══════════════════════════════════════════════════════════════════════════
     const billboards = [];
 
+    // Every ring slot — filled or blank — is an interactive iframe. A blank
+    // slot loads the chart template without a ?ticker= param so the user can
+    // later type a ticker into the top-bar input and have the Go button fill
+    // it in. (The center slot is a separate non-interactive placeholder div
+    // built by makeCenterPlaceholder below.)
     function makeChartElement(ticker) {
-      if (!ticker) {
-        // Not enough tickers to fill this slot → black blank placeholder.
-        const div = document.createElement('div');
-        div.className      = 'blank-slot';
-        div.style.width    = IFRAME_WIDTH_PX  + 'px';
-        div.style.height   = IFRAME_HEIGHT_PX + 'px';
-        div.textContent    = '— empty slot —';
-        return div;
-      }
       const iframe = document.createElement('iframe');
       iframe.className = 'chart-frame';
-      iframe.src = `${CHART_URL}`
-                 + `?ticker=${encodeURIComponent(ticker)}`
-                 + `&period=${encodeURIComponent(TIMEWINDOW)}`;
+      let src = `${CHART_URL}?period=${encodeURIComponent(initialPeriod)}`
+              + `&theme=${encodeURIComponent(currentTheme)}`;
+      if (ticker) src += `&ticker=${encodeURIComponent(ticker)}`;
+      iframe.src = src;
       iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
       iframe.style.height = IFRAME_HEIGHT_PX + 'px';
       iframe.setAttribute('allow', 'fullscreen');
@@ -598,18 +781,22 @@
       billboards.push(centerBillboard);
     }
 
-    // 2) CIRCLE_COUNT chart iframes evenly spaced on a circle in the XZ plane.
-    //    Up to 6 tickers from the URL (?tickers=...) fill the ring in order;
-    //    missing slots get the black blank placeholder.
-    for (let i = 0; i < CIRCLE_COUNT; i++) {
-      const angle = (i / CIRCLE_COUNT) * Math.PI * 2;
-      const pos = new THREE.Vector3(
-        Math.cos(angle) * CIRCLE_RADIUS,
-        0,
-        Math.sin(angle) * CIRCLE_RADIUS
-      );
-      const ticker = TICKERS[i] || '';
-      addBillboard(ticker, pos);
+    // 2) Ring chart iframes evenly spaced on a circle in the XZ plane.
+    //    The list of tickers (and therefore the ring size) comes from
+    //    initialRingTickers, which was resolved above from the URL query and
+    //    the cached session. Every slot — filled or blank — is an interactive
+    //    iframe so the top-bar ticker input can target any of them.
+    {
+      const n = initialRingTickers.length;
+      for (let i = 0; i < n; i++) {
+        const angle = (i / n) * Math.PI * 2;
+        const pos = new THREE.Vector3(
+          Math.cos(angle) * CIRCLE_RADIUS,
+          0,
+          Math.sin(angle) * CIRCLE_RADIUS
+        );
+        addBillboard(initialRingTickers[i] || '', pos);
+      }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -736,33 +923,14 @@
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  USER PREFERENCES (persisted in localStorage across sessions)
+    //  USER PREFERENCES — slider + theme + reset-view wiring
     //
-    //  The orbit-speed and scroll-gain sliders are treated as user preferences:
-    //  every edit is immediately written to localStorage under the keys below,
-    //  and at page load we read them back and apply them before showing the UI.
-    //  They are INTENTIONALLY not touched by the "Reset view" button, which is
+    //  The key definitions, default values, and lsSet/lsGet helpers live up
+    //  near the theme module so the session-restore logic can reach them.
+    //  Here we only wire the DOM elements to those helpers. Slider values
+    //  are INTENTIONALLY not touched by the "Reset view" button, which is
     //  scoped to camera position/target only.
     // ══════════════════════════════════════════════════════════════════════════
-    const LS_ORBIT_SPEED_KEY = 'sv.orbitSpeed';
-    const LS_SCROLL_GAIN_KEY = 'sv.scrollGain';
-    const DEFAULT_ORBIT_SPEED = 1.0;
-    const DEFAULT_SCROLL_GAIN = 0.8;
-
-    // Safe localStorage accessors — fall back silently if storage is disabled
-    // (private browsing, iframe with blocked 3rd-party storage, etc.).
-    function lsGetNumber(key, fallback, min, max) {
-      try {
-        const raw = localStorage.getItem(key);
-        if (raw == null) return fallback;
-        const v = parseFloat(raw);
-        if (!Number.isFinite(v)) return fallback;
-        return Math.min(max, Math.max(min, v));
-      } catch (_) { return fallback; }
-    }
-    function lsSet(key, value) {
-      try { localStorage.setItem(key, String(value)); } catch (_) {}
-    }
 
     // Orbit-speed slider (lives inside the menu panel).
     const $speed    = document.getElementById('orbit-speed');
@@ -789,6 +957,17 @@
     }
     $scroll.addEventListener('input', () => {
       applyScrollGain(parseFloat($scroll.value), /*persist=*/true);
+    });
+
+    // Theme selector — the THEMES object / applyTheme / currentTheme /
+    // broadcastTheme were already set up near the top of the script; here we
+    // just wire the <select> element to them and persist the choice.
+    const $themeSelect = document.getElementById('theme-select');
+    $themeSelect.value = currentTheme;
+    $themeSelect.addEventListener('change', () => {
+      applyTheme($themeSelect.value);
+      lsSet(LS_THEME_KEY, currentTheme);
+      broadcastTheme();
     });
 
     // Restore saved preferences (or defaults) before the first render.
@@ -827,8 +1006,10 @@
     //  iframe-initiated period change (wheel zoom inside a chart) to the others,
     //  AND we listen for those here so the top-bar highlight stays in sync.
     // ══════════════════════════════════════════════════════════════════════════
-    const PERIODS = ['1d','5d','1mo','3mo','6mo','1y','2y','5y','max'];
-    let currentPeriod = PERIODS.includes(TIMEWINDOW) ? TIMEWINDOW : '1mo';
+    // PERIODS was declared up near the session-restore block so the
+    // cache-replay logic can reach it. currentPeriod starts at whatever
+    // the session restore decided (URL query or cached value or default).
+    let currentPeriod = initialPeriod;
 
     const $periodTopbar = document.getElementById('period-topbar');
     const periodButtons = {};
@@ -864,6 +1045,7 @@
       currentPeriod = p;
       updatePeriodHighlight();
       if (!fromBroadcast) broadcastPeriodToAll(p);
+      persistSession();
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -920,11 +1102,13 @@
       // the current global period.
       target.element.src =
         `${CHART_URL}?ticker=${encodeURIComponent(ticker)}`
-      + `&period=${encodeURIComponent(currentPeriod)}`;
+      + `&period=${encodeURIComponent(currentPeriod)}`
+      + `&theme=${encodeURIComponent(currentTheme)}`;
       $tickerInput.value = ticker;
       $tickerInput.blur();
       // Force the next refresh to re-apply (avoids a stale cache match).
       _lastClosestBillboard = null;
+      persistSession();
     }
 
     $tickerGo.addEventListener('click', runTickerUpdate);
@@ -1003,7 +1187,8 @@
       iframe.className   = 'chart-frame';
       // No ticker param → template shows an empty chart. The user can fill
       // it via the ticker input beside this button.
-      iframe.src         = `${CHART_URL}?period=${encodeURIComponent(currentPeriod)}`;
+      iframe.src         = `${CHART_URL}?period=${encodeURIComponent(currentPeriod)}`
+                         + `&theme=${encodeURIComponent(currentTheme)}`;
       iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
       iframe.style.height = IFRAME_HEIGHT_PX + 'px';
       iframe.setAttribute('allow', 'fullscreen');
@@ -1021,6 +1206,7 @@
       recomputeRingPositions(b);
       _lastClosestBillboard = null;   // force ticker input to refresh
       updateRingButtonState();
+      persistSession();
     }
 
     /**
@@ -1041,20 +1227,138 @@
       if (_lastClosestBillboard === target) _lastClosestBillboard = null;
       recomputeRingPositions();
       updateRingButtonState();
+      persistSession();
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  RING SWAP  (←  /  →)
+    //
+    //  Swap the closest ring billboard (T, the "ticker billboard") with its
+    //  screen-left or screen-right neighbor on the ring, then rotate the
+    //  camera around the Y axis by the same angle T moved so T stays
+    //  horizontally centered on screen — i.e. T remains closest to the
+    //  camera after the swap.
+    //
+    //  "Screen-left" / "screen-right" is computed by projecting the two
+    //  ring-adjacent billboards onto the camera's world-space right vector:
+    //  the one with a more negative dot product is on the left, the more
+    //  positive one is on the right. This is robust to any camera yaw.
+    //
+    //  Net visual effect: T stays front-and-center, the whole scene appears
+    //  to rotate by one slot, and the ring-ordering of tickers has shifted
+    //  one step in the clicked direction. The arrow buttons are disabled
+    //  while the ring contains fewer than 2 billboards (nothing to swap).
+    // ══════════════════════════════════════════════════════════════════════════
+    const _swapTmpA   = new THREE.Vector3();
+    const _swapTmpB   = new THREE.Vector3();
+    const _swapRight  = new THREE.Vector3();
+    const _swapOffset = new THREE.Vector3();
+    const _yAxis      = new THREE.Vector3(0, 1, 0);
+
+    function swapRingNeighbor(direction) {
+      // direction = -1 (left arrow) or +1 (right arrow)
+      const ring = getRingBillboards();
+      if (ring.length < 2) return;
+
+      const T = findClosestRingBillboard();
+      if (!T) return;
+
+      // Sort the ring by angle around the origin (XZ plane, atan2(z, x)).
+      // Because recomputeRingPositions always lays billboards on an evenly
+      // spaced circle — and swaps only shuffle which billboard occupies
+      // which slot, never introducing duplicates — the angle-sorted order
+      // is always the true ring-neighbor order.
+      const sorted = ring.slice().sort(
+        (a, b) =>
+          Math.atan2(a.worldPos.z, a.worldPos.x) -
+          Math.atan2(b.worldPos.z, b.worldPos.x)
+      );
+      const n    = sorted.length;
+      const tIdx = sorted.indexOf(T);
+      const prev = sorted[(tIdx - 1 + n) % n];
+      const next = sorted[(tIdx + 1) % n];
+
+      // Project each candidate onto the camera's world-space +X vector to
+      // decide which is screen-left and which is screen-right of T.
+      _swapRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      const prevDot = _swapTmpA.subVectors(prev.worldPos, T.worldPos).dot(_swapRight);
+      const nextDot = _swapTmpB.subVectors(next.worldPos, T.worldPos).dot(_swapRight);
+
+      // screen-left  = more negative dot   (direction = -1)
+      // screen-right = more positive dot   (direction = +1)
+      const wantLeft = (direction < 0);
+      let neighbor;
+      if (prev === next) {
+        // Ring of size 2 — there's only one "other" billboard; both
+        // buttons act on the same target.
+        neighbor = prev;
+      } else if (wantLeft) {
+        neighbor = (prevDot < nextDot) ? prev : next;
+      } else {
+        neighbor = (prevDot > nextDot) ? prev : next;
+      }
+
+      // Capture T's and neighbor's old angles BEFORE mutating worldPos —
+      // the camera rotation delta is derived from these, not from the
+      // camera's current angle (which may drift slightly during damping).
+      const tOldAngle = Math.atan2(T.worldPos.z,        T.worldPos.x);
+      const nOldAngle = Math.atan2(neighbor.worldPos.z, neighbor.worldPos.x);
+
+      // Swap the two world positions. All other billboards stay put.
+      _swapTmpA.copy(T.worldPos);
+      T.worldPos.copy(neighbor.worldPos);
+      neighbor.worldPos.copy(_swapTmpA);
+
+      // Rotate the camera so that its own atan2(z,x) angle follows T
+      // from tOldAngle to nOldAngle. Three.js's applyAxisAngle(+Y, α)
+      // rotates a point right-hand-rule around +Y, which DECREASES its
+      // atan2(z,x) angle by α — so the rotation amount we pass is
+      // (tOldAngle - nOldAngle), not the reverse. Wrap into [-π, π] to
+      // always pick the short way around.
+      let delta = tOldAngle - nOldAngle;
+      if (delta >  Math.PI) delta -= 2 * Math.PI;
+      if (delta < -Math.PI) delta += 2 * Math.PI;
+
+      _swapOffset.subVectors(camera.position, controls.target);
+      _swapOffset.applyAxisAngle(_yAxis, delta);
+      camera.position.copy(controls.target).add(_swapOffset);
+      // Flush any residual damping so the new orientation is instant.
+      controls.update();
+
+      // T is still the closest to the camera (we moved the camera to
+      // follow), but _lastClosestBillboard may be stale via object identity
+      // comparisons that compare positions too — force a refresh anyway.
+      _lastClosestBillboard = null;
+
+      persistSession();
+    }
+
+    const $ringLeft  = document.getElementById('ring-left');
     const $ringMinus = document.getElementById('ring-minus');
     const $ringPlus  = document.getElementById('ring-plus');
+    const $ringRight = document.getElementById('ring-right');
 
     function updateRingButtonState() {
       const n = getRingBillboards().length;
       $ringMinus.disabled = (n <= RING_MIN);
-      $ringPlus.disabled  = (n >= RING_MAX);
+      $ringPlus .disabled = (n >= RING_MAX);
+      // Nothing to swap with unless there are at least 2 ring billboards.
+      const canSwap = (n >= 2);
+      $ringLeft .disabled = !canSwap;
+      $ringRight.disabled = !canSwap;
     }
 
     $ringPlus .addEventListener('click', addClosestRingBillboard);
     $ringMinus.addEventListener('click', removeClosestRingBillboard);
+    $ringLeft .addEventListener('click', () => swapRingNeighbor(-1));
+    $ringRight.addEventListener('click', () => swapRingNeighbor(+1));
     updateRingButtonState();
+
+    // Write the freshly-resolved initial session (URL query ∪ cache) back to
+    // localStorage. On a URL-launch this promotes the URL params into the
+    // cache so the next blank launch restores them. On a blank-launch this
+    // is a no-op overwrite.
+    persistSession();
 
     // ══════════════════════════════════════════════════════════════════════════
     //  ZOOM CLAMP — keep a background margin around every billboard
