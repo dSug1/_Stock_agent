@@ -53,65 +53,6 @@
       flex-wrap: wrap;
     }
 
-    #search-wrap {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex: 0 0 auto;
-    }
-
-    #search-input {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      color: var(--txt);
-      padding: 5px 10px;
-      width: 210px;
-      font-size: 13px;
-      outline: none;
-      transition: border-color .2s;
-    }
-    #search-input:focus { border-color: var(--accent); }
-    #search-input::placeholder { color: var(--txt-dim); }
-
-    #search-btn {
-      background: var(--accent);
-      border: none;
-      border-radius: var(--radius);
-      color: #fff;
-      cursor: pointer;
-      font-size: 13px;
-      padding: 5px 12px;
-      transition: opacity .15s;
-    }
-    #search-btn:hover { opacity: .85; }
-
-    /* autocomplete dropdown */
-    #autocomplete {
-      position: absolute;
-      top: 44px;
-      left: 14px;
-      z-index: 999;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      min-width: 280px;
-      max-height: 260px;
-      overflow-y: auto;
-      display: none;
-      box-shadow: 0 8px 24px #0008;
-    }
-    .ac-item {
-      padding: 8px 12px;
-      cursor: pointer;
-      display: flex;
-      gap: 10px;
-      align-items: baseline;
-    }
-    .ac-item:hover { background: var(--border); }
-    .ac-sym  { font-weight: 700; color: var(--accent); font-size: 13px; min-width: 60px; }
-    .ac-name { color: var(--txt-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
     /* ── Period buttons ───────────────────────────────────────────────────── */
     #period-bar {
       display: flex;
@@ -264,12 +205,6 @@
 
   <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
   <div id="topbar">
-    <div id="search-wrap">
-      <input id="search-input" type="text" placeholder="Ticker or company…" autocomplete="off" />
-      <button id="search-btn">Go</button>
-    </div>
-    <div id="autocomplete"></div>
-
     <div id="price-panel">
       <span id="ticker-label">—</span>
       <span id="company-label"></span>
@@ -407,9 +342,6 @@ function updateClockLabel() {
 // ══════════════════════════════════════════════════════════════════════════════
 //  DOM refs
 // ══════════════════════════════════════════════════════════════════════════════
-const $searchInput  = document.getElementById("search-input");
-const $searchBtn    = document.getElementById("search-btn");
-const $autocomplete = document.getElementById("autocomplete");
 const $loading      = document.getElementById("loading");
 const $tickerLabel  = document.getElementById("ticker-label");
 const $companyLabel = document.getElementById("company-label");
@@ -735,79 +667,6 @@ function clearLiveTimer() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  Search / autocomplete
-// ══════════════════════════════════════════════════════════════════════════════
-
-let _acTimer = null;
-
-$searchInput.addEventListener("input", () => {
-  clearTimeout(_acTimer);
-  const q = $searchInput.value.trim();
-  if (q.length < 2) { hideAc(); return; }
-  _acTimer = setTimeout(() => fetchAc(q), 300);
-});
-
-async function fetchAc(q) {
-  try {
-    const res  = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    const list = await res.json();
-    showAc(list);
-  } catch (_) { hideAc(); }
-}
-
-function showAc(items) {
-  if (!items.length) { hideAc(); return; }
-  $autocomplete.innerHTML = "";
-  items.forEach(item => {
-    const div = document.createElement("div");
-    div.className = "ac-item";
-    div.innerHTML = `<span class="ac-sym">${item.symbol}</span><span class="ac-name">${item.name}</span>`;
-    div.addEventListener("mousedown", e => {
-      e.preventDefault();
-      selectTicker(item.symbol);
-    });
-    $autocomplete.appendChild(div);
-  });
-  $autocomplete.style.display = "block";
-}
-
-function hideAc() {
-  $autocomplete.style.display = "none";
-}
-
-$searchInput.addEventListener("blur",  () => setTimeout(hideAc, 150));
-$searchInput.addEventListener("keydown", e => {
-  if (e.key === "Enter") { e.preventDefault(); triggerSearch(); }
-});
-
-$searchBtn.addEventListener("click", triggerSearch);
-
-async function triggerSearch() {
-  const q = $searchInput.value.trim();
-  if (!q) return;
-  hideAc();
-  try {
-    const res  = await fetch(`/api/resolve?q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    selectTicker(data.ticker);
-  } catch (_) {
-    selectTicker(q.toUpperCase());
-  }
-}
-
-function selectTicker(ticker) {
-  state.ticker = ticker.toUpperCase();
-  $searchInput.value = state.ticker;
-  hideAc();
-  // Update browser URL bar without reload
-  const url = new URL(window.location.href);
-  url.searchParams.set("ticker", state.ticker);
-  url.searchParams.set("period", state.period);
-  history.replaceState(null, "", url.toString());
-  loadChart();
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 //  Error toast
 // ══════════════════════════════════════════════════════════════════════════════
 let _errorTimer = null;
@@ -837,12 +696,10 @@ function showError(msg) {
   setInterval(updateClockLabel, 1000);
 
   if (t) {
-    state.ticker   = t.toUpperCase();
-    $searchInput.value = state.ticker;
+    state.ticker = t.toUpperCase();
     loadChart();
   } else {
     $loading.classList.add("hidden");
-    $searchInput.focus();
   }
 })();
 </script>

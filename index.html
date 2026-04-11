@@ -24,7 +24,8 @@
     /* Remove focus rings on non-input elements (the layers and their
        wrapper divs would otherwise flash a browser outline on click). */
     #webgl-layer, #billboards-layer, #billboards-layer > * { outline: none; }
-    #menu-panel, #menu-panel *, #period-topbar, #period-topbar * {
+    #menu-panel, #menu-panel *, #period-topbar, #period-topbar *,
+    #ticker-input-group, #ticker-input-group * {
       user-select: auto; -webkit-user-select: auto;
     }
 
@@ -191,6 +192,45 @@
       font-weight: 600;
     }
 
+    /* Ticker input group — sits on the LEFT side of the period topbar,
+       separated from the period buttons by a thin divider. Reflects the
+       ticker of the billboard closest to the camera; typing + Go (or
+       Enter) rewrites that billboard to the entered ticker. */
+    #ticker-input-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding-right: 8px;
+      margin-right: 4px;
+      border-right: 1px solid #30363d;
+    }
+    #ticker-input {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      padding: 4px 8px;
+      width: 140px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    #ticker-input:focus { border-color: #58a6ff; }
+    #ticker-input::placeholder { color: #8b949e; }
+    #ticker-go {
+      background: #58a6ff;
+      border: none;
+      border-radius: 4px;
+      color: #ffffff;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      transition: opacity .15s;
+    }
+    #ticker-go:hover { opacity: .85; }
+
     /* Blank-slot placeholder shown when there aren't enough tickers.
        Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
        Non-interactive on purpose — scroll/click over it should reach
@@ -270,8 +310,15 @@
     <button id="reset-view" class="menu-btn" type="button">Reset view</button>
   </div>
 
-  <!-- Top-of-screen period buttons — control every billboard at once. -->
-  <div id="period-topbar"></div>
+  <!-- Top-of-screen period buttons — control every billboard at once.
+       The ticker input group sits on the LEFT, period buttons are
+       appended to the right by the module script below. -->
+  <div id="period-topbar">
+    <div id="ticker-input-group">
+      <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
+      <button id="ticker-go" type="button">Go</button>
+    </div>
+  </div>
 
   <script type="module">
     import * as THREE from 'three';
@@ -409,11 +456,12 @@
     // ══════════════════════════════════════════════════════════════════════════
     //  BILLBOARDS (manually projected from 3D world → 2D screen every frame)
     //
-    //  Each entry is: { element, worldPos: Vector3, interactive: bool }
+    //  Each entry is: { element, worldPos: Vector3, interactive: bool, ticker }
     //    element      — DOM node (iframe or div) absolutely positioned in the
     //                   billboards layer
     //    worldPos     — fixed 3D position (center of ring / ring slots)
     //    interactive  — true for chart iframes, false for placeholders
+    //    ticker       — current ticker symbol (empty string for placeholders)
     // ══════════════════════════════════════════════════════════════════════════
     const billboards = [];
 
@@ -473,6 +521,7 @@
         element:     el,
         worldPos:    worldPos.clone(),
         interactive: isIframe,
+        ticker:      (isIframe && ticker) ? String(ticker).toUpperCase() : '',
       });
     }
 
@@ -497,6 +546,7 @@
         element:     el,
         worldPos:    new THREE.Vector3(0, 0, 0),
         interactive: false,
+        ticker:      '',
       });
     }
 
@@ -769,6 +819,72 @@
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  TICKER INPUT (bound to the billboard closest to the camera)
+    //
+    //  Every animation frame we find the closest interactive billboard and,
+    //  unless the user is currently typing in the input, reflect that
+    //  billboard's ticker in the input box. Clicking Go (or pressing Enter)
+    //  resolves the entered text via /api/resolve (falling back to the raw
+    //  upper-cased text) and rewrites the closest billboard's iframe src so
+    //  it loads the new ticker at the current period.
+    // ══════════════════════════════════════════════════════════════════════════
+    const $tickerInput = document.getElementById('ticker-input');
+    const $tickerGo    = document.getElementById('ticker-go');
+
+    function findClosestInteractiveBillboard() {
+      let best = null, bestD = Infinity;
+      for (const b of billboards) {
+        if (!b.interactive) continue;
+        const d = b.worldPos.distanceTo(camera.position);
+        if (d < bestD) { bestD = d; best = b; }
+      }
+      return best;
+    }
+
+    let _lastClosestBillboard = null;
+    function refreshTickerInput() {
+      // Don't clobber what the user is currently typing.
+      if (document.activeElement === $tickerInput) return;
+      const b = findClosestInteractiveBillboard();
+      if (b === _lastClosestBillboard) return;
+      _lastClosestBillboard = b;
+      $tickerInput.value = b ? b.ticker : '';
+    }
+
+    async function runTickerUpdate() {
+      const raw = $tickerInput.value.trim();
+      if (!raw) return;
+      // Try to resolve company names / fuzzy input to a real ticker. Fall
+      // back to the raw upper-cased string if the resolve endpoint fails.
+      let ticker = raw.toUpperCase();
+      try {
+        const res = await fetch(`/api/resolve?q=${encodeURIComponent(raw)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.ticker) ticker = String(data.ticker).toUpperCase();
+        }
+      } catch (_) { /* network blip — use raw uppercased */ }
+
+      const target = findClosestInteractiveBillboard();
+      if (!target) return;
+      target.ticker = ticker;
+      // Rewrite the iframe src so the chart reloads with the new ticker at
+      // the current global period.
+      target.element.src =
+        `${CHART_URL}?ticker=${encodeURIComponent(ticker)}`
+      + `&period=${encodeURIComponent(currentPeriod)}`;
+      $tickerInput.value = ticker;
+      $tickerInput.blur();
+      // Force the next refresh to re-apply (avoids a stale cache match).
+      _lastClosestBillboard = null;
+    }
+
+    $tickerGo.addEventListener('click', runTickerUpdate);
+    $tickerInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); runTickerUpdate(); }
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  ZOOM CLAMP — keep a background margin around every billboard
     //
     //  OrbitControls' minDistance clamps distance-to-target, not
@@ -922,6 +1038,7 @@
 
       webglRenderer.render(scene, camera);
       updateBillboardProjection();
+      refreshTickerInput();              // mirror closest billboard's ticker
     }
     animate();
 
