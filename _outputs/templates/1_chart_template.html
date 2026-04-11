@@ -442,6 +442,7 @@ PERIODS.forEach(p => {
     state.period = p;
     updatePeriodButtons();
     loadChart();
+    broadcastPeriod(p);
   });
   $periodBar.appendChild(btn);
 });
@@ -566,8 +567,42 @@ chart.timeScale().subscribeVisibleTimeRangeChange(range => {
       state.period = newPeriod;
       updatePeriodButtons();
       loadChart();
+      broadcastPeriod(newPeriod);
     }
   }, 400);   // 400 ms debounce — fast enough to feel responsive, slow enough to batch wheel ticks
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Cross-iframe period sync (used by the 3D Stock Visualizer parent)
+//
+//  When multiple chart iframes are hosted inside the Three.js scene, any one
+//  of them changing its time window (via wheel-zoom or a period button) is
+//  broadcast to the parent, which forwards it to the other iframes so they
+//  all stay on the same period.
+//
+//  Standalone use (this page opened directly) is unaffected — the parent is
+//  just `window` itself in that case and the postMessage is a no-op.
+// ══════════════════════════════════════════════════════════════════════════════
+function broadcastPeriod(p) {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: "sv-period", period: p }, "*");
+    }
+  } catch (_) { /* cross-origin safety net */ }
+}
+
+window.addEventListener("message", (ev) => {
+  const d = ev.data;
+  if (!d || d.type !== "sv-period" || typeof d.period !== "string") return;
+  if (!PERIODS.includes(d.period))   return;
+  if (d.period === state.period)      return;
+  // Same cooldown pattern as the zoom-subscription auto-switch, so a fresh
+  // incoming broadcast isn't immediately clobbered by our own zoom handler.
+  _zoomCooldown = true;
+  setTimeout(() => { _zoomCooldown = false; }, 1500);
+  state.period = d.period;
+  updatePeriodButtons();
+  loadChart();
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

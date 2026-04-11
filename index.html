@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Visualizer — 3D Scene</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      /* Kill text-selection and mobile tap-highlight flashes when clicking
+         on the CSS3D background layer. The HUD slider still works because
+         <input> elements opt back in via the #hud rule below. */
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* Remove focus rings on non-input elements (the CSS3D layer and its
+       wrapper divs would otherwise flash a browser outline on click). */
+    #webgl-layer, #css3d-layer, #css3d-layer > div { outline: none; }
+    #hud, #hud * { user-select: auto; -webkit-user-select: auto; }
+
+    /* Stacked renderer layers.
+       - WebGL canvas sits behind with pointer-events: none so it doesn't
+         intercept clicks destined for the iframe billboards or OrbitControls.
+       - CSS3D container sits on top with pointer-events: auto so its DOM
+         children (the iframes) can receive events, and OrbitControls
+         (attached to this container) receives drags on empty background. */
+    #webgl-layer, #css3d-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #webgl-layer { pointer-events: none; z-index: 1; }
+    #css3d-layer { pointer-events: auto; z-index: 2; }
+
+    /* Floating HUD with the orbit-speed slider */
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      background: rgba(22, 27, 34, 0.85);
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 13px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      user-select: none;
+    }
+    #hud label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+    #hud input[type=range] {
+      width: 140px;
+      accent-color: #58a6ff;
+    }
+    #hud .val {
+      display: inline-block;
+      min-width: 34px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: #8b949e;
+    }
+    #hud .title {
+      color: #8b949e;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+
+    /* Blank-slot placeholder shown when there aren't enough tickers.
+       Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX. */
+    .blank-slot {
+      background: #000;
+      border: 1px solid #30363d;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #30363d;
+      font-family: 'Courier New', monospace;
+      font-size: 24px;
+      letter-spacing: 0.15em;
+    }
+
+    /* The iframes themselves: dark backdrop, thin border matching the chart theme. */
+    .chart-frame {
+      border: 1px solid #30363d;
+      background: #0d1117;
+      display: block;
+    }
+
+    /* Central-object placeholder — stands in for something to be defined later.
+       Same pixel dimensions as the billboards so the ring geometry stays
+       balanced. Pointer-events stay on so wheel-to-zoom still works here. */
+    .center-placeholder {
+      border: 1px dashed #30363d;
+      background: rgba(13, 17, 23, 0.55);
+      color: #6e7681;
+      font-family: 'Courier New', monospace;
+      font-size: 22px;
+      letter-spacing: 0.18em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+
+  <!-- Three.js ES modules pinned to 0.160.0.
+       The importmap lets the module script below use bare specifiers
+       like `three` and `three/addons/...`. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three":          "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/":  "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <div id="hud">
+    <div class="title">Camera</div>
+    <label>
+      Orbit speed
+      <input id="orbit-speed" type="range" min="0.1" max="3" step="0.05" value="1">
+      <span id="orbit-speed-val" class="val">1.00</span>
+    </label>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  CONFIGURATION
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Tickers and time window are provided by run.bat (→ 2_stock_visualizer.py)
+    // via URL query params: ?tickers=AAPL,MSFT,GOOGL&period=1mo
+    // The Python launcher prompts the user interactively, resolves ticker
+    // symbols, pre-fetches data, then opens the browser at this URL.
+    const _params     = new URLSearchParams(location.search);
+    const TICKERS     = (_params.get('tickers') || '')
+                          .split(',')
+                          .map(s => s.trim())
+                          .filter(Boolean);
+    const TIMEWINDOW  = _params.get('period') || '1mo';
+
+    const CIRCLE_COUNT      = 6;        // objects around the MainObject
+    const CIRCLE_RADIUS     = 7;        // world units — ring radius around the center
+    const IFRAME_WIDTH_PX   = 800;      // iframe pixel width
+    const IFRAME_HEIGHT_PX  = 500;      // iframe pixel height
+    // Billboard world size = IFRAME_*_PX × BILLBOARD_SCALE.
+    // At 0.004 that's 3.2 × 2.0 world units — fits inside a radius-7 ring
+    // (adjacent centers are 7 units apart → 3.8 units gap between billboards)
+    // while still staying readable when viewed from ~14 units away.
+    const BILLBOARD_SCALE   = 0.004;
+    const CHART_URL         = "_outputs/templates/1_chart_template.html";
+
+    // Camera placed far enough back that the full ring + center fit on
+    // screen with empty CSS3D space around them — required for OrbitControls
+    // drag-to-rotate to receive pointerdowns (iframes capture their own).
+    const MIN_ORBIT_DISTANCE = 8;
+    const MAX_ORBIT_DISTANCE = 40;
+    const CAMERA_START_POS   = new THREE.Vector3(0, 5, 16);
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  SCENE / CAMERA / RENDERERS
+    // ══════════════════════════════════════════════════════════════════════════
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+
+    const camera = new THREE.PerspectiveCamera(
+      55,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+    camera.position.copy(CAMERA_START_POS);
+    camera.lookAt(0, 0, 0);
+
+    // WebGL renderer — draws background plane, grid, lights, any 3D helpers.
+    const webglRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    webglRenderer.setPixelRatio(window.devicePixelRatio);
+    webglRenderer.setSize(window.innerWidth, window.innerHeight);
+    webglRenderer.setClearColor(0x000000, 0);
+    webglRenderer.domElement.id = 'webgl-layer';
+    document.body.appendChild(webglRenderer.domElement);
+
+    // CSS3D renderer — draws the interactive iframe billboards.
+    // Its DOM element is a plain <div> that receives its own CSS to sit on top.
+    const cssRenderer = new CSS3DRenderer();
+    cssRenderer.setSize(window.innerWidth, window.innerHeight);
+    cssRenderer.domElement.id = 'css3d-layer';
+    // Explicitly enable pointer events on this layer so OrbitControls can
+    // see drags on empty space, and iframes still handle their own events.
+    cssRenderer.domElement.style.pointerEvents = 'auto';
+    document.body.appendChild(cssRenderer.domElement);
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  LIGHTS (kept for any future 3D content — CSS3DObjects ignore lighting,
+    //  and the background plane uses MeshBasicMaterial so it's self-lit.)
+    // ══════════════════════════════════════════════════════════════════════════
+    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+    scene.add(ambient);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
+    dirLight.position.set(6, 10, 6);
+    dirLight.target.position.set(0, 0, 0);
+    scene.add(dirLight);
+    scene.add(dirLight.target);
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  BACKGROUND IMAGE (blue gradient, parented to the camera)
+    //
+    //  Parenting to the camera means it always orbits with the camera and the
+    //  camera always faces it — it behaves like a skybox card. We use
+    //  MeshBasicMaterial so lighting doesn't affect it, and push it far out
+    //  (large plane at local z = -120) so nothing in the scene ever clips it.
+    //  depthWrite:false + renderOrder:-999 keep it behind everything else.
+    // ══════════════════════════════════════════════════════════════════════════
+    function makeGradientTexture() {
+      const c = document.createElement('canvas');
+      c.width  = 16;
+      c.height = 512;
+      const ctx = c.getContext('2d');
+      const g = ctx.createLinearGradient(0, 0, 0, c.height);
+      g.addColorStop(0.00, '#0b2346');  // top — deep navy
+      g.addColorStop(0.45, '#153a6e');  // upper mid — brighter blue
+      g.addColorStop(0.75, '#0a1b36');  // lower mid — darker
+      g.addColorStop(1.00, '#04080f');  // bottom — near black
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, c.width, c.height);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    const bgPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(400, 240),
+      new THREE.MeshBasicMaterial({
+        map:        makeGradientTexture(),
+        depthWrite: false,
+        depthTest:  false,
+        toneMapped: false,
+      })
+    );
+    bgPlane.position.set(0, 0, -120);   // local to the camera → in front of it
+    bgPlane.renderOrder = -999;
+    camera.add(bgPlane);
+    scene.add(camera);                  // required for the camera child to render
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  BILLBOARDS (CSS3DObject wrapping either an iframe or a blank <div>)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    const billboards = [];
+
+    function makeChartElement(ticker) {
+      if (!ticker) {
+        // Not enough tickers to fill this slot → black blank placeholder.
+        const div = document.createElement('div');
+        div.className      = 'blank-slot';
+        div.style.width    = IFRAME_WIDTH_PX  + 'px';
+        div.style.height   = IFRAME_HEIGHT_PX + 'px';
+        div.textContent    = '— empty slot —';
+        return div;
+      }
+      const iframe = document.createElement('iframe');
+      iframe.className = 'chart-frame';
+      iframe.src = `${CHART_URL}`
+                 + `?ticker=${encodeURIComponent(ticker)}`
+                 + `&period=${encodeURIComponent(TIMEWINDOW)}`;
+      iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
+      iframe.style.height = IFRAME_HEIGHT_PX + 'px';
+      iframe.setAttribute('allow', 'fullscreen');
+      iframe.setAttribute('loading', 'eager');
+      return iframe;
+    }
+
+    function addBillboard(ticker, position) {
+      const el  = makeChartElement(ticker);
+      const obj = new CSS3DObject(el);
+      obj.position.copy(position);
+      obj.scale.set(BILLBOARD_SCALE, BILLBOARD_SCALE, BILLBOARD_SCALE);
+      scene.add(obj);
+      billboards.push(obj);
+      return obj;
+    }
+
+    // 1) MainObject at origin — placeholder div (NOT a ticker chart).
+    //    This slot is reserved for something to be defined later.
+    function makeCenterPlaceholder() {
+      const div = document.createElement('div');
+      div.className   = 'center-placeholder';
+      div.style.width  = IFRAME_WIDTH_PX  + 'px';
+      div.style.height = IFRAME_HEIGHT_PX + 'px';
+      div.textContent  = '— placeholder —';
+      return div;
+    }
+    {
+      const obj = new CSS3DObject(makeCenterPlaceholder());
+      obj.position.set(0, 0, 0);
+      obj.scale.set(BILLBOARD_SCALE, BILLBOARD_SCALE, BILLBOARD_SCALE);
+      scene.add(obj);
+      billboards.push(obj);
+    }
+
+    // 2) CIRCLE_COUNT chart iframes evenly spaced on a circle in the XZ plane.
+    //    Up to 6 tickers from the URL (?tickers=...) fill the ring in order;
+    //    missing slots get the black blank placeholder.
+    for (let i = 0; i < CIRCLE_COUNT; i++) {
+      const angle = (i / CIRCLE_COUNT) * Math.PI * 2;
+      const pos = new THREE.Vector3(
+        Math.cos(angle) * CIRCLE_RADIUS,
+        0,
+        Math.sin(angle) * CIRCLE_RADIUS
+      );
+      const ticker = TICKERS[i] || '';
+      addBillboard(ticker, pos);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  ORBIT CONTROLS
+    // ══════════════════════════════════════════════════════════════════════════
+    // Attach to the CSS3D container (top layer) so it receives drags on
+    // empty background space. Events inside an iframe are trapped by the
+    // iframe's own browsing context and never reach OrbitControls — so
+    // clicks on period buttons, search, scroll-zoom etc. all reach the chart.
+    const controls = new OrbitControls(camera, cssRenderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.enablePan     = false;                 // stay focused on the ring
+    // Wheel events on the background reach OrbitControls and dolly the camera.
+    // Wheel events inside a chart iframe are trapped by the iframe's own
+    // document and never bubble out — so scrolling on a billboard zooms the
+    // chart's time range (which then broadcasts a period change, below),
+    // while scrolling on empty background moves the camera.
+    controls.enableZoom    = true;
+    controls.zoomSpeed     = 0.8;
+    controls.minDistance   = MIN_ORBIT_DISTANCE;
+    controls.maxDistance   = MAX_ORBIT_DISTANCE;
+    controls.target.set(0, 0, 0);
+    controls.rotateSpeed   = 1.0;
+    // Right-mouse-button drags the orbit; left button does nothing so clicks
+    // inside chart iframes stay untouched (period buttons, search, etc.).
+    controls.mouseButtons = {
+      LEFT:   null,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT:  THREE.MOUSE.ROTATE,
+    };
+    controls.update();
+
+    // Suppress the browser's native context menu on the 3D layer so the
+    // right-click-drag doesn't pop a menu mid-orbit. The HUD is a sibling
+    // above this layer so its controls are unaffected.
+    cssRenderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+    webglRenderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  PERIOD-SYNC HUB
+    //
+    //  Each chart iframe changes its own period when the user wheel-zooms or
+    //  clicks a period button. The iframe then posts {type:'sv-period', period}
+    //  to its parent (this window). We forward that message to every OTHER
+    //  billboard iframe so they all stay in sync on the same time window.
+    // ══════════════════════════════════════════════════════════════════════════
+    window.addEventListener('message', (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== 'sv-period' || typeof d.period !== 'string') return;
+      for (const b of billboards) {
+        const el = b.element;
+        if (el.tagName !== 'IFRAME') continue;           // skip placeholders
+        if (el.contentWindow === ev.source) continue;    // skip originator
+        try {
+          el.contentWindow.postMessage({ type: 'sv-period', period: d.period }, '*');
+        } catch (_) { /* cross-origin safety net — same-origin in practice */ }
+      }
+    });
+
+    // Orbit-speed slider
+    const $speed    = document.getElementById('orbit-speed');
+    const $speedVal = document.getElementById('orbit-speed-val');
+    $speed.addEventListener('input', () => {
+      const v = parseFloat($speed.value);
+      controls.rotateSpeed = v;
+      $speedVal.textContent = v.toFixed(2);
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  ANIMATION LOOP
+    // ══════════════════════════════════════════════════════════════════════════
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+
+      // Billboard behavior: every CSS3DObject's rotation matches the camera's,
+      // so iframes always face the viewer (Unity LookAtCamera equivalent).
+      for (const b of billboards) {
+        b.quaternion.copy(camera.quaternion);
+      }
+
+      webglRenderer.render(scene, camera);
+      cssRenderer.render(scene, camera);
+    }
+    animate();
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  RESIZE
+    // ══════════════════════════════════════════════════════════════════════════
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      webglRenderer.setSize(w, h);
+      cssRenderer.setSize(w, h);
+    });
+  </script>
+</body>
+</html>

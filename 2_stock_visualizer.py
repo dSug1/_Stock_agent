@@ -27,7 +27,7 @@ import requests
 import yfinance as yf
 import pandas as pd
 import pytz
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 import market_calendars as mc
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -388,6 +388,17 @@ def resolve_ticker(query: str) -> str:
 
 @app.route("/")
 def index():
+    # Root page is now the Three.js 3D scene (index.html at project root).
+    # The scene embeds multiple <iframe>s, each of which loads the chart
+    # template via the /_outputs/templates/... route defined below.
+    return send_from_directory(str(ROOT), "index.html")
+
+
+@app.route("/_outputs/templates/1_chart_template.html")
+def chart_template():
+    # Served under its on-disk path so the iframe src in index.html
+    # (CHART_URL = "_outputs/templates/1_chart_template.html") resolves
+    # against http://localhost:PORT/ without any URL rewriting.
     return render_template("1_chart_template.html")
 
 
@@ -478,41 +489,63 @@ def _open_browser(url: str) -> None:
     webbrowser.open(url)
 
 
-def _prompt_and_prefetch() -> tuple[str, str]:
+def _prompt_and_prefetch() -> tuple[list[str], str]:
     """
     Interactive terminal prompt.
-    Returns (ticker, period) to pass to the browser as URL params.
+
+    Returns (tickers, period):
+      tickers — up to 6 resolved symbols that fill the ring billboards
+                in index.html (the central object is a placeholder,
+                not a ticker chart).
+      period  — one time window applied to every chart
+
+    Both values are passed to the browser as URL query params so the
+    3D scene (index.html) and each embedded chart iframe start with
+    the correct data.
     """
     print()
     print("╔══════════════════════════════════════════════════════╗")
-    print("║       US Stock Price Chart Visualizer  v1.0          ║")
+    print("║      Stock Visualizer — 3D Scene  v1.2               ║")
     print("╠══════════════════════════════════════════════════════╣")
-    print("║  Enter a ticker (AAPL) or company name (Apple Inc.)  ║")
-    print("║  Leave blank to use the search bar in the browser.   ║")
+    print("║  Enter up to 6 tickers / company names,              ║")
+    print("║  comma-separated.  They fill the ring of billboards  ║")
+    print("║  around the central placeholder object.              ║")
+    print("║  Leave blank for an all-empty scene.                  ║")
+    print("║                                                      ║")
+    print("║  e.g.  AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA           ║")
     print("╚══════════════════════════════════════════════════════╝")
     print()
 
-    raw_ticker = input("  Ticker / company name  : ").strip()
-    raw_period = input("  Period [1d 5d 1mo 3mo 6mo 1y 2y 5y max] (↵=1d): ").strip()
+    raw_tickers = input("  Tickers (comma-separated): ").strip()
+    raw_period  = input("  Period [1d 5d 1mo 3mo 6mo 1y 2y 5y max] (↵=1mo): ").strip()
 
-    period = raw_period if raw_period in VALID_PERIODS else "1d"
+    period = raw_period if raw_period in VALID_PERIODS else "1mo"
 
-    if not raw_ticker:
-        return "", period
+    tickers: list[str] = []
+    if raw_tickers:
+        print()
+        for token in raw_tickers.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            print(f"  Resolving '{token}' …", end="", flush=True)
+            resolved = resolve_ticker(token)
+            print(f" → {resolved}")
+            if resolved and resolved not in tickers:
+                tickers.append(resolved)
+            if len(tickers) >= 6:
+                break
 
-    print()
-    print(f"  Resolving '{raw_ticker}' …", end="", flush=True)
-    ticker = resolve_ticker(raw_ticker)
-    print(f" → {ticker}")
+        print()
+        for t in tickers:
+            print(f"  Pre-fetching {period} data for {t} …", end="", flush=True)
+            try:
+                get_chart_data(t, period)
+                print(" done (cached).")
+            except Exception as exc:
+                print(f" WARNING: {exc}")
 
-    print(f"  Pre-fetching {period} data for {ticker} …", end="", flush=True)
-    try:
-        get_chart_data(ticker, period)
-        print(" done (cached).")
-    except Exception as exc:
-        print(f" WARNING: {exc}")
-
-    return ticker, period
+    return tickers, period
 
 
 if __name__ == "__main__":
@@ -524,11 +557,13 @@ if __name__ == "__main__":
     threading.Thread(target=lambda: (time.sleep(CLOCK_SYNC_INTERVAL), _clock_sync_loop()),
                      daemon=True).start()
 
-    ticker, period = _prompt_and_prefetch()
+    tickers, period = _prompt_and_prefetch()
 
     url = f"http://localhost:{PORT}/"
-    if ticker:
-        url += f"?ticker={ticker}&period={period}"
+    qs  = [f"period={period}"]
+    if tickers:
+        qs.insert(0, "tickers=" + ",".join(tickers))
+    url += "?" + "&".join(qs)
 
     print()
     print(f"  Starting server on http://localhost:{PORT}")
