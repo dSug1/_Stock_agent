@@ -16,8 +16,8 @@
       /* Let system color keywords (CanvasText, etc.) follow the user's
          OS dark/light preference — used by #ticker-label. */
       color-scheme: light dark;
-      --bg:        #0d1117;
-      --surface:   #161b22;
+      --bg:        transparent;
+      --surface:   transparent;
       --border:    #30363d;
       --txt:       #e6edf3;
       --txt-dim:   #8b949e;
@@ -383,7 +383,7 @@ const chartEl = document.getElementById("chart");
 
 const chart = LightweightCharts.createChart(chartEl, {
   layout: {
-    background:  { color: "#0d1117" },
+    background:  { color: "transparent" },
     textColor:   "#8b949e",
   },
   grid: {
@@ -713,14 +713,8 @@ function applyTheme(name) {
 // Billboard background color — set by the parent page via sv-bg message.
 // "transparent" removes the background so the 3D scene shows through.
 function applyBillboardBg(bg) {
-  const body = document.body;
-  if (bg === 'transparent') {
-    body.style.background = 'transparent';
-    document.getElementById('app').style.background = 'transparent';
-  } else {
-    body.style.background = bg || '#ffffff';
-    document.getElementById('app').style.background = bg || '#ffffff';
-  }
+  // Everything inside the iframe is transparent; the billboard container
+  // in index.html provides the actual background color.
 }
 
 const $pricePanel = document.getElementById("price-panel");

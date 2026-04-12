@@ -13,13 +13,16 @@
        write re-skins the whole page. */
     :root {
       --accent: #58a6ff;
+      --panel-bg: rgba(245, 244, 217, 0.09);
+      --panel-border: #ffffff;
+      --panel-text: #000000;
     }
     html, body {
       margin: 0;
       padding: 0;
       height: 100%;
       overflow: hidden;
-      background: #0d1117;
+      background: #f5f4d9;
       color: #e6edf3;
       font-family: 'Segoe UI', system-ui, sans-serif;
       /* Kill text-selection and mobile tap-highlight flashes when clicking
@@ -35,7 +38,7 @@
     #menu-panel, #menu-panel *, #period-topbar, #period-topbar *,
     #ticker-input-group, #ticker-input-group *,
     #ring-size-controls, #ring-size-controls *,
-    #chat-container, #chat-container *, #chat-toggle {
+    #chat-container, #chat-container * {
       user-select: auto; -webkit-user-select: auto;
     }
 
@@ -78,8 +81,8 @@
       z-index: 20;
       width: 36px;
       height: 36px;
-      background: rgba(22, 27, 34, 0.70);
-      border: 1px solid #30363d;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
       border-radius: 6px;
       cursor: pointer;
       display: flex;
@@ -110,8 +113,8 @@
       height: 100%;
       width: 260px;
       z-index: 15;
-      background: rgba(22, 27, 34, 0.92);
-      border-right: 1px solid #30363d;
+      background: var(--panel-bg);
+      border-right: 1px solid var(--panel-border);
       padding: 66px 20px 20px 20px;
       font-size: 13px;
       backdrop-filter: blur(10px);
@@ -136,7 +139,7 @@
     }
     #menu-panel select {
       background: #0d1117;
-      border: 1px solid #30363d;
+      border: 1px solid var(--panel-border);
       border-radius: 4px;
       color: #e6edf3;
       cursor: pointer;
@@ -151,10 +154,10 @@
       min-width: 34px;
       text-align: right;
       font-variant-numeric: tabular-nums;
-      color: #8b949e;
+      color: var(--panel-text);
     }
     #menu-panel .title {
-      color: #8b949e;
+      color: var(--panel-text);
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
@@ -164,7 +167,7 @@
     #menu-panel .title:first-child { margin-top: 0; }
     #menu-panel .menu-btn {
       background: #21262d;
-      border: 1px solid #30363d;
+      border: 1px solid var(--panel-border);
       border-radius: 4px;
       color: #e6edf3;
       cursor: pointer;
@@ -187,8 +190,8 @@
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      background: rgba(22, 27, 34, 0.85);
-      border: 1px solid #30363d;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
       border-radius: 6px;
       padding: 6px 8px;
       backdrop-filter: blur(6px);
@@ -208,7 +211,7 @@
       gap: 2px;
       align-items: center;
       margin-top: 4px;
-      border-top: 1px solid #30363d;
+      border-top: 1px solid var(--panel-border);
       padding-top: 4px;
     }
     #period-topbar .pbtn {
@@ -217,14 +220,14 @@
       background: transparent;
       border: 1px solid transparent;
       border-radius: 3px;
-      color: #8b949e;
+      color: var(--panel-text);
       cursor: pointer;
       font-size: 10px;
       padding: 3px 0;
       font-family: inherit;
       transition: all .15s;
     }
-    #period-topbar .pbtn:hover { border-color: #30363d; color: #e6edf3; }
+    #period-topbar .pbtn:hover { border-color: var(--panel-border); color: var(--panel-text); }
     #period-topbar .pbtn.active {
       background: var(--accent);
       border-color: var(--accent);
@@ -242,11 +245,11 @@
       gap: 4px;
       padding-right: 8px;
       margin-right: 4px;
-      border-right: 1px solid #30363d;
+      border-right: 1px solid var(--panel-border);
     }
     #ring-size-controls button {
-      background: #0d1117;
-      border: 1px solid #30363d;
+      background: transparent;
+      border: 1px solid var(--panel-border);
       border-radius: 4px;
       color: #e6edf3;
       cursor: pointer;
@@ -281,10 +284,10 @@
       gap: 4px;
     }
     #ticker-input {
-      background: #0d1117;
-      border: 1px solid #30363d;
+      background: transparent;
+      border: 1px solid var(--panel-border);
       border-radius: 4px;
-      color: #e6edf3;
+      color: var(--panel-text);
       padding: 4px 8px;
       width: 140px;
       font-family: inherit;
@@ -292,7 +295,7 @@
       outline: none;
     }
     #ticker-input:focus { border-color: var(--accent); }
-    #ticker-input::placeholder { color: #8b949e; }
+    #ticker-input::placeholder { color: rgba(0, 0, 0, 0.4); }
     #ticker-go {
       background: var(--accent);
       border: none;
@@ -314,27 +317,6 @@
     #ticker-go:hover { opacity: .85; }
 
     /* ── Chat dialog ─────────────────────────────────────────────────────── */
-    #chat-toggle {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 20;
-      width: 44px;
-      height: 44px;
-      border-radius: 50%;
-      border: 1px solid #30363d;
-      background: rgba(22, 27, 34, 0.92);
-      color: #e6edf3;
-      font-size: 20px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-      transition: all .15s;
-    }
-    #chat-toggle:hover { border-color: var(--accent); color: var(--accent); }
     #chat-container {
       position: fixed;
       top: 16px;
@@ -343,8 +325,8 @@
       width: 25vw;
       min-width: 280px;
       z-index: 19;
-      background: rgba(22, 27, 34, 0.95);
-      border: 1px solid #30363d;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
       border-radius: 8px;
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
@@ -358,13 +340,13 @@
       align-items: center;
       justify-content: space-between;
       padding: 10px 14px;
-      border-bottom: 1px solid #30363d;
+      border-bottom: 1px solid var(--panel-border);
       flex-shrink: 0;
     }
     #chat-header span { color: #e6edf3; font-size: 14px; font-weight: 600; }
     #chat-collapse {
       background: transparent;
-      border: 1px solid #30363d;
+      border: 1px solid var(--panel-border);
       border-radius: 4px;
       color: #e6edf3;
       cursor: pointer;
@@ -405,7 +387,7 @@
     /* The iframes themselves: dark backdrop, thin border matching the chart theme. */
     .chart-frame {
       border: 1px solid #30363d;
-      background: #0d1117;
+      background: var(--panel-bg);
       display: block;
     }
 
@@ -500,8 +482,7 @@
     <div id="period-row"></div>
   </div>
 
-  <!-- Chat dialog — bottom-right toggle button + floating container -->
-  <button id="chat-toggle" type="button" aria-label="Open chat">💬</button>
+  <!-- Chat dialog — opened via the giraffe button, collapsed via "–" -->
   <div id="chat-container">
     <div id="chat-header">
       <span>Chat</span>
@@ -740,7 +721,7 @@
     // ══════════════════════════════════════════════════════════════════════════
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d1117);
+    scene.background = new THREE.Color(0xf5f4d9);
 
     const camera = new THREE.PerspectiveCamera(
       55,
@@ -1249,17 +1230,14 @@
     // ══════════════════════════════════════════════════════════════════════════
     //  CHAT DIALOG — toggle button (bottom-right) + floating container
     // ══════════════════════════════════════════════════════════════════════════
-    const $chatToggle    = document.getElementById('chat-toggle');
     const $chatContainer = document.getElementById('chat-container');
     const $chatCollapse  = document.getElementById('chat-collapse');
 
-    $chatToggle.addEventListener('click', () => {
-      $chatContainer.classList.add('open');
-      $chatToggle.style.display = 'none';
+    document.getElementById('ticker-go').addEventListener('click', () => {
+      $chatContainer.classList.toggle('open');
     });
     $chatCollapse.addEventListener('click', () => {
       $chatContainer.classList.remove('open');
-      $chatToggle.style.display = '';
     });
 
     // ══════════════════════════════════════════════════════════════════════════
