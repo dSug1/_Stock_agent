@@ -87,7 +87,7 @@
       position: absolute;
       top: 14px;
       left: 14px;
-      z-index: 20;
+      z-index: 26;
       width: 36px;
       height: 36px;
       background: var(--bg);
@@ -121,7 +121,7 @@
       left: 0;
       height: 100%;
       width: 260px;
-      z-index: 15;
+      z-index: 25;
       background: var(--bg);
       border-right: 1px solid var(--fg);
       padding: 66px 20px 20px 20px;
@@ -359,7 +359,6 @@
       display: none;
       align-items: center;
       gap: 8px;
-      transition: left 0.25s ease-out;
     }
     #overlay-wrapper.visible { display: flex; }
     /* When chat is open: dock right, full height with equal top/bottom margin */
@@ -430,8 +429,8 @@
       border-radius: 4px;
       cursor: pointer;
       padding: 2px;
-      width: 28px;
-      height: 28px;
+      width: var(--giraffe-size, 36px);
+      height: var(--giraffe-size, 36px);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -439,8 +438,8 @@
       flex-shrink: 0;
     }
     #ticker-go img {
-      width: 22px;
-      height: 22px;
+      width: 60%;
+      height: 60%;
       object-fit: contain;
     }
     #ticker-go:hover { opacity: .85; }
@@ -469,12 +468,16 @@
     #chat-collapse:hover { border-color: var(--accent); color: var(--accent); }
 
     /* When chat is open: switch overlay to column layout with chat body */
+    body.chat-open #overlay-wrapper {
+      width: calc(100vw / 3);
+      min-width: 320px;
+    }
     body.chat-open #price-overlay {
       flex-direction: column;
       gap: 4px;
       align-items: stretch;
-      width: 25vw;
-      min-width: 280px;
+      width: 100%;
+      min-width: 0;
       padding-right: 44px; /* room for close button */
       flex: 1;
     }
@@ -1130,20 +1133,17 @@
     const $overlayWrapper = document.getElementById('overlay-wrapper');
     const $priceOverlay = document.getElementById('price-overlay');
 
-    // Keep the bottom overlay clear of the slide-in menu panel.
-    const MENU_W = 260, MENU_GAP = 16;
-    function syncOverlayMenuMargin() {
+    // Measure overlay height once and lock --giraffe-size so the giraffe
+    // button matches the overlay's natural height (chat must not be open).
+    let _giraffeSized = false;
+    function syncGiraffeSize() {
+      if (_giraffeSized) return;
       if (document.body.classList.contains('chat-open')) return;
-      if (!document.body.classList.contains('menu-open')) {
-        $overlayWrapper.style.left = '50%';
-        return;
+      const h = $priceOverlay.offsetHeight;
+      if (h > 0) {
+        document.documentElement.style.setProperty('--giraffe-size', h + 'px');
+        _giraffeSized = true;
       }
-      const ow = $overlayWrapper.offsetWidth;
-      const centeredLeft = (window.innerWidth - ow) / 2;
-      const menuRight = MENU_W + MENU_GAP;
-      $overlayWrapper.style.left = centeredLeft < menuRight
-        ? (menuRight + ow / 2) + 'px'
-        : '50%';
     }
 
     const $poTicker     = $priceOverlay.querySelector('.po-ticker');
@@ -1183,7 +1183,7 @@
       $poChanges.forEach(el => { el.textContent = info.change;     el.style.color = color; });
       $poStatuses.forEach(el => { el.textContent = info.statusText; el.className = 'po-status ' + info.status; });
       $overlayWrapper.classList.add('visible');
-      syncOverlayMenuMargin();
+      syncGiraffeSize();
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1196,7 +1196,6 @@
     const $menuToggle = document.getElementById('menu-toggle');
     $menuToggle.addEventListener('click', () => {
       document.body.classList.toggle('menu-open');
-      syncOverlayMenuMargin();
     });
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1857,7 +1856,6 @@
       camera.updateProjectionMatrix();
       webglRenderer.setSize(w, h);
       recomputeViewportCache();
-      syncOverlayMenuMargin();
       _cameraDirty = true;
     });
   </script>
