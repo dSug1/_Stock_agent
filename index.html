@@ -34,7 +34,8 @@
     #webgl-layer, #billboards-layer, #billboards-layer > * { outline: none; }
     #menu-panel, #menu-panel *, #period-topbar, #period-topbar *,
     #ticker-input-group, #ticker-input-group *,
-    #ring-size-controls, #ring-size-controls * {
+    #ring-size-controls, #ring-size-controls *,
+    #chat-container, #chat-container *, #chat-toggle {
       user-select: auto; -webkit-user-select: auto;
     }
 
@@ -181,27 +182,45 @@
     #period-topbar {
       position: absolute;
       top: 14px;
-      left: 50%;
-      transform: translateX(-50%);
+      left: 58px;
       z-index: 10;
       display: flex;
-      gap: 4px;
-      align-items: center;
+      flex-direction: column;
+      align-items: stretch;
       background: rgba(22, 27, 34, 0.85);
       border: 1px solid #30363d;
       border-radius: 6px;
       padding: 6px 8px;
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
+      transition: left 0.25s ease-out;
+    }
+    body.menu-open #period-topbar {
+      left: 310px;  /* 260px menu width + 50px gap */
+    }
+    #topbar-row1 {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    #period-row {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+      margin-top: 4px;
+      border-top: 1px solid #30363d;
+      padding-top: 4px;
     }
     #period-topbar .pbtn {
+      flex: 1;
+      text-align: center;
       background: transparent;
       border: 1px solid transparent;
-      border-radius: 4px;
+      border-radius: 3px;
       color: #8b949e;
       cursor: pointer;
-      font-size: 12px;
-      padding: 4px 10px;
+      font-size: 10px;
+      padding: 3px 0;
       font-family: inherit;
       transition: all .15s;
     }
@@ -260,9 +279,6 @@
       display: flex;
       align-items: center;
       gap: 4px;
-      padding-right: 8px;
-      margin-right: 4px;
-      border-right: 1px solid #30363d;
     }
     #ticker-input {
       background: #0d1117;
@@ -290,6 +306,78 @@
       transition: opacity .15s;
     }
     #ticker-go:hover { opacity: .85; }
+
+    /* ── Chat dialog ─────────────────────────────────────────────────────── */
+    #chat-toggle {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 20;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid #30363d;
+      background: rgba(22, 27, 34, 0.92);
+      color: #e6edf3;
+      font-size: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      transition: all .15s;
+    }
+    #chat-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    #chat-container {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      bottom: 16px;
+      width: 25vw;
+      min-width: 280px;
+      z-index: 19;
+      background: rgba(22, 27, 34, 0.95);
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #chat-container.open { display: flex; }
+    #chat-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    #chat-header span { color: #e6edf3; font-size: 14px; font-weight: 600; }
+    #chat-collapse {
+      background: transparent;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      cursor: pointer;
+      font-size: 16px;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all .15s;
+    }
+    #chat-collapse:hover { border-color: var(--accent); color: var(--accent); }
+    #chat-body {
+      flex: 1;
+      padding: 14px;
+      overflow-y: auto;
+      color: #8b949e;
+      font-size: 13px;
+    }
 
     /* Blank-slot placeholder shown when there aren't enough tickers.
        Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
@@ -377,22 +465,43 @@
         <option value="orange">Orange</option>
       </select>
     </label>
+    <label class="theme-label">
+      Billboard bg
+      <select id="billboard-bg-select">
+        <option value="white">White</option>
+        <option value="black">Black</option>
+        <option value="transparent">Transparent</option>
+      </select>
+    </label>
   </div>
 
   <!-- Top-of-screen period buttons — control every billboard at once.
        The ticker input group sits on the LEFT, period buttons are
        appended to the right by the module script below. -->
   <div id="period-topbar">
-    <div id="ring-size-controls">
-      <button id="ring-left"  type="button" title="Swap the closest billboard with its left neighbor and recenter">←</button>
-      <button id="ring-minus" type="button" title="Remove the billboard closest to the camera">−</button>
-      <button id="ring-plus"  type="button" title="Add a billboard at the position closest to the camera">+</button>
-      <button id="ring-right" type="button" title="Swap the closest billboard with its right neighbor and recenter">→</button>
+    <div id="topbar-row1">
+      <div id="ring-size-controls">
+        <button id="ring-left"  type="button" title="Swap the closest billboard with its left neighbor and recenter">←</button>
+        <button id="ring-minus" type="button" title="Remove the billboard closest to the camera">−</button>
+        <button id="ring-plus"  type="button" title="Add a billboard at the position closest to the camera">+</button>
+        <button id="ring-right" type="button" title="Swap the closest billboard with its right neighbor and recenter">→</button>
+      </div>
+      <div id="ticker-input-group">
+        <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
+        <button id="ticker-go" type="button">Go</button>
+      </div>
     </div>
-    <div id="ticker-input-group">
-      <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
-      <button id="ticker-go" type="button">Go</button>
+    <div id="period-row"></div>
+  </div>
+
+  <!-- Chat dialog — bottom-right toggle button + floating container -->
+  <button id="chat-toggle" type="button" aria-label="Open chat">💬</button>
+  <div id="chat-container">
+    <div id="chat-header">
+      <span>Chat</span>
+      <button id="chat-collapse" type="button" aria-label="Collapse chat">–</button>
     </div>
+    <div id="chat-body"></div>
   </div>
 
   <script type="module">
@@ -472,6 +581,18 @@
     // Apply the initial theme immediately so the UI renders in the right
     // accent from the first paint.
     applyTheme(currentTheme);
+
+    // Billboard background — must be declared early so makeChartElement can
+    // reference it when building the initial set of iframes.
+    const LS_BG_KEY = 'sv.billboardBg';
+    const DEFAULT_BG = 'white';
+    let currentBillboardBg = (() => {
+      try {
+        const raw = localStorage.getItem(LS_BG_KEY);
+        if (raw && ['white', 'black', 'transparent'].includes(raw)) return raw;
+      } catch (_) {}
+      return DEFAULT_BG;
+    })();
 
     // Push the current theme into every live chart iframe. Iframes that were
     // already open at the time of a theme change can't be re-created without
@@ -598,9 +719,15 @@
     // screen with empty background space around them — required for
     // OrbitControls drag-to-rotate to receive pointerdowns (iframes
     // capture their own).
-    const MIN_ORBIT_DISTANCE = 8;
+    // MIN_ORBIT_DISTANCE is the hard floor: the camera can never orbit
+    // closer to the ring center than this. It must be ≥ circleRadius so
+    // the camera never enters the ring (which causes billboards to flip
+    // behind the camera and triggers violent zoom-out corrections).
+    // A small margin (1 wu) keeps things comfortable.
+    const MIN_ORBIT_MARGIN   = 1;
+    function getMinOrbitDistance() { return circleRadius + MIN_ORBIT_MARGIN; }
     const MAX_ORBIT_DISTANCE = 40;
-    const CAMERA_START_POS   = new THREE.Vector3(0, 5, 16);
+    const CAMERA_START_POS   = new THREE.Vector3(0, 4, 14);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  SCENE / CAMERA / RENDERERS
@@ -751,8 +878,7 @@
       if (centerBillboard) centerBillboard.worldPos.copy(ringCenter);
       if (controls) {
         controls.target.copy(ringCenter);
-        // Scale max orbit distance so the user can still zoom out past
-        // a large ring without hitting the clamp.
+        controls.minDistance = getMinOrbitDistance();
         controls.maxDistance = MAX_ORBIT_DISTANCE + (circleRadius - BASE_RING_RADIUS);
         controls.update();
       }
@@ -767,7 +893,8 @@
       const iframe = document.createElement('iframe');
       iframe.className = 'chart-frame';
       let src = `${CHART_URL}?period=${encodeURIComponent(initialPeriod)}`
-              + `&theme=${encodeURIComponent(currentTheme)}`;
+              + `&theme=${encodeURIComponent(currentTheme)}`
+              + `&bg=${encodeURIComponent(currentBillboardBg)}`;
       if (ticker) src += `&ticker=${encodeURIComponent(ticker)}`;
       iframe.src = src;
       iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
@@ -898,7 +1025,7 @@
     // bubble out, so the chart's time-range zoom is unaffected.
     controls.enableZoom    = false;
     controls.zoomSpeed     = 0.8;
-    controls.minDistance   = MIN_ORBIT_DISTANCE;
+    controls.minDistance   = getMinOrbitDistance();
     controls.maxDistance   = MAX_ORBIT_DISTANCE + (circleRadius - BASE_RING_RADIUS);
     controls.target.copy(ringCenter);
     controls.rotateSpeed   = 1.0;
@@ -955,7 +1082,8 @@
       const r = _zoomDir.length();
       if (r > 1e-6) {
         let newR = r * Math.exp(_zoomVel);
-        if (newR < MIN_ORBIT_DISTANCE) { newR = MIN_ORBIT_DISTANCE; _zoomVel = 0; }
+        const minDist = getMinOrbitDistance();
+        if (newR < minDist) { newR = minDist; _zoomVel = 0; }
         if (newR > controls.maxDistance) { newR = controls.maxDistance; _zoomVel = 0; }
         _zoomDir.setLength(newR);
         camera.position.copy(controls.target).add(_zoomDir);
@@ -1051,6 +1179,30 @@
       broadcastTheme();
     });
 
+    // Billboard background selector — broadcasts sv-bg to all chart iframes.
+    // LS_BG_KEY, DEFAULT_BG, currentBillboardBg declared near the top
+    // (before makeChartElement) so initial iframes get the correct ?bg= param.
+    function broadcastBillboardBg() {
+      if (typeof billboards === 'undefined') return;
+      for (const b of billboards) {
+        if (!b || !b.interactive) continue;
+        const el = b.element;
+        if (!el || el.tagName !== 'IFRAME') continue;
+        try {
+          el.contentWindow.postMessage(
+            { type: 'sv-bg', bg: currentBillboardBg }, '*');
+        } catch (_) {}
+      }
+    }
+
+    const $bgSelect = document.getElementById('billboard-bg-select');
+    $bgSelect.value = currentBillboardBg;
+    $bgSelect.addEventListener('change', () => {
+      currentBillboardBg = $bgSelect.value;
+      lsSet(LS_BG_KEY, currentBillboardBg);
+      broadcastBillboardBg();
+    });
+
     // Restore saved preferences (or defaults) before the first render.
     // persist=false because we're replaying the stored value, not overwriting it.
     applyOrbitSpeed(lsGetNumber(LS_ORBIT_SPEED_KEY, DEFAULT_ORBIT_SPEED, 0.1, 3), false);
@@ -1081,6 +1233,27 @@
       // Flush any residual rotation damping from OrbitControls so the
       // reset is instantaneous.
       controls.update();
+      // Reset billboard background to white
+      currentBillboardBg = DEFAULT_BG;
+      $bgSelect.value = DEFAULT_BG;
+      lsSet(LS_BG_KEY, DEFAULT_BG);
+      broadcastBillboardBg();
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  CHAT DIALOG — toggle button (bottom-right) + floating container
+    // ══════════════════════════════════════════════════════════════════════════
+    const $chatToggle    = document.getElementById('chat-toggle');
+    const $chatContainer = document.getElementById('chat-container');
+    const $chatCollapse  = document.getElementById('chat-collapse');
+
+    $chatToggle.addEventListener('click', () => {
+      $chatContainer.classList.add('open');
+      $chatToggle.style.display = 'none';
+    });
+    $chatCollapse.addEventListener('click', () => {
+      $chatContainer.classList.remove('open');
+      $chatToggle.style.display = '';
     });
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1097,7 +1270,7 @@
     // the session restore decided (URL query or cached value or default).
     let currentPeriod = initialPeriod;
 
-    const $periodTopbar = document.getElementById('period-topbar');
+    const $periodRow = document.getElementById('period-row');
     const periodButtons = {};
     PERIODS.forEach(p => {
       const btn = document.createElement('button');
@@ -1106,7 +1279,7 @@
       btn.textContent = p.toUpperCase();
       btn.dataset.period = p;
       btn.addEventListener('click', () => setGlobalPeriod(p, /*fromBroadcast=*/false));
-      $periodTopbar.appendChild(btn);
+      $periodRow.appendChild(btn);
       periodButtons[p] = btn;
     });
 
@@ -1189,7 +1362,8 @@
       target.element.src =
         `${CHART_URL}?ticker=${encodeURIComponent(ticker)}`
       + `&period=${encodeURIComponent(currentPeriod)}`
-      + `&theme=${encodeURIComponent(currentTheme)}`;
+      + `&theme=${encodeURIComponent(currentTheme)}`
+      + `&bg=${encodeURIComponent(currentBillboardBg)}`;
       $tickerInput.value = ticker;
       $tickerInput.blur();
       // Force the next refresh to re-apply (avoids a stale cache match).
@@ -1280,7 +1454,8 @@
       // No ticker param → template shows an empty chart. The user can fill
       // it via the ticker input beside this button.
       iframe.src         = `${CHART_URL}?period=${encodeURIComponent(currentPeriod)}`
-                         + `&theme=${encodeURIComponent(currentTheme)}`;
+                         + `&theme=${encodeURIComponent(currentTheme)}`
+                         + `&bg=${encodeURIComponent(currentBillboardBg)}`;
       iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
       iframe.style.height = IFRAME_HEIGHT_PX + 'px';
       iframe.setAttribute('allow', 'fullscreen');
@@ -1509,13 +1684,13 @@
     function computeEnforcedMinRadius() {
       _viewDir.subVectors(camera.position, controls.target);
       const viewLen = _viewDir.length();
-      if (viewLen < 1e-6) return MIN_ORBIT_DISTANCE;
+      if (viewLen < 1e-6) return getMinOrbitDistance();
       _viewDir.multiplyScalar(1 / viewLen);
 
       const dMin    = computeMarginDMin();
       const dMinSq  = dMin * dMin;
 
-      let minR = MIN_ORBIT_DISTANCE;
+      let minR = getMinOrbitDistance();
       for (const b of billboards) {
         _offset.subVectors(b.worldPos, controls.target);
         const dot    = _viewDir.dot(_offset);
@@ -1556,6 +1731,7 @@
     //  crosstalk between billboards regardless of camera angle.
     // ══════════════════════════════════════════════════════════════════════════
     const _ndc = new THREE.Vector3();
+    let _lastScaleBroadcast = 0;
     function updateBillboardProjection() {
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -1596,6 +1772,27 @@
         el.style.top       = sy + 'px';
         el.style.transform = `translate(-50%, -50%) scale(${scale})`;
         el.style.zIndex    = String(rank + 1);
+
+      }
+
+      // Send sv-scale to every interactive iframe (throttled to ~5 Hz)
+      // so the price panel can counter-scale to constant apparent text size.
+      const now = performance.now();
+      if (now - _lastScaleBroadcast > 200) {
+        _lastScaleBroadcast = now;
+        const refScale = ordered.length
+          ? scaleNumerator / ordered[ordered.length - 1].d
+          : 1;
+        for (const { b } of ordered) {
+          if (!b.interactive) continue;
+          const el = b.element;
+          if (el.tagName !== 'IFRAME') continue;
+          const s = scaleNumerator / b.worldPos.distanceTo(camera.position);
+          try {
+            el.contentWindow.postMessage(
+              { type: 'sv-scale', scale: s, refScale }, '*');
+          } catch (_) {}
+        }
       }
     }
 
