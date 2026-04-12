@@ -181,7 +181,7 @@
       border-color: var(--accent);
     }
 
-    /* ── Period-button bar — sits directly above the price overlay ─────── */
+    /* ── Period-button bar — top-center by default, bottom when chat open ─ */
     #period-topbar {
       position: fixed;
       z-index: 21;
@@ -194,16 +194,14 @@
       padding: 6px 8px;
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
-      /* Default: centered above the bottom overlay */
-      bottom: 62px;
+      top: 14px;
       left: 50%;
       transform: translateX(-50%);
     }
     /* When chat is open: move to bottom center */
     body.chat-open #period-topbar {
+      top: auto;
       bottom: 16px;
-      left: 50%;
-      transform: translateX(-50%);
     }
     #period-row {
       display: flex;
@@ -294,9 +292,8 @@
       overflow-y: auto;
       color: var(--text);
       font-size: 13px;
-      max-height: 50vh;
     }
-    body.chat-open #chat-body { display: block; }
+    body.chat-open #chat-body { display: block; flex: 1 1 0; min-height: 0; }
 
     /* Blank-slot placeholder shown when there aren't enough tickers.
        Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
@@ -345,7 +342,8 @@
       padding-bottom: 10px;
       border-bottom: 1px solid var(--fg);
     }
-    #menu-ring-row #ticker-input { width: 70px; }
+    #menu-ring-row #ticker-input-group { flex: 1; }
+    #menu-ring-row #ticker-input { width: 0; flex: 1; min-width: 30px; }
     #ticker-go-btn {
       padding: 4px 8px;
       font-size: 11px;
@@ -359,17 +357,19 @@
       transform: translateX(-50%);
       z-index: 20;
       display: none;
-      align-items: flex-start;
+      align-items: center;
       gap: 8px;
+      transition: left 0.25s ease-out;
     }
     #overlay-wrapper.visible { display: flex; }
-    /* When chat is open: dock to top-right */
+    /* When chat is open: dock right, full height with equal top/bottom margin */
     body.chat-open #overlay-wrapper {
-      bottom: auto;
       top: 16px;
+      bottom: 16px;
       right: 16px;
       left: auto;
       transform: none;
+      align-items: stretch;
     }
 
     /* ── Price info overlay ───────────────────────────────────────────── */
@@ -476,6 +476,7 @@
       width: 25vw;
       min-width: 280px;
       padding-right: 44px; /* room for close button */
+      flex: 1;
     }
     body.chat-open .po-row1 .po-price,
     body.chat-open .po-row1 .po-change,
@@ -1128,6 +1129,23 @@
     const _priceInfoMap = new WeakMap();   // contentWindow → info object
     const $overlayWrapper = document.getElementById('overlay-wrapper');
     const $priceOverlay = document.getElementById('price-overlay');
+
+    // Keep the bottom overlay clear of the slide-in menu panel.
+    const MENU_W = 260, MENU_GAP = 16;
+    function syncOverlayMenuMargin() {
+      if (document.body.classList.contains('chat-open')) return;
+      if (!document.body.classList.contains('menu-open')) {
+        $overlayWrapper.style.left = '50%';
+        return;
+      }
+      const ow = $overlayWrapper.offsetWidth;
+      const centeredLeft = (window.innerWidth - ow) / 2;
+      const menuRight = MENU_W + MENU_GAP;
+      $overlayWrapper.style.left = centeredLeft < menuRight
+        ? (menuRight + ow / 2) + 'px'
+        : '50%';
+    }
+
     const $poTicker     = $priceOverlay.querySelector('.po-ticker');
     const $poCompany    = $priceOverlay.querySelector('.po-company');
     const $poPrices     = $priceOverlay.querySelectorAll('.po-price');
@@ -1165,6 +1183,7 @@
       $poChanges.forEach(el => { el.textContent = info.change;     el.style.color = color; });
       $poStatuses.forEach(el => { el.textContent = info.statusText; el.className = 'po-status ' + info.status; });
       $overlayWrapper.classList.add('visible');
+      syncOverlayMenuMargin();
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1177,6 +1196,7 @@
     const $menuToggle = document.getElementById('menu-toggle');
     $menuToggle.addEventListener('click', () => {
       document.body.classList.toggle('menu-open');
+      syncOverlayMenuMargin();
     });
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1837,6 +1857,7 @@
       camera.updateProjectionMatrix();
       webglRenderer.setSize(w, h);
       recomputeViewportCache();
+      syncOverlayMenuMargin();
       _cameraDirty = true;
     });
   </script>
