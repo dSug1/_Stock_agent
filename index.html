@@ -6,24 +6,25 @@
   <title>Stock Visualizer — 3D Scene</title>
 
   <style>
-    /* ── Theme tokens ────────────────────────────────────────────────────
-       --accent is re-written by JS when the user picks a theme in the
-       menu panel. Everything in the UI that used to be hard-coded
-       #58a6ff now reads var(--accent) instead, so a single property
-       write re-skins the whole page. */
+    /* ── Theme tokens ──────────────────────────────────────────────────── */
     :root {
       --accent: #58a6ff;
-      --panel-bg: rgba(255, 255, 255, 0.921);
-      --panel-border: #ffffff;
-      --panel-text: #000000;
+      --bg: #000000;
+      --fg: #3a3a50;
+      --text: #c0c8d8;
+      --btn-bg: #454558;
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg: #ffffff; --fg: #e0e0e0; --text: #404050; --btn-bg: #f0f0f0; }
+      #period-topbar .pbtn.active { color: #606878; }
     }
     html, body {
       margin: 0;
       padding: 0;
       height: 100%;
       overflow: hidden;
-      background: #f5f4d9;
-      color: #e6edf3;
+      background: var(--bg);
+      color: var(--text);
       font-family: 'Segoe UI', system-ui, sans-serif;
       /* Kill text-selection and mobile tap-highlight flashes when clicking
          on the billboards background layer. The HUD slider still works
@@ -81,8 +82,8 @@
       z-index: 20;
       width: 36px;
       height: 36px;
-      background: var(--panel-bg);
-      border: 1px solid var(--panel-border);
+      background: var(--bg);
+      border: 1px solid var(--fg);
       border-radius: 6px;
       cursor: pointer;
       display: flex;
@@ -95,7 +96,7 @@
     #menu-toggle svg {
       width: 20px;
       height: 20px;
-      stroke: #ffffff;
+      stroke: var(--text);
       stroke-width: 2;
       stroke-linecap: round;
       fill: none;
@@ -113,8 +114,8 @@
       height: 100%;
       width: 260px;
       z-index: 15;
-      background: var(--panel-bg);
-      border-right: 1px solid var(--panel-border);
+      background: var(--bg);
+      border-right: 1px solid var(--fg);
       padding: 66px 20px 20px 20px;
       font-size: 13px;
       backdrop-filter: blur(10px);
@@ -126,22 +127,23 @@
     body.menu-open #menu-panel { transform: translateX(0); }
 
     #menu-panel label {
-      display: flex;
+      display: grid;
+      grid-template-columns: 80px 1fr 40px;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       white-space: nowrap;
       margin-bottom: 8px;
     }
     #menu-panel label:last-of-type { margin-bottom: 0; }
     #menu-panel input[type=range] {
-      width: 140px;
-      accent-color: var(--accent);
+      width: 100%;
+      accent-color: var(--fg);
     }
     #menu-panel select {
-      background: #0d1117;
-      border: 1px solid var(--panel-border);
+      background: var(--btn-bg);
+      border: 1px solid var(--fg);
       border-radius: 4px;
-      color: #e6edf3;
+      color: var(--text);
       cursor: pointer;
       font-family: inherit;
       font-size: 13px;
@@ -150,34 +152,36 @@
     }
     #menu-panel select:focus { border-color: var(--accent); }
     #menu-panel .val {
-      display: inline-block;
-      min-width: 34px;
       text-align: right;
       font-variant-numeric: tabular-nums;
-      color: var(--panel-text);
+      color: var(--text);
     }
     #menu-panel .title {
-      color: var(--panel-text);
+      color: var(--text);
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       margin-bottom: 6px;
       margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
     #menu-panel .title:first-child { margin-top: 0; }
     #menu-panel .menu-btn {
-      background: #21262d;
-      border: 1px solid var(--panel-border);
+      background: var(--btn-bg);
+      border: 1px solid var(--fg);
       border-radius: 4px;
-      color: #e6edf3;
+      color: var(--text);
       cursor: pointer;
       font-family: inherit;
-      font-size: 13px;
-      padding: 7px 14px;
+      font-size: 11px;
+      padding: 2px 8px;
+      margin: 0;
       transition: all .15s;
     }
     #menu-panel .menu-btn:hover {
-      background: #30363d;
+      background: transparent;
       border-color: var(--accent);
     }
 
@@ -190,8 +194,8 @@
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      background: var(--panel-bg);
-      border: 1px solid var(--panel-border);
+      background: var(--bg);
+      border: 1px solid var(--fg);
       border-radius: 6px;
       padding: 6px 8px;
       backdrop-filter: blur(6px);
@@ -211,7 +215,7 @@
       gap: 2px;
       align-items: center;
       margin-top: 4px;
-      border-top: 1px solid var(--panel-border);
+      border-top: 1px solid var(--fg);
       padding-top: 4px;
     }
     #period-topbar .pbtn {
@@ -220,18 +224,18 @@
       background: transparent;
       border: 1px solid transparent;
       border-radius: 3px;
-      color: var(--panel-text);
+      color: var(--text);
       cursor: pointer;
       font-size: 10px;
       padding: 3px 0;
       font-family: inherit;
       transition: all .15s;
     }
-    #period-topbar .pbtn:hover { border-color: var(--panel-border); color: var(--panel-text); }
+    #period-topbar .pbtn:hover { border-color: var(--fg); color: var(--text); }
     #period-topbar .pbtn.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #ffffff;
+      background: var(--fg);
+      border-color: var(--fg);
+      color: #fff;
       font-weight: 600;
     }
 
@@ -245,13 +249,13 @@
       gap: 4px;
       padding-right: 8px;
       margin-right: 4px;
-      border-right: 1px solid var(--panel-border);
+      border-right: 1px solid var(--fg);
     }
     #ring-size-controls button {
-      background: transparent;
-      border: 1px solid var(--panel-border);
+      background: var(--btn-bg);
+      border: 1px solid var(--fg);
       border-radius: 4px;
-      color: #e6edf3;
+      color: var(--text);
       cursor: pointer;
       font-family: inherit;
       font-size: 14px;
@@ -285,9 +289,9 @@
     }
     #ticker-input {
       background: transparent;
-      border: 1px solid var(--panel-border);
+      border: 1px solid var(--fg);
       border-radius: 4px;
-      color: var(--panel-text);
+      color: var(--text);
       padding: 4px 8px;
       width: 140px;
       font-family: inherit;
@@ -295,9 +299,9 @@
       outline: none;
     }
     #ticker-input:focus { border-color: var(--accent); }
-    #ticker-input::placeholder { color: rgba(0, 0, 0, 0.4); }
+    #ticker-input::placeholder { color: var(--text); opacity: 0.4; }
     #ticker-go {
-      background: var(--accent);
+      background: var(--fg);
       border: none;
       border-radius: 4px;
       cursor: pointer;
@@ -325,8 +329,8 @@
       width: 25vw;
       min-width: 280px;
       z-index: 19;
-      background: var(--panel-bg);
-      border: 1px solid var(--panel-border);
+      background: var(--bg);
+      border: 1px solid var(--fg);
       border-radius: 8px;
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
@@ -340,15 +344,15 @@
       align-items: center;
       justify-content: space-between;
       padding: 10px 14px;
-      border-bottom: 1px solid var(--panel-border);
+      border-bottom: 1px solid var(--fg);
       flex-shrink: 0;
     }
-    #chat-header span { color: #e6edf3; font-size: 14px; font-weight: 600; }
+    #chat-header span { color: var(--text); font-size: 14px; font-weight: 600; }
     #chat-collapse {
       background: transparent;
-      border: 1px solid var(--panel-border);
+      border: 1px solid var(--fg);
       border-radius: 4px;
-      color: #e6edf3;
+      color: var(--text);
       cursor: pointer;
       font-size: 16px;
       width: 28px;
@@ -363,7 +367,7 @@
       flex: 1;
       padding: 14px;
       overflow-y: auto;
-      color: #8b949e;
+      color: var(--text);
       font-size: 13px;
     }
 
@@ -372,12 +376,12 @@
        Non-interactive on purpose — scroll/click over it should reach
        OrbitControls on the billboards layer behind, just like empty bg. */
     .blank-slot {
-      background: #000;
-      border: 1px solid #30363d;
+      background: var(--bg);
+      border: 1px solid var(--fg);
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #30363d;
+      color: var(--text);
       font-family: 'Courier New', monospace;
       font-size: 24px;
       letter-spacing: 0.15em;
@@ -386,8 +390,8 @@
 
     /* The iframes themselves: dark backdrop, thin border matching the chart theme. */
     .chart-frame {
-      border: 1px solid #30363d;
-      background: var(--panel-bg);
+      border: 1px solid var(--fg);
+      background: var(--bg);
       display: block;
     }
 
@@ -395,9 +399,9 @@
        Same pixel dimensions as the billboards so the ring geometry stays
        balanced. Pointer-events stay on so wheel-to-zoom still works here. */
     .center-placeholder {
-      border: 1px dashed #30363d;
-      background: rgba(13, 17, 23, 0.55);
-      color: #6e7681;
+      border: 1px dashed var(--fg);
+      background: transparent;
+      color: var(--text);
       font-family: 'Courier New', monospace;
       font-size: 22px;
       letter-spacing: 0.18em;
@@ -430,7 +434,7 @@
   <!-- Slide-in menu panel on the left. Contains the orbit-speed and
        scroll-gain sliders plus the reset-view button. -->
   <div id="menu-panel">
-    <div class="title">Camera</div>
+    <div class="title">Camera <button id="reset-view" class="menu-btn" type="button">Reset view</button></div>
     <label>
       Orbit speed
       <input id="orbit-speed" type="range" min="0.1" max="3" step="0.05" value="1">
@@ -442,25 +446,6 @@
       <span id="scroll-gain-val" class="val">0.80</span>
     </label>
 
-    <div class="title">View</div>
-    <button id="reset-view" class="menu-btn" type="button">Reset view</button>
-
-    <div class="title">Theme</div>
-    <label class="theme-label">
-      Accent
-      <select id="theme-select">
-        <option value="blue">Blue</option>
-        <option value="orange">Orange</option>
-      </select>
-    </label>
-    <label class="theme-label">
-      Billboard bg
-      <select id="billboard-bg-select">
-        <option value="white">White</option>
-        <option value="black">Black</option>
-        <option value="transparent">Transparent</option>
-      </select>
-    </label>
   </div>
 
   <!-- Top-of-screen period buttons — control every billboard at once.
@@ -532,71 +517,10 @@
     const BILLBOARD_SCALE   = 0.004;
     const CHART_URL         = "_outputs/templates/1_chart_template.html";
 
-    // ══════════════════════════════════════════════════════════════════════════
-    //  THEME
-    //
-    //  Two themes are supported. Switching rewrites --accent on the document
-    //  root (which re-skins every CSS rule referencing var(--accent)) AND
-    //  broadcasts the new theme to every chart iframe via postMessage so
-    //  they can re-skin their own UI in lock-step. Initial iframe src also
-    //  carries ?theme=<name> so freshly-loaded iframes come up in the right
-    //  theme without a flash of wrong color.
-    //
-    //  Persistence: menu selection is written to localStorage under
-    //  LS_THEME_KEY and restored on next page load.
-    // ══════════════════════════════════════════════════════════════════════════
-    const THEMES = {
-      blue:   { accent: '#58a6ff' },
-      orange: { accent: '#f38d20' },
-    };
-    const LS_THEME_KEY   = 'sv.theme';
-    const DEFAULT_THEME  = 'blue';
-    function resolveInitialTheme() {
-      try {
-        const raw = localStorage.getItem(LS_THEME_KEY);
-        if (raw && THEMES[raw]) return raw;
-      } catch (_) { /* storage disabled — fall through */ }
-      return DEFAULT_THEME;
-    }
-    let currentTheme = resolveInitialTheme();
-
-    function applyTheme(name) {
-      if (!THEMES[name]) name = DEFAULT_THEME;
-      currentTheme = name;
-      document.documentElement.style.setProperty('--accent', THEMES[name].accent);
-    }
-    // Apply the initial theme immediately so the UI renders in the right
-    // accent from the first paint.
-    applyTheme(currentTheme);
 
     // Billboard background — must be declared early so makeChartElement can
     // reference it when building the initial set of iframes.
-    const LS_BG_KEY = 'sv.billboardBg';
-    const DEFAULT_BG = 'white';
-    let currentBillboardBg = (() => {
-      try {
-        const raw = localStorage.getItem(LS_BG_KEY);
-        if (raw && ['white', 'black', 'transparent'].includes(raw)) return raw;
-      } catch (_) {}
-      return DEFAULT_BG;
-    })();
 
-    // Push the current theme into every live chart iframe. Iframes that were
-    // already open at the time of a theme change can't be re-created without
-    // losing scroll/zoom state, so they listen for a 'sv-theme' postMessage
-    // and swap their --accent CSS variable at runtime.
-    function broadcastTheme() {
-      if (typeof billboards === 'undefined') return;
-      for (const b of billboards) {
-        if (!b || !b.interactive) continue;
-        const el = b.element;
-        if (!el || el.tagName !== 'IFRAME') continue;
-        try {
-          el.contentWindow.postMessage(
-            { type: 'sv-theme', theme: currentTheme }, '*');
-        } catch (_) { /* cross-origin safety */ }
-      }
-    }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  USER PREFERENCES — localStorage helpers
@@ -721,7 +645,11 @@
     // ══════════════════════════════════════════════════════════════════════════
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf5f4d9);
+    const _isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+    scene.background = new THREE.Color(_isLight ? 0xffffff : 0x000000);
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
+      scene.background = new THREE.Color(e.matches ? 0xffffff : 0x000000);
+    });
 
     const camera = new THREE.PerspectiveCamera(
       55,
@@ -761,48 +689,6 @@
     dirLight.target.position.set(0, 0, 0);
     scene.add(dirLight);
     scene.add(dirLight.target);
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  BACKGROUND IMAGE (PNG from Utilities/Renderer/, parented to the camera)
-    //
-    //  Parenting to the camera means it always orbits with the camera and the
-    //  camera always faces it — it behaves like a skybox card. We use
-    //  MeshBasicMaterial so lighting doesn't affect it, and push it far out
-    //  (large plane at local z = -120) so nothing in the scene ever clips it.
-    //  depthWrite:false + renderOrder:-999 keep it behind everything else.
-    //
-    //  The image is served by Flask via /utilities/renderer/<filename> (see
-    //  2_stock_visualizer.py → utilities_renderer route). Filename contains
-    //  spaces so we encodeURI it explicitly.
-    // ══════════════════════════════════════════════════════════════════════════
-    const BG_IMAGE_URL = '/utilities/renderer/' + encodeURIComponent('Screenshot 2025-07-12 083355.png');
-
-    const bgMaterial = new THREE.MeshBasicMaterial({
-      color:      0xffffff,
-      depthWrite: false,
-      depthTest:  false,
-      toneMapped: false,
-    });
-
-    new THREE.TextureLoader().load(
-      BG_IMAGE_URL,
-      (tex) => {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        bgMaterial.map = tex;
-        bgMaterial.needsUpdate = true;
-      },
-      undefined,
-      (err) => console.warn('Background image failed to load:', err)
-    );
-
-    const bgPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(400, 240),
-      bgMaterial
-    );
-    bgPlane.position.set(0, 0, -120);   // local to the camera → in front of it
-    bgPlane.renderOrder = -999;
-    camera.add(bgPlane);
-    scene.add(camera);                  // required for the camera child to render
 
     // ══════════════════════════════════════════════════════════════════════════
     //  BILLBOARDS (manually projected from 3D world → 2D screen every frame)
@@ -880,8 +766,7 @@
       const iframe = document.createElement('iframe');
       iframe.className = 'chart-frame';
       let src = `${CHART_URL}?period=${encodeURIComponent(initialPeriod)}`
-              + `&theme=${encodeURIComponent(currentTheme)}`
-              + `&bg=${encodeURIComponent(currentBillboardBg)}`;
+        ;
       if (ticker) src += `&ticker=${encodeURIComponent(ticker)}`;
       iframe.src = src;
       iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
@@ -1155,40 +1040,6 @@
       applyScrollGain(parseFloat($scroll.value), /*persist=*/true);
     });
 
-    // Theme selector — the THEMES object / applyTheme / currentTheme /
-    // broadcastTheme were already set up near the top of the script; here we
-    // just wire the <select> element to them and persist the choice.
-    const $themeSelect = document.getElementById('theme-select');
-    $themeSelect.value = currentTheme;
-    $themeSelect.addEventListener('change', () => {
-      applyTheme($themeSelect.value);
-      lsSet(LS_THEME_KEY, currentTheme);
-      broadcastTheme();
-    });
-
-    // Billboard background selector — broadcasts sv-bg to all chart iframes.
-    // LS_BG_KEY, DEFAULT_BG, currentBillboardBg declared near the top
-    // (before makeChartElement) so initial iframes get the correct ?bg= param.
-    function broadcastBillboardBg() {
-      if (typeof billboards === 'undefined') return;
-      for (const b of billboards) {
-        if (!b || !b.interactive) continue;
-        const el = b.element;
-        if (!el || el.tagName !== 'IFRAME') continue;
-        try {
-          el.contentWindow.postMessage(
-            { type: 'sv-bg', bg: currentBillboardBg }, '*');
-        } catch (_) {}
-      }
-    }
-
-    const $bgSelect = document.getElementById('billboard-bg-select');
-    $bgSelect.value = currentBillboardBg;
-    $bgSelect.addEventListener('change', () => {
-      currentBillboardBg = $bgSelect.value;
-      lsSet(LS_BG_KEY, currentBillboardBg);
-      broadcastBillboardBg();
-    });
 
     // Restore saved preferences (or defaults) before the first render.
     // persist=false because we're replaying the stored value, not overwriting it.
@@ -1220,11 +1071,6 @@
       // Flush any residual rotation damping from OrbitControls so the
       // reset is instantaneous.
       controls.update();
-      // Reset billboard background to white
-      currentBillboardBg = DEFAULT_BG;
-      $bgSelect.value = DEFAULT_BG;
-      lsSet(LS_BG_KEY, DEFAULT_BG);
-      broadcastBillboardBg();
     });
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1345,9 +1191,7 @@
       // the current global period.
       target.element.src =
         `${CHART_URL}?ticker=${encodeURIComponent(ticker)}`
-      + `&period=${encodeURIComponent(currentPeriod)}`
-      + `&theme=${encodeURIComponent(currentTheme)}`
-      + `&bg=${encodeURIComponent(currentBillboardBg)}`;
+      + `&period=${encodeURIComponent(currentPeriod)}`;
       $tickerInput.value = ticker;
       $tickerInput.blur();
       // Force the next refresh to re-apply (avoids a stale cache match).
@@ -1437,9 +1281,7 @@
       iframe.className   = 'chart-frame';
       // No ticker param → template shows an empty chart. The user can fill
       // it via the ticker input beside this button.
-      iframe.src         = `${CHART_URL}?period=${encodeURIComponent(currentPeriod)}`
-                         + `&theme=${encodeURIComponent(currentTheme)}`
-                         + `&bg=${encodeURIComponent(currentBillboardBg)}`;
+      iframe.src         = `${CHART_URL}?period=${encodeURIComponent(currentPeriod)}`;
       iframe.style.width  = IFRAME_WIDTH_PX  + 'px';
       iframe.style.height = IFRAME_HEIGHT_PX + 'px';
       iframe.setAttribute('allow', 'fullscreen');

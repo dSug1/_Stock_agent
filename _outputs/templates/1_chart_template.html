@@ -13,19 +13,27 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      /* Let system color keywords (CanvasText, etc.) follow the user's
-         OS dark/light preference — used by #ticker-label. */
       color-scheme: light dark;
-      --bg:        transparent;
-      --surface:   transparent;
-      --border:    #30363d;
-      --txt:       #e6edf3;
+      --bg:        #000000;
+      --fg:        #ffffff;
+      --surface:   #000000;
+      --border:    #ffffff;
+      --txt:       #ffffff;
       --txt-dim:   #8b949e;
       --accent:    #58a6ff;
       --green:     #3fb950;
       --red:       #f85149;
       --yellow:    #d29922;
       --radius:    6px;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:      #ffffff;
+        --fg:      #000000;
+        --surface: #ffffff;
+        --border:  #000000;
+        --txt:     #000000;
+      }
     }
 
     html, body {
@@ -197,7 +205,7 @@
       position: absolute;
       top: 10px;
       left: 10px;
-      background: #161b22cc;
+      background: transparent;
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 6px 10px;
@@ -383,22 +391,22 @@ const chartEl = document.getElementById("chart");
 
 const chart = LightweightCharts.createChart(chartEl, {
   layout: {
-    background:  { color: "transparent" },
-    textColor:   "#8b949e",
+    background:  { color: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() },
+    textColor:   getComputedStyle(document.documentElement).getPropertyValue('--fg').trim() || '#ffffff',
   },
   grid: {
-    vertLines: { color: "#1c2128" },
-    horzLines: { color: "#1c2128" },
+    vertLines: { visible: false },
+    horzLines: { visible: false },
   },
   crosshair: {
     mode: LightweightCharts.CrosshairMode.Normal,
   },
   rightPriceScale: {
-    borderColor: "#30363d",
+    borderColor: getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#ffffff',
     scaleMargins: { top: 0.05, bottom: 0.25 },
   },
   timeScale: {
-    borderColor: "#30363d",
+    borderColor: getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#ffffff',
     timeVisible: true,
     secondsVisible: false,
   },
@@ -690,32 +698,10 @@ function showError(msg) {
   _errorTimer = setTimeout(() => $errorToast.classList.remove("show"), 5000);
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  Theme: accent color is controlled by the parent page. Read the initial
-//  value from the URL so the first paint comes up in the right color, then
-//  listen for {type:'sv-theme'} postMessages for live updates when the user
-//  changes the theme selector without reloading the iframe.
-// ══════════════════════════════════════════════════════════════════════════════
-const THEME_ACCENTS = { blue: '#58a6ff', orange: '#f38d20' };
-function applyTheme(name) {
-  const accent = THEME_ACCENTS[name] || THEME_ACCENTS.blue;
-  document.documentElement.style.setProperty('--accent', accent);
-  // The volume series color is baked in at chart creation time — if the
-  // chart already exists, restyle it to match the new accent.
-  if (typeof volumeSeries !== 'undefined' && volumeSeries) {
-    try { volumeSeries.applyOptions({ color: accent + '44' }); } catch (_) {}
-  }
-}
 // Counter-scale the price panel so its text stays at a constant on-screen
 // pixel size regardless of how far the billboard is from the camera. The
 // parent page sends {type:'sv-scale', scale} every time the billboard's
 // CSS scale changes. We invert it on #price-panel and #status-badge.
-// Billboard background color — set by the parent page via sv-bg message.
-// "transparent" removes the background so the 3D scene shows through.
-function applyBillboardBg(bg) {
-  // Everything inside the iframe is transparent; the billboard container
-  // in index.html provides the actual background color.
-}
 
 const $pricePanel = document.getElementById("price-panel");
 function applyCounterScale(scale, refScale) {
@@ -728,9 +714,8 @@ function applyCounterScale(scale, refScale) {
 
 window.addEventListener('message', (ev) => {
   const d = ev && ev.data;
-  if (d && d.type === 'sv-theme') applyTheme(d.theme);
   if (d && d.type === 'sv-scale') applyCounterScale(d.scale, d.refScale);
-  if (d && d.type === 'sv-bg') applyBillboardBg(d.bg);
+
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -740,11 +725,6 @@ window.addEventListener('message', (ev) => {
   const params = new URLSearchParams(window.location.search);
   const t     = params.get("ticker") || "";
   const p     = params.get("period") || "1d";
-  const theme = params.get("theme")  || "blue";
-  applyTheme(theme);
-  const bg = params.get("bg");
-  if (bg) applyBillboardBg(bg);
-
   state.period = PERIODS.includes(p) ? p : "1d";
   updatePeriodButtons();
 
