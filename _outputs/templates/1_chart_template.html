@@ -624,6 +624,26 @@ function renderChart(data) {
     $statusBadge.className   = "closed";
   }
 
+  // Broadcast price info to parent so the fixed overlay can display it.
+  if (window.parent !== window && records.length >= 2) {
+    const last  = records[records.length - 1];
+    const first = records[0];
+    const chg   = last.c - first.o;
+    const chgPct= ((chg / first.o) * 100).toFixed(2);
+    try {
+      window.parent.postMessage({
+        type: 'sv-price-info',
+        ticker: meta.ticker || '',
+        company: meta.short_name || '',
+        price: last.c.toFixed(2),
+        change: `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${chgPct}%)`,
+        positive: chg >= 0,
+        status: market_open ? 'open' : 'closed',
+        statusText: $statusBadge.textContent,
+      }, '*');
+    } catch (_) {}
+  }
+
   const updatedDate = new Date(fetched_at + "Z"); // treat as UTC
   $updatedLabel.textContent  = updatedDate.toLocaleTimeString();
   $intervalLabel.textContent = interval;

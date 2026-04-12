@@ -405,6 +405,54 @@
       align-items: center;
       justify-content: center;
     }
+    /* ── Price info overlay (fixed, always readable) ───────────────────── */
+    #price-overlay {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 18;
+      background: var(--bg);
+      border: 1px solid var(--fg);
+      border-radius: 6px;
+      padding: 8px 16px;
+      display: none;
+      align-items: center;
+      gap: 12px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      white-space: nowrap;
+    }
+    #price-overlay.visible { display: flex; }
+    #price-overlay .po-ticker {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    #price-overlay .po-company {
+      font-size: 13px;
+      color: var(--text);
+      opacity: 0.6;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #price-overlay .po-price {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    #price-overlay .po-change {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    #price-overlay .po-status {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid;
+    }
+    #price-overlay .po-status.open   { color: #3fb950; border-color: #3fb950; }
+    #price-overlay .po-status.closed { color: var(--text); opacity: 0.5; border-color: var(--fg); }
   </style>
 
   <!-- Three.js ES modules pinned to 0.160.0.
@@ -465,6 +513,14 @@
   </div>
 
   <!-- Chat dialog — opened via the giraffe button, collapsed via "–" -->
+  <div id="price-overlay">
+    <span class="po-ticker"></span>
+    <span class="po-company"></span>
+    <span class="po-price"></span>
+    <span class="po-change"></span>
+    <span class="po-status closed"></span>
+  </div>
+
   <div id="chat-container">
     <div id="chat-header">
       <span>Chat</span>
@@ -1030,6 +1086,57 @@
         setGlobalPeriod(d.period, /*fromBroadcast=*/true);
       }
     });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  PRICE INFO OVERLAY — shows ticker/price for the closest billboard
+    //
+    //  Each chart iframe posts {type:'sv-price-info'} after rendering.
+    //  We store the info keyed by iframe contentWindow, then on each
+    //  animation frame we display the closest billboard's data.
+    // ══════════════════════════════════════════════════════════════════════════
+    const _priceInfoMap = new WeakMap();   // contentWindow → info object
+    const $priceOverlay = document.getElementById('price-overlay');
+    const $poTicker  = $priceOverlay.querySelector('.po-ticker');
+    const $poCompany = $priceOverlay.querySelector('.po-company');
+    const $poPrice   = $priceOverlay.querySelector('.po-price');
+    const $poChange  = $priceOverlay.querySelector('.po-change');
+    const $poStatus  = $priceOverlay.querySelector('.po-status');
+
+    window.addEventListener('message', (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== 'sv-price-info') return;
+      if (ev.source) {
+        _priceInfoMap.set(ev.source, d);
+        // If this message came from the closest billboard, refresh immediately.
+        const b = _closestInteractive;
+        if (b && b.element && b.element.contentWindow === ev.source) {
+          updatePriceOverlay();
+        }
+      }
+    });
+
+    function updatePriceOverlay() {
+      const b = _closestInteractive;
+      if (!b || !b.element || b.element.tagName !== 'IFRAME') {
+        $priceOverlay.classList.remove('visible');
+        return;
+      }
+      let info;
+      try { info = _priceInfoMap.get(b.element.contentWindow); } catch (_) {}
+      if (!info || !info.ticker) {
+        $priceOverlay.classList.remove('visible');
+        return;
+      }
+      $poTicker.textContent  = info.ticker;
+      $poCompany.textContent = info.company;
+      $poPrice.textContent   = info.price;
+      $poPrice.style.color   = info.positive ? '#3fb950' : '#f85149';
+      $poChange.textContent  = info.change;
+      $poChange.style.color  = info.positive ? '#3fb950' : '#f85149';
+      $poStatus.textContent  = info.statusText;
+      $poStatus.className    = 'po-status ' + info.status;
+      $priceOverlay.classList.add('visible');
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     //  HAMBURGER MENU toggle (top-left)
@@ -1686,6 +1793,7 @@
       webglRenderer.render(scene, camera);
       updateBillboardProjection();
       refreshTickerInput();              // mirror closest billboard's ticker
+      updatePriceOverlay();              // show price info for closest billboard
     }
     animate();
 
