@@ -16,11 +16,8 @@
       color-scheme: light dark;
       --bg:        #000000;
       --fg:        #ffffff;
-      --surface:   #000000;
-      --border:    #ffffff;
       --txt:       #ffffff;
       --txt-dim:   #8b949e;
-      --accent:    #58a6ff;
       --green:     #3fb950;
       --red:       #f85149;
       --yellow:    #d29922;
@@ -30,8 +27,6 @@
       :root {
         --bg:      #ffffff;
         --fg:      #000000;
-        --surface: #ffffff;
-        --border:  #000000;
         --txt:     #000000;
       }
     }
@@ -58,36 +53,12 @@
       align-items: center;
       gap: 10px;
       padding: 8px 14px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+      border-bottom: 1px solid var(--fg);
       flex-shrink: 0;
       flex-wrap: wrap;
     }
 
-    /* ── Period buttons ───────────────────────────────────────────────────── */
-    #period-bar {
-      display: flex;
-      gap: 4px;
-      align-items: center;
-      flex: 0 0 auto;
-    }
-    .pbtn {
-      background: transparent;
-      border: 1px solid transparent;
-      border-radius: 4px;
-      color: var(--txt-dim);
-      cursor: pointer;
-      font-size: 12px;
-      padding: 4px 9px;
-      transition: all .15s;
-    }
-    .pbtn:hover { border-color: var(--border); color: var(--txt); }
-    .pbtn.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-      font-weight: 600;
-    }
 
     /* ── Price panel ──────────────────────────────────────────────────────── */
     #price-panel {
@@ -100,10 +71,7 @@
          panel always appears at a constant on-screen pixel size. */
       transform-origin: top right;
     }
-    /* Ticker label intentionally uses the OS default text color (white in
-       dark mode, black in light mode) — this is the single exception to the
-       accent-theme rule driven by the parent page's theme selector.
-       Sizes are doubled so they stay readable on faraway billboards.
+    /* Sizes are doubled so they stay readable on faraway billboards.
        The parent page posts {type:'sv-scale'} with the billboard's current
        CSS scale; we counter-scale #price-panel so these labels always
        appear at a constant on-screen pixel size regardless of distance. */
@@ -122,7 +90,7 @@
       letter-spacing: .5px;
     }
     #status-badge.open   { color: var(--green); border-color: var(--green); background: #3fb95015; }
-    #status-badge.closed { color: var(--txt-dim); border-color: var(--border); background: transparent; }
+    #status-badge.closed { color: var(--txt-dim); border-color: var(--fg); background: transparent; }
 
     /* ── Chart area ───────────────────────────────────────────────────────── */
     #chart-wrap {
@@ -137,8 +105,8 @@
 
     /* ── Footer ───────────────────────────────────────────────────────────── */
     #footer {
-      background: var(--surface);
-      border-top: 1px solid var(--border);
+      background: var(--bg);
+      border-top: 1px solid var(--fg);
       padding: 4px 14px;
       display: flex;
       align-items: center;
@@ -176,8 +144,8 @@
     #loading.hidden { display: none; }
     .spinner {
       width: 20px; height: 20px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
+      border: 2px solid var(--fg);
+      border-top-color: #58a6ff;
       border-radius: 50%;
       animation: spin .7s linear infinite;
     }
@@ -206,7 +174,7 @@
       top: 10px;
       left: 10px;
       background: transparent;
-      border: 1px solid var(--border);
+      border: 1px solid var(--fg);
       border-radius: var(--radius);
       padding: 6px 10px;
       font-size: 11px;
@@ -388,11 +356,15 @@ function updatePeriodButtons() { /* no-op: buttons moved to parent scene */ }
 //  Lightweight Charts setup
 // ══════════════════════════════════════════════════════════════════════════════
 const chartEl = document.getElementById("chart");
+const _light = window.matchMedia('(prefers-color-scheme: light)').matches;
+const _bg = _light ? '#ffffff' : '#000000';
+const _fg = _light ? '#000000' : '#ffffff';
+const _txtDim = '#8b949e';
 
 const chart = LightweightCharts.createChart(chartEl, {
   layout: {
-    background:  { color: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() },
-    textColor:   getComputedStyle(document.documentElement).getPropertyValue('--fg').trim() || '#ffffff',
+    background:  { color: _bg },
+    textColor:   _txtDim,
   },
   grid: {
     vertLines: { visible: false },
@@ -402,11 +374,11 @@ const chart = LightweightCharts.createChart(chartEl, {
     mode: LightweightCharts.CrosshairMode.Normal,
   },
   rightPriceScale: {
-    borderColor: getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#ffffff',
+    borderColor: _fg,
     scaleMargins: { top: 0.05, bottom: 0.25 },
   },
   timeScale: {
-    borderColor: getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#ffffff',
+    borderColor: _fg,
     timeVisible: true,
     secondsVisible: false,
   },
@@ -422,6 +394,17 @@ const candleSeries = chart.addCandlestickSeries({
   borderDownColor:  "#f85149",
   wickUpColor:      "#3fb950",
   wickDownColor:    "#f85149",
+});
+
+// Live-update chart colors when OS theme changes at runtime
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
+  const bg = e.matches ? '#ffffff' : '#000000';
+  const fg = e.matches ? '#000000' : '#ffffff';
+  chart.applyOptions({
+    layout: { background: { color: bg }, textColor: '#8b949e' },
+    rightPriceScale: { borderColor: fg },
+    timeScale: { borderColor: fg },
+  });
 });
 
 // Volume histogram on a separate (shorter) pane — achieved via price scale margin
@@ -715,7 +698,6 @@ function applyCounterScale(scale, refScale) {
 window.addEventListener('message', (ev) => {
   const d = ev && ev.data;
   if (d && d.type === 'sv-scale') applyCounterScale(d.scale, d.refScale);
-
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -139,18 +139,6 @@
       width: 100%;
       accent-color: var(--fg);
     }
-    #menu-panel select {
-      background: var(--btn-bg);
-      border: 1px solid var(--fg);
-      border-radius: 4px;
-      color: var(--text);
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 13px;
-      padding: 5px 8px;
-      outline: none;
-    }
-    #menu-panel select:focus { border-color: var(--accent); }
     #menu-panel .val {
       text-align: right;
       font-variant-numeric: tabular-nums;
@@ -388,7 +376,7 @@
       pointer-events: none;
     }
 
-    /* The iframes themselves: dark backdrop, thin border matching the chart theme. */
+    /* The iframes themselves: backdrop + thin border. */
     .chart-frame {
       border: 1px solid var(--fg);
       background: var(--bg);
@@ -518,14 +506,10 @@
     const CHART_URL         = "_outputs/templates/1_chart_template.html";
 
 
-    // Billboard background — must be declared early so makeChartElement can
-    // reference it when building the initial set of iframes.
-
-
     // ══════════════════════════════════════════════════════════════════════════
     //  USER PREFERENCES — localStorage helpers
     //
-    //  Everything a user can adjust (orbit speed, scroll gain, theme, period,
+    //  Everything a user can adjust (orbit speed, scroll gain, period,
     //  ring size, per-slot tickers) is persisted to localStorage on every
     //  change and restored at startup, so a "production mode" launch comes up
     //  exactly how the previous session was left.
@@ -1004,10 +988,10 @@
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  USER PREFERENCES — slider + theme + reset-view wiring
+    //  USER PREFERENCES — slider + reset-view wiring
     //
-    //  The key definitions, default values, and lsSet/lsGet helpers live up
-    //  near the theme module so the session-restore logic can reach them.
+    //  The key definitions, default values, and lsSet/lsGet helpers live
+    //  near the top of the script so the session-restore logic can reach them.
     //  Here we only wire the DOM elements to those helpers. Slider values
     //  are INTENTIONALLY not touched by the "Reset view" button, which is
     //  scoped to camera position/target only.
