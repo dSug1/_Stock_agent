@@ -419,7 +419,14 @@
     const _params = new URLSearchParams(location.search);
 
     const CIRCLE_COUNT      = 6;        // default ring size on very first launch
-    const CIRCLE_RADIUS     = 7;        // world units — ring radius around the center
+    const BASE_RING_RADIUS  = 7;        // world units — ring radius for ≤ 8 billboards
+    // When the ring has more than RING_EXPAND_THRESHOLD billboards, the radius
+    // scales linearly to maintain the same arc-spacing as an 8-billboard ring.
+    // The orbit center (and center billboard) shifts away from / toward the
+    // camera so the closest billboard stays at the same distance.
+    const RING_EXPAND_THRESHOLD = 8;
+    let   circleRadius      = BASE_RING_RADIUS;
+    const ringCenter        = new THREE.Vector3(0, 0, 0);
     const IFRAME_WIDTH_PX   = 800;      // iframe pixel width
     const IFRAME_HEIGHT_PX  = 500;      // iframe pixel height
     // Billboard world size = IFRAME_*_PX × BILLBOARD_SCALE.
@@ -695,6 +702,62 @@
     // ══════════════════════════════════════════════════════════════════════════
     const billboards = [];
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  RING GEOMETRY — dynamic radius + center shift
+    //
+    //  For n ≤ RING_EXPAND_THRESHOLD the ring sits at BASE_RING_RADIUS
+    //  around the origin. For n > THRESHOLD the radius scales linearly
+    //  (R = BASE * n / THRESHOLD) to keep the arc-spacing between adjacent
+    //  billboards constant. Each time the radius grows / shrinks the ring
+    //  center shifts AWAY FROM / TOWARD the camera in the XZ plane by the
+    //  same amount, which preserves the distance from the camera to the
+    //  closest billboard — i.e. the "zoom" adapts automatically.
+    //
+    //  computeDesiredRadius(n)    → ideal radius for n billboards
+    //  adjustRingGeometry(n)      → mutates circleRadius + ringCenter +
+    //                                controls.target + centerBillboard
+    // ══════════════════════════════════════════════════════════════════════════
+    function computeDesiredRadius(n) {
+      if (n <= RING_EXPAND_THRESHOLD) return BASE_RING_RADIUS;
+      return BASE_RING_RADIUS * n / RING_EXPAND_THRESHOLD;
+    }
+
+    /**
+     * Update ring radius and orbit center for a ring of `n` billboards.
+     *
+     * The center is shifted along the camera → oldCenter direction in the
+     * XZ plane by exactly (newRadius − oldRadius). Because the shift equals
+     * the radius delta, the XZ distance from the camera to the closest
+     * billboard (D_xz − R) stays constant — so the visual "zoom" doesn't
+     * change. The orbit-controls target and the center billboard world
+     * position are kept in sync with ringCenter.
+     */
+    function adjustRingGeometry(n) {
+      const newRadius = computeDesiredRadius(n);
+      const shift = newRadius - circleRadius;
+      if (Math.abs(shift) < 1e-6) return;
+
+      // Direction: from camera toward current ring center in the XZ plane.
+      const dx = ringCenter.x - camera.position.x;
+      const dz = ringCenter.z - camera.position.z;
+      const len = Math.sqrt(dx * dx + dz * dz);
+      if (len > 1e-6) {
+        ringCenter.x += shift * (dx / len);
+        ringCenter.z += shift * (dz / len);
+      }
+      circleRadius = newRadius;
+
+      // Keep center billboard and orbit controls in sync.
+      if (centerBillboard) centerBillboard.worldPos.copy(ringCenter);
+      if (controls) {
+        controls.target.copy(ringCenter);
+        // Scale max orbit distance so the user can still zoom out past
+        // a large ring without hitting the clamp.
+        controls.maxDistance = MAX_ORBIT_DISTANCE + (circleRadius - BASE_RING_RADIUS);
+        controls.update();
+      }
+    }
+
     // Every ring slot — filled or blank — is an interactive iframe. A blank
     // slot loads the chart template without a ?ticker= param so the user can
     // later type a ticker into the top-bar input and have the Go button fill
@@ -767,6 +830,24 @@
     }
     // The center billboard is tracked by reference so ring-only operations
     // (redistribute / add / remove) can filter it out.
+    // Apply the initial ring geometry — if the cached session had > 8
+    // billboards the ring is already expanded on first paint. The shift
+    // direction uses CAMERA_START_POS (camera isn't orbited yet).
+    {
+      const n = initialRingTickers.length;
+      circleRadius = computeDesiredRadius(n);
+      if (n > RING_EXPAND_THRESHOLD) {
+        // Shift center away from camera START position in the XZ plane.
+        const dx = -CAMERA_START_POS.x;   // origin → camera, negated = away
+        const dz = -CAMERA_START_POS.z;
+        const len = Math.sqrt(dx * dx + dz * dz);
+        if (len > 1e-6) {
+          const shift = circleRadius - BASE_RING_RADIUS;
+          ringCenter.set(shift * dx / len, 0, shift * dz / len);
+        }
+      }
+    }
+
     let centerBillboard = null;
     {
       const el = makeCenterPlaceholder();
@@ -774,7 +855,7 @@
       billboardsLayer.appendChild(el);
       centerBillboard = {
         element:     el,
-        worldPos:    new THREE.Vector3(0, 0, 0),
+        worldPos:    ringCenter.clone(),
         interactive: false,
         ticker:      '',
       };
@@ -791,9 +872,9 @@
       for (let i = 0; i < n; i++) {
         const angle = (i / n) * Math.PI * 2;
         const pos = new THREE.Vector3(
-          Math.cos(angle) * CIRCLE_RADIUS,
+          ringCenter.x + Math.cos(angle) * circleRadius,
           0,
-          Math.sin(angle) * CIRCLE_RADIUS
+          ringCenter.z + Math.sin(angle) * circleRadius
         );
         addBillboard(initialRingTickers[i] || '', pos);
       }
@@ -818,8 +899,8 @@
     controls.enableZoom    = false;
     controls.zoomSpeed     = 0.8;
     controls.minDistance   = MIN_ORBIT_DISTANCE;
-    controls.maxDistance   = MAX_ORBIT_DISTANCE;
-    controls.target.set(0, 0, 0);
+    controls.maxDistance   = MAX_ORBIT_DISTANCE + (circleRadius - BASE_RING_RADIUS);
+    controls.target.copy(ringCenter);
     controls.rotateSpeed   = 1.0;
     // Right-mouse-button drags the orbit; left button does nothing so clicks
     // inside chart iframes stay untouched (period buttons, search, etc.).
@@ -875,7 +956,7 @@
       if (r > 1e-6) {
         let newR = r * Math.exp(_zoomVel);
         if (newR < MIN_ORBIT_DISTANCE) { newR = MIN_ORBIT_DISTANCE; _zoomVel = 0; }
-        if (newR > MAX_ORBIT_DISTANCE) { newR = MAX_ORBIT_DISTANCE; _zoomVel = 0; }
+        if (newR > controls.maxDistance) { newR = controls.maxDistance; _zoomVel = 0; }
         _zoomDir.setLength(newR);
         camera.position.copy(controls.target).add(_zoomDir);
       }
@@ -987,11 +1068,16 @@
     //  they are user preferences persisted across sessions in localStorage
     //  and must survive a view reset.
     // ══════════════════════════════════════════════════════════════════════════
-    const DEFAULT_TARGET = new THREE.Vector3(0, 0, 0);
     const $resetView = document.getElementById('reset-view');
     $resetView.addEventListener('click', () => {
-      camera.position.copy(CAMERA_START_POS);
-      controls.target.copy(DEFAULT_TARGET);
+      // Restore the camera to its default position RELATIVE to the
+      // current ring center (which may have shifted for >8 billboards).
+      camera.position.set(
+        ringCenter.x + CAMERA_START_POS.x,
+        CAMERA_START_POS.y,
+        ringCenter.z + CAMERA_START_POS.z
+      );
+      controls.target.copy(ringCenter);
       // Flush any residual rotation damping from OrbitControls so the
       // reset is instantaneous.
       controls.update();
@@ -1148,10 +1234,11 @@
     }
 
     /**
-     * Redistribute every ring billboard evenly around CIRCLE_RADIUS so that
-     * slot 0 sits at the angle on the ring closest to the camera. If
-     * `priority` is given and is a ring billboard, it is placed at slot 0;
-     * the rest keep their existing relative order and fill slots 1..n-1.
+     * Redistribute every ring billboard evenly around circleRadius centred
+     * on ringCenter so that slot 0 sits at the angle on the ring closest
+     * to the camera. If `priority` is given and is a ring billboard, it is
+     * placed at slot 0; the rest keep their existing relative order and
+     * fill slots 1..n-1.
      */
     function recomputeRingPositions(priority) {
       const ring = getRingBillboards();
@@ -1165,13 +1252,17 @@
         ordered = ring;
       }
 
-      const cameraAngle = Math.atan2(camera.position.z, camera.position.x);
+      // Angle from ring center to camera (XZ plane).
+      const cameraAngle = Math.atan2(
+        camera.position.z - ringCenter.z,
+        camera.position.x - ringCenter.x
+      );
       for (let i = 0; i < n; i++) {
         const angle = cameraAngle + (i / n) * Math.PI * 2;
         ordered[i].worldPos.set(
-          Math.cos(angle) * CIRCLE_RADIUS,
+          ringCenter.x + Math.cos(angle) * circleRadius,
           0,
-          Math.sin(angle) * CIRCLE_RADIUS,
+          ringCenter.z + Math.sin(angle) * circleRadius,
         );
       }
     }
@@ -1182,7 +1273,8 @@
      * No-op when already at RING_MAX.
      */
     function addClosestRingBillboard() {
-      if (getRingBillboards().length >= RING_MAX) return;
+      const ring = getRingBillboards();
+      if (ring.length >= RING_MAX) return;
       const iframe = document.createElement('iframe');
       iframe.className   = 'chart-frame';
       // No ticker param → template shows an empty chart. The user can fill
@@ -1203,6 +1295,8 @@
         ticker:      '',
       };
       billboards.push(b);
+      // Expand ring geometry if crossing the threshold (radius + center shift).
+      adjustRingGeometry(ring.length + 1);
       recomputeRingPositions(b);
       _lastClosestBillboard = null;   // force ticker input to refresh
       updateRingButtonState();
@@ -1225,6 +1319,8 @@
       const idx = billboards.indexOf(target);
       if (idx >= 0) billboards.splice(idx, 1);
       if (_lastClosestBillboard === target) _lastClosestBillboard = null;
+      // Shrink ring geometry if still above the threshold (radius + center shift).
+      adjustRingGeometry(ring.length - 1);
       recomputeRingPositions();
       updateRingButtonState();
       persistSession();
@@ -1263,15 +1359,14 @@
       const T = findClosestRingBillboard();
       if (!T) return;
 
-      // Sort the ring by angle around the origin (XZ plane, atan2(z, x)).
-      // Because recomputeRingPositions always lays billboards on an evenly
-      // spaced circle — and swaps only shuffle which billboard occupies
-      // which slot, never introducing duplicates — the angle-sorted order
-      // is always the true ring-neighbor order.
+      // Sort the ring by angle around the ring center (XZ plane). Because
+      // recomputeRingPositions always lays billboards on an evenly spaced
+      // circle — and swaps only shuffle which billboard occupies which
+      // slot — the angle-sorted order is always the true ring-neighbor order.
       const sorted = ring.slice().sort(
         (a, b) =>
-          Math.atan2(a.worldPos.z, a.worldPos.x) -
-          Math.atan2(b.worldPos.z, b.worldPos.x)
+          Math.atan2(a.worldPos.z - ringCenter.z, a.worldPos.x - ringCenter.x) -
+          Math.atan2(b.worldPos.z - ringCenter.z, b.worldPos.x - ringCenter.x)
       );
       const n    = sorted.length;
       const tIdx = sorted.indexOf(T);
@@ -1298,11 +1393,13 @@
         neighbor = (prevDot > nextDot) ? prev : next;
       }
 
-      // Capture T's and neighbor's old angles BEFORE mutating worldPos —
-      // the camera rotation delta is derived from these, not from the
-      // camera's current angle (which may drift slightly during damping).
-      const tOldAngle = Math.atan2(T.worldPos.z,        T.worldPos.x);
-      const nOldAngle = Math.atan2(neighbor.worldPos.z, neighbor.worldPos.x);
+      // Capture T's and neighbor's old angles (relative to ring center)
+      // BEFORE mutating worldPos — the camera rotation delta is derived
+      // from these, not from the camera's current angle.
+      const tOldAngle = Math.atan2(
+        T.worldPos.z - ringCenter.z, T.worldPos.x - ringCenter.x);
+      const nOldAngle = Math.atan2(
+        neighbor.worldPos.z - ringCenter.z, neighbor.worldPos.x - ringCenter.x);
 
       // Swap the two world positions. All other billboards stay put.
       _swapTmpA.copy(T.worldPos);
@@ -1428,7 +1525,7 @@
         const rHigh = dot + Math.sqrt(disc);     // minimum safe r for this billboard
         if (rHigh > minR) minR = rHigh;
       }
-      return Math.min(MAX_ORBIT_DISTANCE, minR);
+      return Math.min(controls.maxDistance, minR);
     }
 
     function enforceBillboardMargin() {
