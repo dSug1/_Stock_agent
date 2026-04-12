@@ -18,6 +18,14 @@
       :root { --bg: #ffffff; --fg: #e0e0e0; --text: #404050; --btn-bg: #f0f0f0; }
       #period-topbar .pbtn.active { color: #606878; }
     }
+    :root.force-dark {
+      --bg: #000000; --fg: #3a3a50; --text: #c0c8d8; --btn-bg: #454558;
+    }
+    :root.force-dark #period-topbar .pbtn.active { color: #fff; }
+    :root.force-light {
+      --bg: #ffffff; --fg: #e0e0e0; --text: #404050; --btn-bg: #f0f0f0;
+    }
+    :root.force-light #period-topbar .pbtn.active { color: #606878; }
     html, body {
       margin: 0;
       padding: 0;
@@ -422,6 +430,7 @@
   <!-- Slide-in menu panel on the left. Contains the orbit-speed and
        scroll-gain sliders plus the reset-view button. -->
   <div id="menu-panel">
+    <div class="title">Display <button id="theme-toggle" class="menu-btn" type="button">Dark</button></div>
     <div class="title">Camera <button id="reset-view" class="menu-btn" type="button">Reset view</button></div>
     <label>
       Orbit speed
@@ -551,6 +560,32 @@
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  LIGHT / DARK OVERRIDE
+    //
+    //  Values: null = follow OS, 'light', 'dark'.
+    //  Applies a force-light / force-dark class on <html> which overrides
+    //  the @media (prefers-color-scheme) CSS rules.
+    // ══════════════════════════════════════════════════════════════════════════
+    const LS_MODE_KEY = 'sv.mode';
+    let _modeOverride = null;   // null | 'light' | 'dark'
+    try {
+      const raw = localStorage.getItem(LS_MODE_KEY);
+      if (raw === 'light' || raw === 'dark') _modeOverride = raw;
+    } catch (_) {}
+
+    function isLightMode() {
+      if (_modeOverride) return _modeOverride === 'light';
+      return window.matchMedia('(prefers-color-scheme: light)').matches;
+    }
+
+    function applyModeOverride() {
+      const root = document.documentElement;
+      root.classList.remove('force-light', 'force-dark');
+      if (_modeOverride) root.classList.add('force-' + _modeOverride);
+    }
+    applyModeOverride();
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  SESSION RESTORE
     //
     //  Decide the initial period + ring tickers by combining URL query params
@@ -629,10 +664,26 @@
     // ══════════════════════════════════════════════════════════════════════════
 
     const scene = new THREE.Scene();
-    const _isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-    scene.background = new THREE.Color(_isLight ? 0xffffff : 0x000000);
-    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
-      scene.background = new THREE.Color(e.matches ? 0xffffff : 0x000000);
+    scene.background = new THREE.Color(isLightMode() ? 0xffffff : 0x000000);
+
+    function syncSceneBackground() {
+      const light = isLightMode();
+      scene.background = new THREE.Color(light ? 0xffffff : 0x000000);
+      if (typeof _cameraDirty !== 'undefined') _cameraDirty = true;
+      // Broadcast to all chart iframes so they reskin immediately.
+      if (typeof billboards !== 'undefined') {
+        for (const b of billboards) {
+          if (!b || !b.interactive) continue;
+          const el = b.element;
+          if (!el || el.tagName !== 'IFRAME') continue;
+          try { el.contentWindow.postMessage({ type: 'sv-mode', light }, '*'); }
+          catch (_) {}
+        }
+      }
+    }
+    // OS theme change — only matters when no manual override is active.
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+      if (!_modeOverride) syncSceneBackground();
     });
 
     const camera = new THREE.PerspectiveCamera(
@@ -990,6 +1041,30 @@
     const $menuToggle = document.getElementById('menu-toggle');
     $menuToggle.addEventListener('click', () => {
       document.body.classList.toggle('menu-open');
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  LIGHT / DARK TOGGLE
+    // ══════════════════════════════════════════════════════════════════════════
+    const $themeToggle = document.getElementById('theme-toggle');
+
+    function updateThemeToggleLabel() {
+      $themeToggle.textContent = isLightMode() ? 'Light' : 'Dark';
+    }
+    updateThemeToggleLabel();
+
+    $themeToggle.addEventListener('click', () => {
+      // Toggle: if currently light → force dark, if currently dark → force light.
+      _modeOverride = isLightMode() ? 'dark' : 'light';
+      lsSet(LS_MODE_KEY, _modeOverride);
+      applyModeOverride();
+      syncSceneBackground();
+      updateThemeToggleLabel();
+    });
+
+    // If OS theme changes and no override is active, update button label.
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+      if (!_modeOverride) updateThemeToggleLabel();
     });
 
     // ══════════════════════════════════════════════════════════════════════════

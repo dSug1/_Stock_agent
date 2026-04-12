@@ -698,9 +698,26 @@ function applyCounterScale(scale, refScale) {
   if ($pricePanel) $pricePanel.style.transform = `scale(${factor})`;
 }
 
+function applyMode(light) {
+  const bg = light ? '#ffffff' : '#000000';
+  const fg = light ? '#000000' : '#ffffff';
+  const grid = light ? '#e0e0e0' : '#3a3a50';
+  const root = document.documentElement;
+  root.style.setProperty('--bg', bg);
+  root.style.setProperty('--fg', fg);
+  root.style.setProperty('--txt', light ? '#000000' : '#ffffff');
+  chart.applyOptions({
+    layout: { background: { color: bg }, textColor: '#8b949e' },
+    grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+    rightPriceScale: { borderColor: fg },
+    timeScale: { borderColor: fg },
+  });
+}
+
 window.addEventListener('message', (ev) => {
   const d = ev && ev.data;
   if (d && d.type === 'sv-scale') applyCounterScale(d.scale, d.refScale);
+  if (d && d.type === 'sv-mode') applyMode(d.light);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
