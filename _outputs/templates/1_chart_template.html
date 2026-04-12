@@ -57,6 +57,7 @@
       border-bottom: 1px solid var(--fg);
       flex-shrink: 0;
       flex-wrap: wrap;
+      overflow: hidden;
     }
 
 
@@ -65,16 +66,9 @@
       display: flex;
       align-items: baseline;
       gap: 12px;
-      margin-left: auto;
       flex-wrap: wrap;
-      /* counter-scale is set by JS from sv-scale messages so the price
-         panel always appears at a constant on-screen pixel size. */
-      transform-origin: top right;
+      overflow: hidden;
     }
-    /* Sizes are doubled so they stay readable on faraway billboards.
-       The parent page posts {type:'sv-scale'} with the billboard's current
-       CSS scale; we counter-scale #price-panel so these labels always
-       appear at a constant on-screen pixel size regardless of distance. */
     #ticker-label   { font-size: 32px; font-weight: 700; color: CanvasText; }
     #company-label  { font-size: 24px; color: var(--txt-dim); max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #price-label    { font-size: 40px; font-weight: 700; }
@@ -684,19 +678,6 @@ function showError(msg) {
   _errorTimer = setTimeout(() => $errorToast.classList.remove("show"), 5000);
 }
 
-// Counter-scale the price panel so its text stays at a constant on-screen
-// pixel size regardless of how far the billboard is from the camera. The
-// parent page sends {type:'sv-scale', scale} every time the billboard's
-// CSS scale changes. We invert it on #price-panel and #status-badge.
-
-const $pricePanel = document.getElementById("price-panel");
-function applyCounterScale(scale, refScale) {
-  if (!scale || scale < 1e-6 || !refScale || refScale < 1e-6) return;
-  // factor = refScale / scale: closest billboard gets ≈1×, far ones scale up.
-  // Clamp to [1, 3] so far-away billboards don't overflow the 800px iframe.
-  const factor = Math.min(Math.max(refScale / scale, 1), 3);
-  if ($pricePanel) $pricePanel.style.transform = `scale(${factor})`;
-}
 
 function applyMode(light) {
   const bg = light ? '#ffffff' : '#000000';
@@ -716,7 +697,6 @@ function applyMode(light) {
 
 window.addEventListener('message', (ev) => {
   const d = ev && ev.data;
-  if (d && d.type === 'sv-scale') applyCounterScale(d.scale, d.refScale);
   if (d && d.type === 'sv-mode') applyMode(d.light);
 });
 
