@@ -47,7 +47,7 @@
     #menu-panel, #menu-panel *, #period-topbar, #period-topbar *,
     #ticker-input-group, #ticker-input-group *,
     #ring-size-controls, #ring-size-controls *,
-    #chat-container, #chat-container * {
+    #overlay-wrapper, #overlay-wrapper * {
       user-select: auto; -webkit-user-select: auto;
     }
 
@@ -181,12 +181,10 @@
       border-color: var(--accent);
     }
 
-    /* ── Top period-button bar (centered at the top of the screen) ─────── */
+    /* ── Period-button bar — sits directly above the price overlay ─────── */
     #period-topbar {
-      position: absolute;
-      top: 14px;
-      left: 58px;
-      z-index: 10;
+      position: fixed;
+      z-index: 21;
       display: flex;
       flex-direction: column;
       align-items: stretch;
@@ -196,23 +194,21 @@
       padding: 6px 8px;
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
-      transition: left 0.25s ease-out;
+      /* Default: centered above the bottom overlay */
+      bottom: 62px;
+      left: 50%;
+      transform: translateX(-50%);
     }
-    body.menu-open #period-topbar {
-      left: 310px;  /* 260px menu width + 50px gap */
-    }
-    #topbar-row1 {
-      display: flex;
-      gap: 4px;
-      align-items: center;
+    /* When chat is open: move to bottom center */
+    body.chat-open #period-topbar {
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
     }
     #period-row {
       display: flex;
       gap: 2px;
       align-items: center;
-      margin-top: 4px;
-      border-top: 1px solid var(--fg);
-      padding-top: 4px;
     }
     #period-topbar .pbtn {
       flex: 1;
@@ -235,17 +231,11 @@
       font-weight: 600;
     }
 
-    /* Ring-size +/- controls — sit at the far left of the period topbar.
-       "+" adds a billboard at the position closest to the camera; "−"
-       removes the billboard currently closest to the camera. Disabled
-       visual state is handled by the :disabled pseudo-class. */
+    /* Ring-size +/- controls inside the menu panel. */
     #ring-size-controls {
       display: flex;
       align-items: center;
       gap: 4px;
-      padding-right: 8px;
-      margin-right: 4px;
-      border-right: 1px solid var(--fg);
     }
     #ring-size-controls button {
       background: var(--btn-bg);
@@ -296,76 +286,17 @@
     }
     #ticker-input:focus { border-color: var(--accent); }
     #ticker-input::placeholder { color: var(--text); opacity: 0.4; }
-    #ticker-go {
-      background: var(--fg);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      padding: 2px;
-      width: 28px;
-      height: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: opacity .15s;
-    }
-    #ticker-go img {
-      width: 22px;
-      height: 22px;
-      object-fit: contain;
-    }
-    #ticker-go:hover { opacity: .85; }
 
-    /* ── Chat dialog ─────────────────────────────────────────────────────── */
-    #chat-container {
-      position: fixed;
-      top: 16px;
-      right: 16px;
-      bottom: 16px;
-      width: 25vw;
-      min-width: 280px;
-      z-index: 19;
-      background: var(--bg);
-      border: 1px solid var(--fg);
-      border-radius: 8px;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      display: none;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    #chat-container.open { display: flex; }
-    #chat-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--fg);
-      flex-shrink: 0;
-    }
-    #chat-header span { color: var(--text); font-size: 14px; font-weight: 600; }
-    #chat-collapse {
-      background: transparent;
-      border: 1px solid var(--fg);
-      border-radius: 4px;
-      color: var(--text);
-      cursor: pointer;
-      font-size: 16px;
-      width: 28px;
-      height: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all .15s;
-    }
-    #chat-collapse:hover { border-color: var(--accent); color: var(--accent); }
+    /* ── Chat body — merged inside price-overlay, visible when chat-open ── */
     #chat-body {
-      flex: 1;
+      display: none;
       padding: 14px;
       overflow-y: auto;
       color: var(--text);
       font-size: 13px;
+      max-height: 50vh;
     }
+    body.chat-open #chat-body { display: block; }
 
     /* Blank-slot placeholder shown when there aren't enough tickers.
        Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
@@ -405,25 +336,64 @@
       align-items: center;
       justify-content: center;
     }
-    /* ── Price info overlay (fixed, always readable) ───────────────────── */
-    #price-overlay {
+    /* ── Ring controls row inside menu (first row, at the top) ───────── */
+    #menu-ring-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--fg);
+    }
+    #menu-ring-row #ticker-input { width: 70px; }
+    #ticker-go-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+
+    /* ── Overlay wrapper — holds price-overlay + giraffe button side by side ── */
+    #overlay-wrapper {
       position: fixed;
       bottom: 16px;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 18;
+      z-index: 20;
+      display: none;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    #overlay-wrapper.visible { display: flex; }
+    /* When chat is open: dock to top-right */
+    body.chat-open #overlay-wrapper {
+      bottom: auto;
+      top: 16px;
+      right: 16px;
+      left: auto;
+      transform: none;
+    }
+
+    /* ── Price info overlay ───────────────────────────────────────────── */
+    #price-overlay {
+      position: relative;
       background: var(--bg);
       border: 1px solid var(--fg);
       border-radius: 6px;
       padding: 8px 16px;
-      display: none;
+      display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
       white-space: nowrap;
     }
-    #price-overlay.visible { display: flex; }
+
+    /* Row 1 (single-row at bottom: ticker + company + price + change + status) */
+    .po-row1 { display: flex; align-items: center; gap: 10px; }
+    /* Row 2 (price + change + status — shown only in two-row chat-open mode) */
+    .po-row2 { display: none; align-items: center; gap: 10px; }
+    /* Separator line between ticker info and chat — hidden by default */
+    .po-separator { display: none; border: none; border-top: 1px solid var(--fg); margin: 8px 0 0 0; width: 100%; }
+
     #price-overlay .po-ticker {
       font-size: 16px;
       font-weight: 700;
@@ -438,11 +408,11 @@
       text-overflow: ellipsis;
     }
     #price-overlay .po-price {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 700;
     }
     #price-overlay .po-change {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
     }
     #price-overlay .po-status {
@@ -453,6 +423,66 @@
     }
     #price-overlay .po-status.open   { color: #3fb950; border-color: #3fb950; }
     #price-overlay .po-status.closed { color: var(--text); opacity: 0.5; border-color: var(--fg); }
+    /* Giraffe button — sits outside #price-overlay, to its right */
+    #ticker-go {
+      background: var(--fg);
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 2px;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity .15s;
+      flex-shrink: 0;
+    }
+    #ticker-go img {
+      width: 22px;
+      height: 22px;
+      object-fit: contain;
+    }
+    #ticker-go:hover { opacity: .85; }
+    /* Hide giraffe when chat is open */
+    body.chat-open #ticker-go { display: none; }
+
+    /* Close button — top-right of overlay, always visible when chat open */
+    #chat-collapse {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: transparent;
+      border: 1px solid var(--fg);
+      border-radius: 4px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 16px;
+      width: 28px;
+      height: 28px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      transition: all .15s;
+      z-index: 1;
+    }
+    #chat-collapse:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* When chat is open: switch overlay to column layout with chat body */
+    body.chat-open #price-overlay {
+      flex-direction: column;
+      gap: 4px;
+      align-items: stretch;
+      width: 25vw;
+      min-width: 280px;
+      padding-right: 44px; /* room for close button */
+    }
+    body.chat-open .po-row1 .po-price,
+    body.chat-open .po-row1 .po-change,
+    body.chat-open .po-row1 .po-status { display: none; }
+    body.chat-open .po-row2 { display: flex; }
+    body.chat-open .po-separator { display: block; }
+    body.chat-open #chat-collapse { display: flex; }
   </style>
 
   <!-- Three.js ES modules pinned to 0.160.0.
@@ -478,6 +508,18 @@
   <!-- Slide-in menu panel on the left. Contains the orbit-speed and
        scroll-gain sliders plus the reset-view button. -->
   <div id="menu-panel">
+    <div id="menu-ring-row">
+      <div id="ring-size-controls">
+        <button id="ring-left"  type="button" title="Swap the closest billboard with its left neighbor and recenter">←</button>
+        <button id="ring-minus" type="button" title="Remove the billboard closest to the camera">−</button>
+        <button id="ring-plus"  type="button" title="Add a billboard at the position closest to the camera">+</button>
+        <button id="ring-right" type="button" title="Swap the closest billboard with its right neighbor and recenter">→</button>
+      </div>
+      <div id="ticker-input-group">
+        <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
+        <button id="ticker-go-btn" class="menu-btn" type="button">Go</button>
+      </div>
+    </div>
     <div class="title">Display <button id="theme-toggle" class="menu-btn" type="button">Dark</button></div>
     <div class="title">Camera <button id="reset-view" class="menu-btn" type="button">Reset view</button></div>
     <label>
@@ -490,43 +532,32 @@
       <input id="scroll-gain" type="range" min="0.1" max="3" step="0.05" value="0.8">
       <span id="scroll-gain-val" class="val">0.80</span>
     </label>
-
   </div>
 
-  <!-- Top-of-screen period buttons — control every billboard at once.
-       The ticker input group sits on the LEFT, period buttons are
-       appended to the right by the module script below. -->
+  <!-- Period buttons — above the price overlay at bottom, or at bottom-center when chat open. -->
   <div id="period-topbar">
-    <div id="topbar-row1">
-      <div id="ring-size-controls">
-        <button id="ring-left"  type="button" title="Swap the closest billboard with its left neighbor and recenter">←</button>
-        <button id="ring-minus" type="button" title="Remove the billboard closest to the camera">−</button>
-        <button id="ring-plus"  type="button" title="Add a billboard at the position closest to the camera">+</button>
-        <button id="ring-right" type="button" title="Swap the closest billboard with its right neighbor and recenter">→</button>
-      </div>
-      <div id="ticker-input-group">
-        <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
-        <button id="ticker-go" type="button" title="Go"><img src="/utilities/renderer/logo.png" alt="Go"></button>
-      </div>
-    </div>
     <div id="period-row"></div>
   </div>
 
-  <!-- Chat dialog — opened via the giraffe button, collapsed via "–" -->
-  <div id="price-overlay">
-    <span class="po-ticker"></span>
-    <span class="po-company"></span>
-    <span class="po-price"></span>
-    <span class="po-change"></span>
-    <span class="po-status closed"></span>
-  </div>
-
-  <div id="chat-container">
-    <div id="chat-header">
-      <span>Chat</span>
-      <button id="chat-collapse" type="button" aria-label="Collapse chat">–</button>
+  <div id="overlay-wrapper">
+    <div id="price-overlay">
+      <div class="po-row1">
+        <span class="po-ticker"></span>
+        <span class="po-company"></span>
+        <span class="po-price"></span>
+        <span class="po-change"></span>
+        <span class="po-status closed"></span>
+      </div>
+      <div class="po-row2">
+        <span class="po-price"></span>
+        <span class="po-change"></span>
+        <span class="po-status closed"></span>
+      </div>
+      <hr class="po-separator">
+      <div id="chat-body"></div>
+      <button id="chat-collapse" type="button" aria-label="Close chat">–</button>
     </div>
-    <div id="chat-body"></div>
+    <button id="ticker-go" type="button" title="Chat"><img src="/utilities/renderer/logo.png" alt="Chat"></button>
   </div>
 
   <script type="module">
@@ -1095,19 +1126,19 @@
     //  animation frame we display the closest billboard's data.
     // ══════════════════════════════════════════════════════════════════════════
     const _priceInfoMap = new WeakMap();   // contentWindow → info object
+    const $overlayWrapper = document.getElementById('overlay-wrapper');
     const $priceOverlay = document.getElementById('price-overlay');
-    const $poTicker  = $priceOverlay.querySelector('.po-ticker');
-    const $poCompany = $priceOverlay.querySelector('.po-company');
-    const $poPrice   = $priceOverlay.querySelector('.po-price');
-    const $poChange  = $priceOverlay.querySelector('.po-change');
-    const $poStatus  = $priceOverlay.querySelector('.po-status');
+    const $poTicker     = $priceOverlay.querySelector('.po-ticker');
+    const $poCompany    = $priceOverlay.querySelector('.po-company');
+    const $poPrices     = $priceOverlay.querySelectorAll('.po-price');
+    const $poChanges    = $priceOverlay.querySelectorAll('.po-change');
+    const $poStatuses   = $priceOverlay.querySelectorAll('.po-status');
 
     window.addEventListener('message', (ev) => {
       const d = ev.data;
       if (!d || d.type !== 'sv-price-info') return;
       if (ev.source) {
         _priceInfoMap.set(ev.source, d);
-        // If this message came from the closest billboard, refresh immediately.
         const b = _closestInteractive;
         if (b && b.element && b.element.contentWindow === ev.source) {
           updatePriceOverlay();
@@ -1118,24 +1149,22 @@
     function updatePriceOverlay() {
       const b = _closestInteractive;
       if (!b || !b.element || b.element.tagName !== 'IFRAME') {
-        $priceOverlay.classList.remove('visible');
+        $overlayWrapper.classList.remove('visible');
         return;
       }
       let info;
       try { info = _priceInfoMap.get(b.element.contentWindow); } catch (_) {}
       if (!info || !info.ticker) {
-        $priceOverlay.classList.remove('visible');
+        $overlayWrapper.classList.remove('visible');
         return;
       }
       $poTicker.textContent  = info.ticker;
       $poCompany.textContent = info.company;
-      $poPrice.textContent   = info.price;
-      $poPrice.style.color   = info.positive ? '#3fb950' : '#f85149';
-      $poChange.textContent  = info.change;
-      $poChange.style.color  = info.positive ? '#3fb950' : '#f85149';
-      $poStatus.textContent  = info.statusText;
-      $poStatus.className    = 'po-status ' + info.status;
-      $priceOverlay.classList.add('visible');
+      const color = info.positive ? '#3fb950' : '#f85149';
+      $poPrices.forEach(el  => { el.textContent = info.price;      el.style.color = color; });
+      $poChanges.forEach(el => { el.textContent = info.change;     el.style.color = color; });
+      $poStatuses.forEach(el => { el.textContent = info.statusText; el.className = 'po-status ' + info.status; });
+      $overlayWrapper.classList.add('visible');
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1245,16 +1274,15 @@
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  CHAT DIALOG — toggle button (bottom-right) + floating container
+    //  CHAT DIALOG — giraffe opens chat, close button (–) closes it
     // ══════════════════════════════════════════════════════════════════════════
-    const $chatContainer = document.getElementById('chat-container');
     const $chatCollapse  = document.getElementById('chat-collapse');
 
     document.getElementById('ticker-go').addEventListener('click', () => {
-      $chatContainer.classList.toggle('open');
+      document.body.classList.toggle('chat-open');
     });
     $chatCollapse.addEventListener('click', () => {
-      $chatContainer.classList.remove('open');
+      document.body.classList.remove('chat-open');
     });
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1318,8 +1346,8 @@
     //  upper-cased text) and rewrites the closest billboard's iframe src so
     //  it loads the new ticker at the current period.
     // ══════════════════════════════════════════════════════════════════════════
-    const $tickerInput = document.getElementById('ticker-input');
-    const $tickerGo    = document.getElementById('ticker-go');
+    const $tickerInput  = document.getElementById('ticker-input');
+    const $tickerGoBtn = document.getElementById('ticker-go-btn');
 
     // Set by updateBillboardProjection — reused by refreshTickerInput
     // to avoid iterating billboards twice.
@@ -1368,10 +1396,10 @@
       persistSession();
     }
 
-    $tickerGo.addEventListener('click', runTickerUpdate);
     $tickerInput.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); runTickerUpdate(); }
     });
+    $tickerGoBtn.addEventListener('click', runTickerUpdate);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  RING SIZE CONTROLS  (+  /  −)
@@ -1469,6 +1497,7 @@
       adjustRingGeometry(ring.length + 1);
       recomputeRingPositions(b);
       _lastClosestBillboard = null;   // force ticker input to refresh
+      _cameraDirty = true;            // immediate visual update
       updateRingButtonState();
       persistSession();
     }
@@ -1492,6 +1521,7 @@
       // Shrink ring geometry if still above the threshold (radius + center shift).
       adjustRingGeometry(ring.length - 1);
       recomputeRingPositions();
+      _cameraDirty = true;            // immediate visual update
       updateRingButtonState();
       persistSession();
     }
