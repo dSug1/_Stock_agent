@@ -885,6 +885,10 @@
     controls.maxDistance   = MAX_ORBIT_DISTANCE + (circleRadius - BASE_RING_RADIUS);
     controls.target.copy(ringCenter);
     controls.rotateSpeed   = 1.0;
+
+    // Dirty flag — skip expensive per-frame work when camera is idle.
+    let _cameraDirty = true;
+    controls.addEventListener('change', () => { _cameraDirty = true; });
     // Right-mouse-button drags the orbit; left button does nothing so clicks
     // inside chart iframes stay untouched (period buttons, search, etc.).
     controls.mouseButtons = {
@@ -934,6 +938,7 @@
     const _zoomDir = new THREE.Vector3();
     function stepZoomInertia() {
       if (_zoomVel === 0) return;
+      _cameraDirty = true;
       _zoomDir.subVectors(camera.position, controls.target);
       const r = _zoomDir.length();
       if (r > 1e-6) {
@@ -1134,21 +1139,19 @@
     const $tickerInput = document.getElementById('ticker-input');
     const $tickerGo    = document.getElementById('ticker-go');
 
+    // Set by updateBillboardProjection — reused by refreshTickerInput
+    // to avoid iterating billboards twice.
+    let _closestInteractive = null;
+
     function findClosestInteractiveBillboard() {
-      let best = null, bestD = Infinity;
-      for (const b of billboards) {
-        if (!b.interactive) continue;
-        const d = b.worldPos.distanceTo(camera.position);
-        if (d < bestD) { bestD = d; best = b; }
-      }
-      return best;
+      return _closestInteractive;
     }
 
     let _lastClosestBillboard = null;
     function refreshTickerInput() {
       // Don't clobber what the user is currently typing.
       if (document.activeElement === $tickerInput) return;
-      const b = findClosestInteractiveBillboard();
+      const b = _closestInteractive;
       if (b === _lastClosestBillboard) return;
       _lastClosestBillboard = b;
       $tickerInput.value = b ? b.ticker : '';
@@ -1472,20 +1475,29 @@
     // ══════════════════════════════════════════════════════════════════════════
     const BILLBOARD_MAX_SCREEN_FRAC = 0.85; // billboard may fill ≤ 85% of each axis
 
+    // Cached viewport / FOV derived values — recomputed only on resize.
+    let _vpW = window.innerWidth;
+    let _vpH = window.innerHeight;
+    let _halfFovTan = Math.tan(camera.fov * Math.PI / 360);
+    let _scaleNumerator = BILLBOARD_SCALE * _vpH / (2 * _halfFovTan);
+    let _cachedMarginDMin = 0;
+
+    function recomputeViewportCache() {
+      _vpW = window.innerWidth;
+      _vpH = window.innerHeight;
+      _halfFovTan = Math.tan(camera.fov * Math.PI / 360);
+      _scaleNumerator = BILLBOARD_SCALE * _vpH / (2 * _halfFovTan);
+      _cachedMarginDMin = Math.max(
+        (IFRAME_WIDTH_PX  * BILLBOARD_SCALE * _vpH) /
+        (2 * _vpW * BILLBOARD_MAX_SCREEN_FRAC * _halfFovTan),
+        (IFRAME_HEIGHT_PX * BILLBOARD_SCALE * _vpH) /
+        (2 * _vpH * BILLBOARD_MAX_SCREEN_FRAC * _halfFovTan)
+      );
+    }
+    recomputeViewportCache();
+
     function computeMarginDMin() {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const fovRad     = camera.fov * Math.PI / 180;
-      const halfFovTan = Math.tan(fovRad * 0.5);
-      // scale_px = IFRAME_DIM_PX * BILLBOARD_SCALE * h / (2 * d * halfFovTan)
-      // Want scale_px ≤ viewportDim * frac → solve for d.
-      const dMinWidth =
-        (IFRAME_WIDTH_PX  * BILLBOARD_SCALE * h) /
-        (2 * w * BILLBOARD_MAX_SCREEN_FRAC * halfFovTan);
-      const dMinHeight =
-        (IFRAME_HEIGHT_PX * BILLBOARD_SCALE * h) /
-        (2 * h * BILLBOARD_MAX_SCREEN_FRAC * halfFovTan);
-      return Math.max(dMinWidth, dMinHeight);
+      return _cachedMarginDMin;
     }
 
     const _viewDir = new THREE.Vector3();
@@ -1521,6 +1533,7 @@
       if (curR >= enforcedMin) return;
       _viewDir.multiplyScalar(1 / curR);
       camera.position.copy(controls.target).addScaledVector(_viewDir, enforcedMin);
+      _cameraDirty = true;              // camera was pushed — need another render
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1543,21 +1556,17 @@
     const _ndc = new THREE.Vector3();
     let _lastScaleBroadcast = 0;
     function updateBillboardProjection() {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      // World pixels per world unit, one unit from the camera, at this FOV.
-      // Derivation: at distance d, a world-size s projects to s*(h/(2*d*tan(fov/2)))
-      // on screen. Our iframe has a native pixel width IFRAME_WIDTH_PX and a
-      // desired world width IFRAME_WIDTH_PX*BILLBOARD_SCALE, so its CSS
-      // scale factor at distance d is BILLBOARD_SCALE * h / (2*d*tan(fov/2)).
-      const fovRad        = camera.fov * Math.PI / 180;
-      const halfFovTan    = Math.tan(fovRad * 0.5);
-      const scaleNumerator = BILLBOARD_SCALE * h / (2 * halfFovTan);
 
       // Track sort order for zIndex. Farthest gets lowest zIndex.
       const ordered = billboards
         .map((b, i) => ({ b, i, d: b.worldPos.distanceTo(camera.position) }))
         .sort((a, b) => b.d - a.d);
+
+      // Find closest interactive billboard (last in distance-descending order).
+      _closestInteractive = null;
+      for (let i = ordered.length - 1; i >= 0; i--) {
+        if (ordered[i].b.interactive) { _closestInteractive = ordered[i].b; break; }
+      }
 
       for (let rank = 0; rank < ordered.length; rank++) {
         const { b, d } = ordered[rank];
@@ -1574,9 +1583,9 @@
         }
         if (el.style.display === 'none') el.style.display = '';
 
-        const sx = ( _ndc.x * 0.5 + 0.5) * w;
-        const sy = (-_ndc.y * 0.5 + 0.5) * h;
-        const scale = scaleNumerator / d;
+        const sx = ( _ndc.x * 0.5 + 0.5) * _vpW;
+        const sy = (-_ndc.y * 0.5 + 0.5) * _vpH;
+        const scale = _scaleNumerator / d;
 
         el.style.left      = sx + 'px';
         el.style.top       = sy + 'px';
@@ -1591,13 +1600,13 @@
       if (now - _lastScaleBroadcast > 200) {
         _lastScaleBroadcast = now;
         const refScale = ordered.length
-          ? scaleNumerator / ordered[ordered.length - 1].d
+          ? _scaleNumerator / ordered[ordered.length - 1].d
           : 1;
         for (const { b } of ordered) {
           if (!b.interactive) continue;
           const el = b.element;
           if (el.tagName !== 'IFRAME') continue;
-          const s = scaleNumerator / b.worldPos.distanceTo(camera.position);
+          const s = _scaleNumerator / b.worldPos.distanceTo(camera.position);
           try {
             el.contentWindow.postMessage(
               { type: 'sv-scale', scale: s, refScale }, '*');
@@ -1611,11 +1620,14 @@
     // ══════════════════════════════════════════════════════════════════════════
     function animate() {
       requestAnimationFrame(animate);
-      controls.update();
-      stepZoomInertia();                 // apply & decay zoom velocity
-      enforceBillboardMargin();          // push camera out if any billboard too close
-      camera.updateMatrixWorld();
+      controls.update();                 // may set _cameraDirty via 'change' event
+      stepZoomInertia();                 // may set _cameraDirty if zooming
+      enforceBillboardMargin();          // may set _cameraDirty if camera pushed
 
+      if (!_cameraDirty) return;         // nothing changed — skip expensive work
+      _cameraDirty = false;
+
+      camera.updateMatrixWorld();
       webglRenderer.render(scene, camera);
       updateBillboardProjection();
       refreshTickerInput();              // mirror closest billboard's ticker
@@ -1631,8 +1643,8 @@
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       webglRenderer.setSize(w, h);
-      // billboardsLayer is CSS-sized (100%/100%), so no resize call needed;
-      // updateBillboardProjection() will re-project on the next frame.
+      recomputeViewportCache();
+      _cameraDirty = true;
     });
   </script>
 </body>
