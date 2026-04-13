@@ -715,9 +715,28 @@ function applyMode(light) {
   });
 }
 
+// Hide/show thin 1px lines (grid + scale borders) to reduce aliasing flicker
+// when the billboard is scaled small.  Everything else (topbar, footer, volume,
+// price/time labels, candlesticks) stays untouched.
+let _detailVisible = true;
+function applyDetail(show) {
+  if (show === _detailVisible) return;
+  _detailVisible = show;
+  const light = getComputedStyle(document.documentElement)
+                  .getPropertyValue('--bg').trim() === '#ffffff';
+  const grid   = show ? (light ? '#e0e0e0' : '#3a3a50') : 'transparent';
+  const border = show ? (light ? '#000000' : '#ffffff') : 'transparent';
+  chart.applyOptions({
+    grid:            { vertLines: { color: grid }, horzLines: { color: grid } },
+    rightPriceScale: { borderColor: border },
+    timeScale:       { borderColor: border },
+  });
+}
+
 window.addEventListener('message', (ev) => {
   const d = ev && ev.data;
   if (d && d.type === 'sv-mode') applyMode(d.light);
+  if (d && d.type === 'sv-detail') applyDetail(d.show);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

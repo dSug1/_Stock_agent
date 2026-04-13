@@ -318,6 +318,7 @@
       background: var(--bg);
       display: block;
     }
+    .chart-frame.no-detail { border-color: transparent; }
 
     /* Central-object placeholder — stands in for something to be defined later.
        Same pixel dimensions as the billboards so the ring geometry stays
@@ -1157,6 +1158,14 @@
       if (!d || d.type !== 'sv-price-info') return;
       if (ev.source) {
         _priceInfoMap.set(ev.source, d);
+        // Iframe is ready — re-send its detail state (it may have missed the first one)
+        for (let i = 0; i < billboards.length; i++) {
+          const bi = billboards[i];
+          if (bi.interactive && bi.element.contentWindow === ev.source && bi._detail !== undefined) {
+            try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, '*'); } catch (_) {}
+            break;
+          }
+        }
         const b = _closestInteractive;
         if (b && b.element && b.element.contentWindow === ev.source) {
           updatePriceOverlay();
@@ -1821,6 +1830,16 @@
         el.style.top       = sy + 'px';
         el.style.transform = `translate(-50%, -50%) scale(${scale})`;
         el.style.zIndex    = String(rank + 1);
+
+        // Hide thin 1px lines (grid, scale borders, iframe border) when small
+        if (b.interactive) {
+          const show = (IFRAME_HEIGHT_PX * scale) >= _vpH * 0.75;
+          if (b._detail !== show) {
+            b._detail = show;
+            el.classList.toggle('no-detail', !show);
+            try { el.contentWindow.postMessage({ type: 'sv-detail', show }, '*'); } catch (_) {}
+          }
+        }
 
       }
 
