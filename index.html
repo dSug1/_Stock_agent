@@ -1251,6 +1251,7 @@
     const _tickerRowMap     = new Map();   // billboard → {rowEl, sepEl, ticker, company, price, change}
     let _lastTickerListGen  = -1;
     let _lastClosestForList = null;
+    let _height15           = 0;       // cached height of 15 rows at scale=1
 
     window.addEventListener('message', (ev) => {
       const d = ev.data;
@@ -1385,20 +1386,31 @@
         entry.rowEl.classList.toggle('closest', i === 0);
       }
 
-      // Font scale
+      // Font scale — keep scale at 1 for ≤15, shrink beyond
       const n = ring.length;
       const scale = Math.max(0.55, Math.min(1, 15 / n));
-      $tickerList.style.setProperty('--ticker-row-scale', scale);
 
-      // Measure row heights for sizing
-      const rows = $tickerListScroll.querySelectorAll('.tl-row');
-      const seps = $tickerListScroll.querySelectorAll('.tl-sep');
+      // Measure helper (must run BEFORE scale changes to capture current sizes)
       const measureRows = (count) => {
+        const rs = $tickerListScroll.querySelectorAll('.tl-row');
+        const ss = $tickerListScroll.querySelectorAll('.tl-sep');
         let h = 0;
-        for (let i = 0; i < count && i < rows.length; i++) h += rows[i].offsetHeight;
-        for (let i = 0; i < count - 1 && i < seps.length; i++) h += seps[i].offsetHeight;
+        for (let i = 0; i < count && i < rs.length; i++) h += rs[i].offsetHeight;
+        for (let i = 0; i < count - 1 && i < ss.length; i++) h += ss[i].offsetHeight;
         return h;
       };
+
+      // Capture the 15-row height at scale=1 (before we shrink fonts)
+      // We snapshot this once when hitting exactly 15 rows.
+      if (n === 15 && !_chatExpanded) {
+        $tickerList.style.setProperty('--ticker-row-scale', 1);
+        // Force layout so measurements use scale=1
+        $tickerListScroll.offsetHeight;
+        _height15 = measureRows(15);
+      }
+
+      // Now apply the actual font scale
+      $tickerList.style.setProperty('--ticker-row-scale', scale);
 
       // Scrollable when >15 rows
       const scrollable = n > 15;
@@ -1407,13 +1419,13 @@
       if (_chatExpanded || n >= 15) {
         // Full-height mode: stretch to fill viewport (same as expanded)
         document.body.classList.add('chat-expanded');
-        $tickerListScroll.style.maxHeight = '';
-        $tickerListScroll.style.minHeight = '';
-        if (scrollable) {
-          // Lock scroll area to 15-row height so container doesn't shrink
-          const h15 = measureRows(15);
-          $tickerListScroll.style.maxHeight = h15 + 'px';
-          $tickerListScroll.style.minHeight = h15 + 'px';
+        if (scrollable && _height15 > 0) {
+          // Lock scroll area to the captured 15-row height
+          $tickerListScroll.style.maxHeight = _height15 + 'px';
+          $tickerListScroll.style.minHeight = _height15 + 'px';
+        } else {
+          $tickerListScroll.style.maxHeight = '';
+          $tickerListScroll.style.minHeight = '';
         }
       } else {
         // Adaptive mode: container sizes to content
