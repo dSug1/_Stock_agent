@@ -362,9 +362,8 @@
       gap: 8px;
     }
     #overlay-wrapper.visible { display: flex; }
-    /* When chat is open: dock right, full height with equal top/bottom margin */
+    /* When chat is open: dock right, height adapts to row count */
     body.chat-open #overlay-wrapper {
-      top: 16px;
       bottom: 16px;
       right: 16px;
       left: auto;
@@ -447,10 +446,9 @@
     /* Hide giraffe when chat is open */
     body.chat-open #ticker-go { display: none; }
 
-    /* Close button — top-right of overlay, always visible when chat open */
-    #chat-collapse {
+    /* Expand / Close buttons — top-right of overlay, visible when chat open */
+    #chat-expand, #chat-collapse {
       position: absolute;
-      top: 8px;
       right: 8px;
       background: transparent;
       border: 1px solid var(--fg);
@@ -466,7 +464,9 @@
       transition: all .15s;
       z-index: 1;
     }
-    #chat-collapse:hover { border-color: var(--accent); color: var(--accent); }
+    #chat-expand   { top: 8px; }
+    #chat-collapse { top: 34px; }
+    #chat-expand:hover, #chat-collapse:hover { border-color: var(--accent); color: var(--accent); }
 
     /* When chat is open: switch overlay to column layout with chat body */
     body.chat-open #overlay-wrapper {
@@ -479,15 +479,24 @@
       align-items: stretch;
       width: 100%;
       min-width: 0;
-      padding-right: 36px; /* room for close button */
-      flex: 1;
+      padding-right: 36px; /* room for expand/close buttons */
       overflow: hidden;
     }
     body.chat-open .po-row1 { display: none; }
     body.chat-open .po-row2 { display: none; }
     body.chat-open .po-separator { display: none; }
+    body.chat-open #chat-expand   { display: flex; }
     body.chat-open #chat-collapse { display: flex; }
-    body.chat-open #ticker-list { display: flex; }
+    body.chat-open #ticker-list { display: block; }
+
+    /* Expanded mode — full-height container, vertically centered rows */
+    body.chat-open.chat-expanded #overlay-wrapper { top: 16px; }
+    body.chat-open.chat-expanded #price-overlay   { flex: 1; }
+    body.chat-open.chat-expanded #ticker-list {
+      display: flex;
+      flex: 1 1 0;
+      min-height: 0;
+    }
 
     /* ── Ticker list (multi-row billboard list inside chat) ── */
     #ticker-list {
@@ -496,12 +505,11 @@
       justify-content: center;
       position: relative;
       width: 100%;
-      flex: 1 1 0;
-      min-height: 0;
       overflow: hidden;
     }
     #ticker-list-scroll {
       overflow-y: auto;
+      padding-right: 14px;
       margin-right: 30px;
       scrollbar-width: thin;
     }
@@ -640,6 +648,7 @@
         <button id="tl-arrow-down" class="tl-arrow" type="button">&#x25BC;</button>
       </div>
       <div id="chat-body"></div>
+      <button id="chat-expand" type="button" aria-label="Expand chat">+</button>
       <button id="chat-collapse" type="button" aria-label="Close chat">–</button>
     </div>
     <button id="ticker-go" type="button" title="Chat"><img src="/utilities/renderer/logo.png" alt="Chat"></button>
@@ -1380,19 +1389,30 @@
       const scale = Math.max(0.55, Math.min(1, 15 / n));
       $tickerList.style.setProperty('--ticker-row-scale', scale);
 
+      // Measure row heights for sizing
+      const rows = $tickerListScroll.querySelectorAll('.tl-row');
+      const seps = $tickerListScroll.querySelectorAll('.tl-sep');
+      const measureRows = (count) => {
+        let h = 0;
+        for (let i = 0; i < count && i < rows.length; i++) h += rows[i].offsetHeight;
+        for (let i = 0; i < count - 1 && i < seps.length; i++) h += seps[i].offsetHeight;
+        return h;
+      };
+
       // Cap visible rows at 15; enable scroll + arrows beyond that
       const scrollable = n > 15;
       $tickerListScroll.classList.toggle('scrollable', scrollable);
-      if (scrollable) {
-        // Measure the height of the first 15 rows + 14 separators to set max-height
-        const rows = $tickerListScroll.querySelectorAll('.tl-row');
-        const seps = $tickerListScroll.querySelectorAll('.tl-sep');
-        let h = 0;
-        for (let i = 0; i < 15 && i < rows.length; i++) h += rows[i].offsetHeight;
-        for (let i = 0; i < 14 && i < seps.length; i++) h += seps[i].offsetHeight;
-        $tickerListScroll.style.maxHeight = h + 'px';
+      if (scrollable && !_chatExpanded) {
+        $tickerListScroll.style.maxHeight = measureRows(15) + 'px';
       } else {
         $tickerListScroll.style.maxHeight = '';
+      }
+
+      // Min-height = 3 rows (adaptive mode only)
+      if (!_chatExpanded && n < 3) {
+        $tickerListScroll.style.minHeight = measureRows(3) + 'px';
+      } else {
+        $tickerListScroll.style.minHeight = '';
       }
     }
 
@@ -1577,12 +1597,21 @@
     });
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  CHAT DIALOG — giraffe opens chat, close button (–) closes it
+    //  CHAT DIALOG — giraffe opens, +/– expand/close
     // ══════════════════════════════════════════════════════════════════════════
-    const $chatCollapse  = document.getElementById('chat-collapse');
+    const $chatCollapse = document.getElementById('chat-collapse');
+    const $chatExpand   = document.getElementById('chat-expand');
+    let _chatExpanded   = false;
 
     document.getElementById('ticker-go').addEventListener('click', () => {
       document.body.classList.toggle('chat-open');
+      _cameraDirty = true;
+    });
+    $chatExpand.addEventListener('click', () => {
+      _chatExpanded = !_chatExpanded;
+      document.body.classList.toggle('chat-expanded', _chatExpanded);
+      $chatExpand.textContent = _chatExpanded ? '−' : '+';
+      _lastTickerListGen = -1;   // force rebuild to recompute sizing
       _cameraDirty = true;
     });
     $chatCollapse.addEventListener('click', () => {
