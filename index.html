@@ -686,7 +686,7 @@
     //  to CIRCLE_COUNT blank slots.
     // ══════════════════════════════════════════════════════════════════════════
     const PERIODS = ['1d','5d','1mo','3mo','6mo','1y','2y','5y','max'];
-    const DEFAULT_PERIOD = '1mo';
+    const DEFAULT_PERIOD = '1d';
 
     const _cachedSession = lsGetJSON(LS_SESSION_KEY);
     const _urlTickersRaw = _params.get('tickers');     // null | "" | "A,B,C"
@@ -715,9 +715,9 @@
     let initialPeriod = DEFAULT_PERIOD;
     if (_urlPeriodRaw && PERIODS.includes(_urlPeriodRaw)) {
       initialPeriod = _urlPeriodRaw;
-    } else if (_cachedSession && PERIODS.includes(_cachedSession.period)) {
-      initialPeriod = _cachedSession.period;
     }
+    // Cached session period intentionally ignored — always start at DEFAULT_PERIOD
+    // unless overridden by URL param.
 
     // Snapshot the current session state to localStorage. Called after every
     // user-driven mutation (period change, ticker update, ring +/-) AND once

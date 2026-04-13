@@ -498,7 +498,7 @@ def _open_browser(url: str) -> None:
 
 # Hardcoded tickers and period used when the user picks Debug mode at startup.
 DEBUG_TICKERS = ["TCRX", "BCYC", "TTE", "AAPL", "GOOGL", "MCD"]
-DEBUG_PERIOD  = "3mo"
+DEBUG_PERIOD  = "1d"
 
 
 def _prefetch(tickers: list[str], period: str) -> None:
@@ -551,9 +551,9 @@ def _prompt_and_prefetch() -> tuple[list[str], str]:
     print()
 
     raw_tickers = input("  Tickers (comma-separated): ").strip()
-    raw_period  = input("  Period [1d 5d 1mo 3mo 6mo 1y 2y 5y max] (↵=1mo): ").strip()
+    raw_period  = input("  Period [1d 5d 1mo 3mo 6mo 1y 2y 5y max] (↵=1d): ").strip()
 
-    period = raw_period if raw_period in VALID_PERIODS else "1mo"
+    period = raw_period if raw_period in VALID_PERIODS else "1d"
 
     tickers: list[str] = []
     if raw_tickers:
