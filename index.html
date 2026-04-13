@@ -990,6 +990,10 @@
       iframe.style.height = IFRAME_HEIGHT_PX + 'px';
       iframe.setAttribute('allow', 'fullscreen');
       iframe.setAttribute('loading', 'eager');
+      iframe.addEventListener('load', () => {
+        try { iframe.contentWindow.postMessage({ type: 'sv-mode', light: isLightMode() }, '*'); } catch (_) {}
+        try { iframe.contentWindow.postMessage({ type: 'sv-detail', show: false }, '*'); } catch (_) {}
+      }, { once: true });
       return iframe;
     }
 
@@ -1262,6 +1266,7 @@
         for (let i = 0; i < billboards.length; i++) {
           const bi = billboards[i];
           if (bi.interactive && bi.element.contentWindow === ev.source) {
+            try { ev.source.postMessage({ type: 'sv-mode', light: isLightMode() }, '*'); } catch (_) {}
             if (bi._detail !== undefined) {
               try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, '*'); } catch (_) {}
             }
@@ -1846,6 +1851,10 @@
       iframe.setAttribute('allow', 'fullscreen');
       iframe.setAttribute('loading', 'eager');
       attachFocusSanitizer(iframe);
+      iframe.addEventListener('load', () => {
+        try { iframe.contentWindow.postMessage({ type: 'sv-mode', light: isLightMode() }, '*'); } catch (_) {}
+        try { iframe.contentWindow.postMessage({ type: 'sv-detail', show: false }, '*'); } catch (_) {}
+      }, { once: true });
       iframe.style.display = 'none';  // hidden until the next projection frame
       billboardsLayer.appendChild(iframe);
       const b = {
