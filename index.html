@@ -481,13 +481,83 @@
       min-width: 0;
       padding-right: 44px; /* room for close button */
       flex: 1;
+      overflow: hidden;
     }
-    body.chat-open .po-row1 .po-price,
-    body.chat-open .po-row1 .po-change,
-    body.chat-open .po-row1 .po-status { display: none; }
-    body.chat-open .po-row2 { display: flex; }
-    body.chat-open .po-separator { display: block; }
+    body.chat-open .po-row1 { display: none; }
+    body.chat-open .po-row2 { display: none; }
+    body.chat-open .po-separator { display: none; }
     body.chat-open #chat-collapse { display: flex; }
+    body.chat-open #ticker-list { display: block; }
+
+    /* ── Ticker list (multi-row billboard list inside chat) ── */
+    #ticker-list {
+      display: none;
+      position: relative;
+      width: 100%;
+      overflow: hidden;
+    }
+    #ticker-list-scroll {
+      overflow-y: auto;
+      scrollbar-width: thin;
+    }
+    .tl-row {
+      display: flex;
+      align-items: center;
+      gap: calc(8px * var(--ticker-row-scale, 1));
+      padding: calc(4px * var(--ticker-row-scale, 1)) 0;
+      white-space: nowrap;
+    }
+    .tl-row.closest .tl-ticker { color: var(--accent, #58a6ff); }
+    .tl-ticker {
+      font-size: calc(14px * var(--ticker-row-scale, 1));
+      font-weight: 700;
+      color: var(--text);
+      min-width: calc(52px * var(--ticker-row-scale, 1));
+    }
+    .tl-company {
+      font-size: calc(12px * var(--ticker-row-scale, 1));
+      color: var(--text);
+      opacity: 0.6;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+      min-width: 0;
+    }
+    .tl-price {
+      font-size: calc(14px * var(--ticker-row-scale, 1));
+      font-weight: 700;
+    }
+    .tl-change {
+      font-size: calc(12px * var(--ticker-row-scale, 1));
+      font-weight: 600;
+    }
+    .tl-sep {
+      border: none;
+      border-top: 1px solid var(--fg);
+      margin: 0;
+      width: 100%;
+    }
+    .tl-arrow {
+      display: none;
+      position: absolute;
+      right: 4px;
+      background: var(--bg);
+      border: 1px solid var(--fg);
+      border-radius: 4px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 10px;
+      width: 22px;
+      height: 22px;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+      opacity: 0.7;
+    }
+    .tl-arrow:hover { opacity: 1; }
+    #tl-arrow-up   { top: 0; }
+    #tl-arrow-down { bottom: 0; }
+    #ticker-list-scroll.scrollable ~ .tl-arrow { display: flex; }
   </style>
 
   <!-- Three.js ES modules pinned to 0.160.0.
@@ -559,6 +629,11 @@
         <span class="po-status closed"></span>
       </div>
       <hr class="po-separator">
+      <div id="ticker-list">
+        <div id="ticker-list-scroll"></div>
+        <button id="tl-arrow-up" class="tl-arrow" type="button">&#x25B2;</button>
+        <button id="tl-arrow-down" class="tl-arrow" type="button">&#x25BC;</button>
+      </div>
       <div id="chat-body"></div>
       <button id="chat-collapse" type="button" aria-label="Close chat">–</button>
     </div>
@@ -1153,6 +1228,15 @@
     const $poChanges    = $priceOverlay.querySelectorAll('.po-change');
     const $poStatuses   = $priceOverlay.querySelectorAll('.po-status');
 
+    // ── Ticker list (multi-row) state ──
+    const $tickerList       = document.getElementById('ticker-list');
+    const $tickerListScroll = document.getElementById('ticker-list-scroll');
+    const $tlArrowUp        = document.getElementById('tl-arrow-up');
+    const $tlArrowDown      = document.getElementById('tl-arrow-down');
+    const _tickerRowMap     = new Map();   // billboard → {rowEl, sepEl, ticker, company, price, change}
+    let _lastTickerListGen  = -1;
+    let _lastClosestForList = null;
+
     window.addEventListener('message', (ev) => {
       const d = ev.data;
       if (!d || d.type !== 'sv-price-info') return;
@@ -1178,24 +1262,168 @@
 
     function updatePriceOverlay() {
       const b = _closestInteractive;
-      if (!b || !b.element || b.element.tagName !== 'IFRAME') {
-        $overlayWrapper.classList.remove('visible');
-        return;
+      let hasClosest = false;
+      if (b && b.element && b.element.tagName === 'IFRAME') {
+        let info;
+        try { info = _priceInfoMap.get(b.element.contentWindow); } catch (_) {}
+        if (info && info.ticker) {
+          hasClosest = true;
+          $poTicker.textContent  = info.ticker;
+          $poCompany.textContent = info.company;
+          const color = info.positive ? '#3fb950' : '#f85149';
+          $poPrices.forEach(el  => { el.textContent = info.price;      el.style.color = color; });
+          $poChanges.forEach(el => { el.textContent = info.change;     el.style.color = color; });
+          $poStatuses.forEach(el => { el.textContent = info.statusText; el.className = 'po-status ' + info.status; });
+          $overlayWrapper.classList.add('visible');
+          syncGiraffeSize();
+        }
       }
-      let info;
-      try { info = _priceInfoMap.get(b.element.contentWindow); } catch (_) {}
-      if (!info || !info.ticker) {
+      if (!hasClosest && !document.body.classList.contains('chat-open')) {
         $overlayWrapper.classList.remove('visible');
-        return;
+      } else if (document.body.classList.contains('chat-open')) {
+        $overlayWrapper.classList.add('visible');
       }
-      $poTicker.textContent  = info.ticker;
-      $poCompany.textContent = info.company;
-      const color = info.positive ? '#3fb950' : '#f85149';
-      $poPrices.forEach(el  => { el.textContent = info.price;      el.style.color = color; });
-      $poChanges.forEach(el => { el.textContent = info.change;     el.style.color = color; });
-      $poStatuses.forEach(el => { el.textContent = info.statusText; el.className = 'po-status ' + info.status; });
-      $overlayWrapper.classList.add('visible');
-      syncGiraffeSize();
+
+      // ── Multi-row ticker list (when chat open) ──
+      if (document.body.classList.contains('chat-open')) {
+        const ring = getRingBillboards();
+        const gen  = ring.length;
+        if (gen !== _lastTickerListGen || b !== _lastClosestForList) {
+          buildTickerListRows(ring, b);
+          _lastTickerListGen  = gen;
+          _lastClosestForList = b;
+        }
+        updateTickerListData();
+      }
+    }
+
+    /**
+     * Rebuild ticker-list DOM rows: one per ring billboard, sorted by ring
+     * angle with the closest billboard rotated to index 0.
+     */
+    function buildTickerListRows(ring, closest) {
+      // Compute angle of each ring billboard relative to ringCenter
+      const withAngle = ring.map((b, idx) => {
+        const a = Math.atan2(
+          b.worldPos.z - ringCenter.z,
+          b.worldPos.x - ringCenter.x,
+        );
+        return { b, a, idx };
+      });
+
+      // Closest billboard's angle
+      let closestAngle = 0;
+      if (closest) {
+        closestAngle = Math.atan2(
+          closest.worldPos.z - ringCenter.z,
+          closest.worldPos.x - ringCenter.x,
+        );
+      }
+
+      // Sort by angular offset from closest (ascending, clockwise)
+      const TWO_PI = Math.PI * 2;
+      withAngle.sort((a, b) => {
+        const da = ((a.a - closestAngle) % TWO_PI + TWO_PI) % TWO_PI;
+        const db = ((b.a - closestAngle) % TWO_PI + TWO_PI) % TWO_PI;
+        if (Math.abs(da - db) < 1e-9) return a.idx - b.idx;  // tiebreaker
+        return da - db;
+      });
+
+      // Mark which billboards are still present
+      const currentSet = new Set(ring);
+
+      // Remove stale entries
+      for (const [bb, entry] of _tickerRowMap) {
+        if (!currentSet.has(bb)) {
+          entry.rowEl.remove();
+          entry.sepEl.remove();
+          _tickerRowMap.delete(bb);
+        }
+      }
+
+      // Ensure each billboard has a row; reorder via appendChild
+      for (let i = 0; i < withAngle.length; i++) {
+        const bb = withAngle[i].b;
+        let entry = _tickerRowMap.get(bb);
+        if (!entry) {
+          const rowEl = document.createElement('div');
+          rowEl.className = 'tl-row';
+          const tTicker  = document.createElement('span'); tTicker.className  = 'tl-ticker';
+          const tCompany = document.createElement('span'); tCompany.className = 'tl-company';
+          const tPrice   = document.createElement('span'); tPrice.className   = 'tl-price';
+          const tChange  = document.createElement('span'); tChange.className  = 'tl-change';
+          rowEl.append(tTicker, tCompany, tPrice, tChange);
+          const sepEl = document.createElement('hr');
+          sepEl.className = 'tl-sep';
+          entry = { rowEl, sepEl, ticker: tTicker, company: tCompany, price: tPrice, change: tChange, _lastTicker: '', _lastPrice: '', _lastChange: '' };
+          _tickerRowMap.set(bb, entry);
+        }
+        // appendChild moves existing nodes — achieves reorder
+        $tickerListScroll.appendChild(entry.rowEl);
+        // separator after every row except the last
+        if (i < withAngle.length - 1) {
+          $tickerListScroll.appendChild(entry.sepEl);
+        } else {
+          entry.sepEl.remove();  // remove trailing separator
+        }
+        // Mark closest
+        entry.rowEl.classList.toggle('closest', i === 0);
+      }
+
+      // Font scale
+      const n = ring.length;
+      const scale = Math.max(0.55, Math.min(1, 15 / n));
+      $tickerList.style.setProperty('--ticker-row-scale', scale);
+
+      // Cap visible rows at 15; enable scroll + arrows beyond that
+      const scrollable = n > 15;
+      $tickerListScroll.classList.toggle('scrollable', scrollable);
+      if (scrollable) {
+        // Measure the height of the first 15 rows + 14 separators to set max-height
+        const rows = $tickerListScroll.querySelectorAll('.tl-row');
+        const seps = $tickerListScroll.querySelectorAll('.tl-sep');
+        let h = 0;
+        for (let i = 0; i < 15 && i < rows.length; i++) h += rows[i].offsetHeight;
+        for (let i = 0; i < 14 && i < seps.length; i++) h += seps[i].offsetHeight;
+        $tickerListScroll.style.maxHeight = h + 'px';
+      } else {
+        $tickerListScroll.style.maxHeight = '';
+      }
+    }
+
+    /**
+     * Update text content of every ticker-list row from _priceInfoMap.
+     * Uses dirty checks to minimise DOM writes on the hot path.
+     */
+    function updateTickerListData() {
+      for (const [bb, entry] of _tickerRowMap) {
+        let info;
+        try { info = _priceInfoMap.get(bb.element.contentWindow); } catch (_) {}
+        const ticker  = info ? info.ticker  : (bb.ticker || '');
+        const company = info ? info.company : '';
+        const price   = info ? info.price   : '...';
+        const change  = info ? info.change  : '';
+        const color   = info ? (info.positive ? '#3fb950' : '#f85149') : 'var(--text)';
+
+        if (entry._lastTicker !== ticker) {
+          entry.ticker.textContent = ticker;
+          entry._lastTicker = ticker;
+        }
+        if (entry._lastCompany !== company) {
+          entry.company.textContent = company;
+          entry._lastCompany = company;
+        }
+        if (entry._lastPrice !== price) {
+          entry.price.textContent = price;
+          entry._lastPrice = price;
+        }
+        if (entry._lastChange !== change) {
+          entry.change.textContent = change;
+          entry._lastChange = change;
+        }
+        entry.price.style.color  = color;
+        entry.change.style.color = color;
+      }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1350,9 +1578,19 @@
 
     document.getElementById('ticker-go').addEventListener('click', () => {
       document.body.classList.toggle('chat-open');
+      _cameraDirty = true;
     });
     $chatCollapse.addEventListener('click', () => {
       document.body.classList.remove('chat-open');
+      _lastTickerListGen = -1;  // force rebuild on next open
+    });
+
+    // Ticker-list scroll arrows
+    $tlArrowUp.addEventListener('click', () => {
+      $tickerListScroll.scrollBy({ top: -60, behavior: 'smooth' });
+    });
+    $tlArrowDown.addEventListener('click', () => {
+      $tickerListScroll.scrollBy({ top: 60, behavior: 'smooth' });
     });
 
     // ══════════════════════════════════════════════════════════════════════════
