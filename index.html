@@ -362,9 +362,10 @@
       gap: 8px;
     }
     #overlay-wrapper.visible { display: flex; }
-    /* When chat is open: dock right, height adapts to row count */
+    /* When chat is open: dock top-right, height adapts to row count */
     body.chat-open #overlay-wrapper {
-      bottom: 16px;
+      top: 16px;
+      bottom: auto;
       right: 16px;
       left: auto;
       transform: none;
@@ -490,7 +491,7 @@
     body.chat-open #ticker-list { display: block; }
 
     /* Expanded mode — full-height container, vertically centered rows */
-    body.chat-open.chat-expanded #overlay-wrapper { top: 16px; }
+    body.chat-open.chat-expanded #overlay-wrapper { top: 16px; bottom: 16px; }
     body.chat-open.chat-expanded #price-overlay   { flex: 1; }
     body.chat-open.chat-expanded #ticker-list {
       display: flex;
@@ -1399,20 +1400,27 @@
         return h;
       };
 
-      // Cap visible rows at 15; enable scroll + arrows beyond that
+      // Scrollable when >15 rows
       const scrollable = n > 15;
       $tickerListScroll.classList.toggle('scrollable', scrollable);
-      if (scrollable && !_chatExpanded) {
-        $tickerListScroll.style.maxHeight = measureRows(15) + 'px';
-      } else {
-        $tickerListScroll.style.maxHeight = '';
-      }
 
-      // Min-height = 3 rows (adaptive mode only)
-      if (!_chatExpanded && n < 3) {
-        $tickerListScroll.style.minHeight = measureRows(3) + 'px';
-      } else {
+      if (_chatExpanded || n >= 15) {
+        // Full-height mode: stretch to fill viewport (same as expanded)
+        document.body.classList.add('chat-expanded');
+        $tickerListScroll.style.maxHeight = '';
         $tickerListScroll.style.minHeight = '';
+        if (scrollable) {
+          // Lock scroll area to 15-row height so container doesn't shrink
+          const h15 = measureRows(15);
+          $tickerListScroll.style.maxHeight = h15 + 'px';
+          $tickerListScroll.style.minHeight = h15 + 'px';
+        }
+      } else {
+        // Adaptive mode: container sizes to content
+        if (!_chatExpanded) document.body.classList.remove('chat-expanded');
+        $tickerListScroll.style.maxHeight = '';
+        // Min-height = 3 rows
+        $tickerListScroll.style.minHeight = (n < 3) ? measureRows(3) + 'px' : '';
       }
     }
 
