@@ -1,0 +1,44 @@
+- License:
+if in the future I deploy this project as an app on the public internet, do I have to pay royalties or license fees to yahoo finance or finviz for using their data or their chart template, or any other provider you are using to parse the data ? If I make a profit from the app through subscription or advertisement ? If I do not make a profit from the app ?
+I'm not a lawyer, so this is informational, not legal advice. Here's the situation for each data source in your project:
+
+Yahoo Finance (yfinance)
+
+Yahoo Finance does not offer a public API with clear commercial terms. The yfinance Python library is an unofficial scraper — Yahoo has no official agreement with it.
+Their Terms of Service prohibit redistribution and commercial use of their data.
+Profit or not: technically you're violating their ToS by serving their data to third parties through your app. Many small projects do this, but Yahoo can block you or take legal action at any time.
+For legitimate commercial use, you'd need a licensed market data provider (e.g., Polygon.io, Alpha Vantage, Twelve Data, IEX Cloud — all have paid tiers with redistribution rights).
+Finviz
+
+I don't see Finviz being used in your current code. If you add it later, same principle: their ToS prohibit scraping and redistribution.
+TradingView Lightweight Charts
+
+Licensed under Apache 2.0 — free for commercial use, no royalties. You're fine here.
+Three.js
+
+Licensed under MIT — free for commercial use, no royalties. You're fine here.
+Summary:
+
+Source	Free use?	Commercial use?
+Three.js	Yes (MIT)	Yes
+TradingView Lightweight Charts	Yes (Apache 2.0)	Yes
+Yahoo Finance data via yfinance	Grey area	No — violates ToS
+If you plan to deploy publicly, the main risk is Yahoo Finance data. You should switch to a licensed data provider with explicit redistribution rights. Most offer free tiers for non-commercial/low-volume use and affordable paid tiers for commercial use.
+
+
+If you want to go legit, the cheapest options for using financial data with redistribution rights:
+
+Polygon.io — free tier (5 API calls/min), paid from $29/mo
+Twelve Data — free tier (800 calls/day), paid from $29/mo
+Alpha Vantage — free tier (25 calls/day), paid from $50/mo
+These give you a proper API with explicit permission to display the data to your users.
+
+Realistic alternatives with free tiers:
+
+Provider	Free tier	Paid tier	Real-time?	Redistribution OK?
+Polygon.io	5 calls/min, delayed	From $29/mo	Yes (paid)	Yes
+Twelve Data	800 calls/day, 8 symbols/min	From $29/mo	Yes (paid)	Yes
+Alpha Vantage	25 calls/day	From $50/mo	Delayed (15 min)	Yes
+Finnhub	60 calls/min, US stocks	From $49/mo	Yes (free for US)	Yes
+IEX Cloud	Pay-per-use (credits)	~$9/mo starter	Delayed free, real-time paid	Yes
+For your project, Polygon.io or Twelve Data would be the easiest swap — they return OHLCV candlestick data in a format very similar to what yfinance gives you, so the migration in 2_stock_visualizer.py would be straightforward. Both explicitly allow you to display the data to end users.

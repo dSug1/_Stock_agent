@@ -525,7 +525,7 @@
         <button id="ticker-go-btn" class="menu-btn" type="button">Go</button>
       </div>
     </div>
-    <div class="title">Display <button id="theme-toggle" class="menu-btn" type="button">Dark</button></div>
+    <div class="title">Display <button id="theme-toggle" class="menu-btn" type="button">Dark</button> <button id="charttype-toggle" class="menu-btn" type="button">Candle</button></div>
     <div class="title">Camera <button id="reset-view" class="menu-btn" type="button">Reset view</button></div>
     <label>
       Orbit speed
@@ -1158,11 +1158,14 @@
       if (!d || d.type !== 'sv-price-info') return;
       if (ev.source) {
         _priceInfoMap.set(ev.source, d);
-        // Iframe is ready — re-send its detail state (it may have missed the first one)
+        // Iframe is ready — re-send state it may have missed during load
         for (let i = 0; i < billboards.length; i++) {
           const bi = billboards[i];
-          if (bi.interactive && bi.element.contentWindow === ev.source && bi._detail !== undefined) {
-            try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, '*'); } catch (_) {}
+          if (bi.interactive && bi.element.contentWindow === ev.source) {
+            if (bi._detail !== undefined) {
+              try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, '*'); } catch (_) {}
+            }
+            try { ev.source.postMessage({ type: 'sv-charttype', chartType: _chartType }, '*'); } catch (_) {}
             break;
           }
         }
@@ -1229,6 +1232,43 @@
     // If OS theme changes and no override is active, update button label.
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
       if (!_modeOverride) updateThemeToggleLabel();
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  CHART TYPE TOGGLE  (Candle → Line → Area → Candle …)
+    // ══════════════════════════════════════════════════════════════════════════
+    const CHART_TYPES = ['candle', 'line', 'area'];
+    const CHART_TYPE_LABELS = { candle: 'Candle', line: 'Line', area: 'Area' };
+    const LS_CHART_TYPE_KEY = 'sv.chartType';
+    let _chartType = (function() {
+      try { const v = localStorage.getItem(LS_CHART_TYPE_KEY); return CHART_TYPES.includes(v) ? v : 'candle'; }
+      catch(_) { return 'candle'; }
+    })();
+
+    const $chartTypeToggle = document.getElementById('charttype-toggle');
+
+    function broadcastChartType() {
+      if (typeof billboards === 'undefined') return;
+      for (const b of billboards) {
+        if (!b || !b.interactive) continue;
+        const el = b.element;
+        if (!el || el.tagName !== 'IFRAME') continue;
+        try { el.contentWindow.postMessage({ type: 'sv-charttype', chartType: _chartType }, '*'); }
+        catch (_) {}
+      }
+    }
+
+    function updateChartTypeLabel() {
+      $chartTypeToggle.textContent = CHART_TYPE_LABELS[_chartType];
+    }
+    updateChartTypeLabel();
+
+    $chartTypeToggle.addEventListener('click', () => {
+      const idx = CHART_TYPES.indexOf(_chartType);
+      _chartType = CHART_TYPES[(idx + 1) % CHART_TYPES.length];
+      lsSet(LS_CHART_TYPE_KEY, _chartType);
+      updateChartTypeLabel();
+      broadcastChartType();
     });
 
     // ══════════════════════════════════════════════════════════════════════════

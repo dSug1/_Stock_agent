@@ -391,6 +391,35 @@ const candleSeries = chart.addCandlestickSeries({
   wickDownColor:    "#f85149",
 });
 
+// Line series (close prices only — hidden by default)
+const lineSeries = chart.addLineSeries({
+  color:            '#58a6ff',
+  lineWidth:        2,
+  priceLineVisible: false,
+  visible:          false,
+});
+
+// Area series (line + gradient fill — hidden by default)
+const areaSeries = chart.addAreaSeries({
+  lineColor:        '#58a6ff',
+  topColor:         'rgba(88,166,255,0.28)',
+  bottomColor:      'rgba(88,166,255,0.02)',
+  lineWidth:        2,
+  priceLineVisible: false,
+  visible:          false,
+});
+
+// Current chart type — switched via sv-charttype message from parent
+let _chartType = 'candle';
+
+function applyChartType(type) {
+  if (!['candle','line','area'].includes(type)) return;
+  _chartType = type;
+  candleSeries.applyOptions({ visible: type === 'candle' });
+  lineSeries.applyOptions({   visible: type === 'line' });
+  areaSeries.applyOptions({   visible: type === 'area' });
+}
+
 // Shared state — read by syncChartLines, written by applyMode / applyDetail / OS media query
 let _isLight = _light;
 let _detailVisible = true;
@@ -405,6 +434,8 @@ function syncChartLines() {
     timeScale:       { borderColor: border },
   });
   candleSeries.applyOptions({ priceLineVisible: _detailVisible });
+  lineSeries.applyOptions({   priceLineVisible: _detailVisible });
+  areaSeries.applyOptions({   priceLineVisible: _detailVisible });
   document.getElementById('topbar').style.borderBottomColor = _detailVisible ? '' : 'transparent';
   document.getElementById('footer').style.borderTopColor    = _detailVisible ? '' : 'transparent';
 }
@@ -605,6 +636,10 @@ function renderChart(data) {
   }));
 
   candleSeries.setData(candles);
+  // Line/area series use close prices only
+  const lineData = records.map(r => ({ time: r.t, value: r.c }));
+  lineSeries.setData(lineData);
+  areaSeries.setData(lineData);
   volumeSeries.setData(volumes);
 
   // Suppress the zoom-subscription while we programmatically fit the view
@@ -626,6 +661,17 @@ function renderChart(data) {
     $priceLabel.style.color   = color;
     $changeLabel.textContent  = `${chg >= 0 ? "+" : ""}${chg.toFixed(2)} (${chgPct}%)`;
     $changeLabel.style.color  = color;
+    // Tint line/area series to match price direction
+    const rgba = (hex, a) => {
+      const n = parseInt(hex.slice(1), 16);
+      return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+    };
+    lineSeries.applyOptions({ color: color });
+    areaSeries.applyOptions({
+      lineColor:   color,
+      topColor:    rgba(color, 0.28),
+      bottomColor: rgba(color, 0.02),
+    });
     document.title            = `${meta.ticker} ${last.c.toFixed(2)} — Stock Visualizer`;
   }
 
@@ -740,6 +786,7 @@ window.addEventListener('message', (ev) => {
   const d = ev && ev.data;
   if (d && d.type === 'sv-mode') applyMode(d.light);
   if (d && d.type === 'sv-detail') applyDetail(d.show);
+  if (d && d.type === 'sv-charttype') applyChartType(d.chartType);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
