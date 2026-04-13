@@ -436,8 +436,10 @@ function syncChartLines() {
   candleSeries.applyOptions({ priceLineVisible: _detailVisible });
   lineSeries.applyOptions({   priceLineVisible: _detailVisible });
   areaSeries.applyOptions({   priceLineVisible: _detailVisible });
-  document.getElementById('topbar').style.borderBottomColor = _detailVisible ? '' : 'transparent';
-  document.getElementById('footer').style.borderTopColor    = _detailVisible ? '' : 'transparent';
+  document.getElementById('topbar').style.borderBottomColor  = _detailVisible ? '' : 'transparent';
+  document.getElementById('footer').style.borderTopColor     = _detailVisible ? '' : 'transparent';
+  document.getElementById('status-badge').style.borderColor  = _detailVisible ? '' : 'transparent';
+  document.getElementById('ohlcv-tooltip').style.borderColor = _detailVisible ? '' : 'transparent';
 }
 
 // Live-update chart colors when OS theme changes at runtime
