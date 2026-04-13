@@ -1244,7 +1244,9 @@
     // Orbit-speed slider (lives inside the menu panel).
     const $speed    = document.getElementById('orbit-speed');
     const $speedVal = document.getElementById('orbit-speed-val');
+    let _userRotateSpeed = 1.0;           // user's chosen base speed (for snap magnet)
     function applyOrbitSpeed(v, persist) {
+      _userRotateSpeed        = v;
       controls.rotateSpeed    = v;
       $speed.value            = String(v);
       $speedVal.textContent   = v.toFixed(2);
@@ -1846,10 +1848,56 @@
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    //  SNAP MAGNET — slow the orbit when the closest billboard is near the
+    //  horizontal center and large enough to read.
+    //
+    //  Works by modulating controls.rotateSpeed BEFORE controls.update() so
+    //  OrbitControls itself applies the damping naturally — no camera.position
+    //  hacks that fight its internal spherical state.
+    //
+    //  rotateSpeed is lerped from _userRotateSpeed (edge of zone) down to
+    //  SNAP_MIN_FACTOR × _userRotateSpeed (zone center). Outside the zone or
+    //  when the billboard is small, full speed is restored.
+    // ══════════════════════════════════════════════════════════════════════════
+    const SNAP_NDC_ZONE    = 0.55;  // snap engages when |ndc.x| < this
+    const SNAP_MIN_FACTOR  = 0.12;  // at zone center, speed = 12% of user speed
+    const SNAP_SIZE_THRESH = 0.30;  // billboard apparent height ≥ 30% of viewport
+    const _snapNdc         = new THREE.Vector3();
+
+    function stepSnapMagnet() {
+      controls.rotateSpeed = _userRotateSpeed;         // default: full speed
+
+      if (!_closestInteractive) return;
+      const b = _closestInteractive;
+      const d = b.worldPos.distanceTo(camera.position);
+      if (d < 1e-6) return;
+
+      // Size gate: billboard must be large enough on screen
+      const apparentH = IFRAME_HEIGHT_PX * _scaleNumerator / d;
+      if (apparentH < _vpH * SNAP_SIZE_THRESH) return;
+
+      // Project billboard to get horizontal screen offset (needs fresh matrices)
+      camera.updateMatrixWorld();
+      _snapNdc.copy(b.worldPos).project(camera);
+      // When chat is open the right 1/3 is occluded; shift the zone center
+      // to the middle of the visible left 2/3 (ndc.x = -1/3).
+      const chatOpen = document.body.classList.contains('chat-open');
+      const zoneCenter = chatOpen ? -1 / 3 : 0;
+      const offsetX = Math.abs(_snapNdc.x - zoneCenter);
+      if (offsetX >= SNAP_NDC_ZONE) return;
+
+      // proximity: 1 at zone center, 0 at zone edge
+      const proximity = 1 - offsetX / SNAP_NDC_ZONE;
+      // Lerp: full speed at edge → SNAP_MIN_FACTOR × speed at center
+      controls.rotateSpeed = _userRotateSpeed * (1 - proximity * (1 - SNAP_MIN_FACTOR));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     //  ANIMATION LOOP
     // ══════════════════════════════════════════════════════════════════════════
     function animate() {
       requestAnimationFrame(animate);
+      stepSnapMagnet();                  // modulate rotateSpeed before orbit step
       controls.update();                 // may set _cameraDirty via 'change' event
       stepZoomInertia();                 // may set _cameraDirty if zooming
       enforceBillboardMargin();          // may set _cameraDirty if camera pushed
