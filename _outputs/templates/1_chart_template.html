@@ -391,17 +391,32 @@ const candleSeries = chart.addCandlestickSeries({
   wickDownColor:    "#f85149",
 });
 
+// Shared state — read by syncChartLines, written by applyMode / applyDetail / OS media query
+let _isLight = _light;
+let _detailVisible = true;
+
+// Single source of truth for grid + border colors, respects both theme and detail state
+function syncChartLines() {
+  const grid   = _detailVisible ? (_isLight ? '#e0e0e0' : '#3a3a50') : 'transparent';
+  const border = _detailVisible ? (_isLight ? '#000000' : '#ffffff') : 'transparent';
+  chart.applyOptions({
+    grid:            { vertLines: { color: grid }, horzLines: { color: grid } },
+    rightPriceScale: { borderColor: border },
+    timeScale:       { borderColor: border },
+  });
+  candleSeries.applyOptions({ priceLineVisible: _detailVisible });
+  document.getElementById('topbar').style.borderBottomColor = _detailVisible ? '' : 'transparent';
+  document.getElementById('footer').style.borderTopColor    = _detailVisible ? '' : 'transparent';
+}
+
 // Live-update chart colors when OS theme changes at runtime
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
-  const bg = e.matches ? '#ffffff' : '#000000';
-  const fg = e.matches ? '#000000' : '#ffffff';
-  const grid = e.matches ? '#e0e0e0' : '#3a3a50';
+  _isLight = e.matches;
+  const bg = _isLight ? '#ffffff' : '#000000';
   chart.applyOptions({
     layout: { background: { color: bg }, textColor: '#8b949e' },
-    grid: { vertLines: { color: grid }, horzLines: { color: grid } },
-    rightPriceScale: { borderColor: fg },
-    timeScale: { borderColor: fg },
   });
+  syncChartLines();
 });
 
 // Volume histogram on a separate (shorter) pane — achieved via price scale margin
@@ -700,37 +715,25 @@ function showError(msg) {
 
 
 function applyMode(light) {
+  _isLight = light;
   const bg = light ? '#ffffff' : '#000000';
-  const fg = light ? '#000000' : '#ffffff';
-  const grid = light ? '#e0e0e0' : '#3a3a50';
   const root = document.documentElement;
   root.style.setProperty('--bg', bg);
-  root.style.setProperty('--fg', fg);
+  root.style.setProperty('--fg', light ? '#000000' : '#ffffff');
   root.style.setProperty('--txt', light ? '#000000' : '#ffffff');
   chart.applyOptions({
     layout: { background: { color: bg }, textColor: '#8b949e' },
-    grid: { vertLines: { color: grid }, horzLines: { color: grid } },
-    rightPriceScale: { borderColor: fg },
-    timeScale: { borderColor: fg },
   });
+  syncChartLines();
 }
 
 // Hide/show thin 1px lines (grid + scale borders) to reduce aliasing flicker
 // when the billboard is scaled small.  Everything else (topbar, footer, volume,
 // price/time labels, candlesticks) stays untouched.
-let _detailVisible = true;
 function applyDetail(show) {
   if (show === _detailVisible) return;
   _detailVisible = show;
-  const light = getComputedStyle(document.documentElement)
-                  .getPropertyValue('--bg').trim() === '#ffffff';
-  const grid   = show ? (light ? '#e0e0e0' : '#3a3a50') : 'transparent';
-  const border = show ? (light ? '#000000' : '#ffffff') : 'transparent';
-  chart.applyOptions({
-    grid:            { vertLines: { color: grid }, horzLines: { color: grid } },
-    rightPriceScale: { borderColor: border },
-    timeScale:       { borderColor: border },
-  });
+  syncChartLines();
 }
 
 window.addEventListener('message', (ev) => {
