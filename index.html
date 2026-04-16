@@ -523,7 +523,9 @@
       gap: calc(8px * var(--ticker-row-scale, 1));
       padding: calc(4px * var(--ticker-row-scale, 1)) 0;
       white-space: nowrap;
+      cursor: pointer;
     }
+    .tl-row:hover .tl-ticker { color: var(--accent, #58a6ff); }
     .tl-row.closest .tl-ticker { color: var(--accent, #58a6ff); }
     .tl-ticker {
       font-size: calc(14px * var(--ticker-row-scale, 1));
@@ -1258,6 +1260,7 @@
     let _lastTickerListGen  = -1;
     let _lastClosestForList = null;
     let _height15           = 0;       // cached height of 15 rows at scale=1
+    let _clickOrbitTarget   = null;    // billboard to orbit toward after a row click
 
     window.addEventListener('message', (ev) => {
       const d = ev.data;
@@ -1378,6 +1381,11 @@
           rowEl.append(tTicker, tCompany, tPrice, tChange);
           const sepEl = document.createElement('hr');
           sepEl.className = 'tl-sep';
+          const clickedBb = bb;
+          rowEl.addEventListener('click', () => {
+            _clickOrbitTarget = clickedBb;
+            _cameraDirty = true;
+          });
           entry = { rowEl, sepEl, ticker: tTicker, company: tCompany, price: tPrice, change: tChange, _lastTicker: '', _lastPrice: '', _lastChange: '' };
           _tickerRowMap.set(bb, entry);
         }
@@ -2224,6 +2232,41 @@
     const SNAP_SIZE_THRESH = 0.30;  // billboard apparent height ≥ 30% of viewport
     const _snapNdc         = new THREE.Vector3();
 
+    // Click-to-orbit: when a ticker row is clicked, rotate the camera around
+    // ringCenter until it points directly at the clicked billboard (camera
+    // angle = billboard angle → billboard sits on the camera's horizontal
+    // view axis, centered on screen). Fast exponential lerp so the motion
+    // completes in ~100 ms.
+    const _clickOrbitOffset = new THREE.Vector3();
+    function stepClickOrbit() {
+      if (!_clickOrbitTarget) return;
+      const b = _clickOrbitTarget;
+      const dx = camera.position.x - ringCenter.x;
+      const dz = camera.position.z - ringCenter.z;
+      const R_cam = Math.hypot(dx, dz);
+      if (R_cam < 1e-4) { _clickOrbitTarget = null; return; }
+
+      const C = Math.atan2(dz, dx);
+      const A = Math.atan2(b.worldPos.z - ringCenter.z, b.worldPos.x - ringCenter.x);
+
+      // applyAxisAngle(+Y, α) DECREASES atan2(z,x) by α (right-hand rule),
+      // so to move the camera angle from C toward A we rotate by (C - A).
+      let rot = C - A;
+      while (rot >  Math.PI) rot -= 2 * Math.PI;
+      while (rot < -Math.PI) rot += 2 * Math.PI;
+
+      if (Math.abs(rot) < 1e-3) { _clickOrbitTarget = null; return; }
+
+      // 50% per frame → reaches ~1° of target in ~6 frames (~100 ms at 60fps).
+      const applied = rot * 0.5;
+      _clickOrbitOffset.set(dx, camera.position.y - ringCenter.y, dz);
+      _clickOrbitOffset.applyAxisAngle(_yAxis, applied);
+      camera.position.copy(ringCenter).add(_clickOrbitOffset);
+      controls.target.copy(ringCenter);
+      controls.update();
+      _cameraDirty = true;
+    }
+
     function stepSnapMagnet() {
       controls.rotateSpeed = _userRotateSpeed;         // default: full speed
 
@@ -2257,6 +2300,7 @@
     // ══════════════════════════════════════════════════════════════════════════
     function animate() {
       requestAnimationFrame(animate);
+      stepClickOrbit();                  // orbit toward a clicked ticker row
       stepSnapMagnet();                  // modulate rotateSpeed before orbit step
       controls.update();                 // may set _cameraDirty via 'change' event
       stepZoomInertia();                 // may set _cameraDirty if zooming
