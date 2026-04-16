@@ -1,3 +1,6 @@
+- detect tickers by company name in the ticker box
+
+
 - License:
 if in the future I deploy this project as an app on the public internet, do I have to pay royalties or license fees to yahoo finance or finviz for using their data or their chart template, or any other provider you are using to parse the data ? If I make a profit from the app through subscription or advertisement ? If I do not make a profit from the app ?
 I'm not a lawyer, so this is informational, not legal advice. Here's the situation for each data source in your project:

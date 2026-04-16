@@ -1304,10 +1304,14 @@
           syncGiraffeSize();
         }
       }
-      if (!hasClosest && !document.body.classList.contains('chat-open')) {
-        $overlayWrapper.classList.remove('visible');
-      } else if (document.body.classList.contains('chat-open')) {
+      // Keep the overlay visible as long as there's any interactive
+      // billboard to point at — the giraffe button must stay reachable
+      // even if the closest billboard's iframe hasn't posted sv-price-info
+      // yet. Only hide when there are truly no interactive billboards.
+      if (document.body.classList.contains('chat-open') || b) {
         $overlayWrapper.classList.add('visible');
+      } else {
+        $overlayWrapper.classList.remove('visible');
       }
 
       // ── Multi-row ticker list (when chat open) ──
@@ -1415,38 +1419,43 @@
         return h;
       };
 
-      // Capture the 15-row height at scale=1 (before we shrink fonts)
-      // We snapshot this once when hitting exactly 15 rows.
-      if (n === 15 && !_chatExpanded) {
+      // Capture the 15-row height at scale=1 whenever we first need it
+      // (at exactly 15 rows, or on crossing past 15 for the first time).
+      // Measuring at scale=1 keeps the cached height independent of later
+      // font-shrinking so the scroll area stays the same size as more rows
+      // are added past 15.
+      const needHeight15 = (n >= 15) && (_height15 <= 0);
+      if (n === 15 || needHeight15) {
         $tickerList.style.setProperty('--ticker-row-scale', 1);
-        // Force layout so measurements use scale=1
-        $tickerListScroll.offsetHeight;
-        _height15 = measureRows(15);
+        $tickerListScroll.offsetHeight;  // force layout at scale=1
+        _height15 = measureRows(Math.min(15, n));
       }
 
-      // Now apply the actual font scale
+      // Apply the actual font scale (may shrink below 1 for n>15).
       $tickerList.style.setProperty('--ticker-row-scale', scale);
 
       // Scrollable when >15 rows
       const scrollable = n > 15;
       $tickerListScroll.classList.toggle('scrollable', scrollable);
 
-      if (_chatExpanded || n >= 15) {
-        // Full-height mode: stretch to fill viewport (same as expanded)
-        document.body.classList.add('chat-expanded');
-        if (scrollable && _height15 > 0) {
-          // Lock scroll area to the captured 15-row height
-          $tickerListScroll.style.maxHeight = _height15 + 'px';
-          $tickerListScroll.style.minHeight = _height15 + 'px';
-        } else {
-          $tickerListScroll.style.maxHeight = '';
-          $tickerListScroll.style.minHeight = '';
-        }
-      } else {
-        // Adaptive mode: container sizes to content
-        if (!_chatExpanded) document.body.classList.remove('chat-expanded');
+      // Expand-state is driven purely by the user clicking the + button.
+      // Growing past 15 rows does NOT auto-expand: the chat stays adaptive
+      // so the ring controls + ticker input at the bottom stay visible, and
+      // closing the chat cleanly reinstates the bottom-center single-ticker
+      // overlay.
+      document.body.classList.toggle('chat-expanded', _chatExpanded);
+
+      if (_chatExpanded) {
+        // User-expanded: let the scroll area fill the stretched container.
         $tickerListScroll.style.maxHeight = '';
-        // Min-height = 3 rows
+        $tickerListScroll.style.minHeight = '';
+      } else if (scrollable && _height15 > 0) {
+        // Adaptive + >15 rows: lock scroll viewport to 15-row height.
+        $tickerListScroll.style.maxHeight = _height15 + 'px';
+        $tickerListScroll.style.minHeight = _height15 + 'px';
+      } else {
+        // Adaptive + ≤15 rows: natural height, pad to 3 rows when fewer.
+        $tickerListScroll.style.maxHeight = '';
         $tickerListScroll.style.minHeight = (n < 3) ? measureRows(3) + 'px' : '';
       }
     }
@@ -1654,21 +1663,37 @@
       _lastTickerListGen = -1;
       _cameraDirty = true;
     });
+    function closeChatContainer() {
+      document.body.classList.remove('chat-open');
+      document.body.classList.remove('chat-expanded');
+      _chatExpanded = false;
+      setChatBtnState(0);
+      // Reset chat-mode layout state on the ticker-list scroll container
+      // so it can't linger under the now-hidden #ticker-list and affect
+      // the bottom-center single-ticker overlay.
+      $tickerListScroll.style.maxHeight = '';
+      $tickerListScroll.style.minHeight = '';
+      $tickerListScroll.classList.remove('scrollable');
+      $tickerList.style.removeProperty('--ticker-row-scale');
+      // Force the overlay visible so the single ticker row + giraffe
+      // reappear immediately, without waiting for the next dirty frame.
+      $overlayWrapper.classList.add('visible');
+      _lastTickerListGen = -1;
+      _cameraDirty = true;
+    }
+
     $chatStateBtn.addEventListener('click', () => {
       if (_chatBtnState === 0) {
         // expand
         _chatExpanded = true;
         document.body.classList.add('chat-expanded');
         setChatBtnState(1);
+        _lastTickerListGen = -1;
+        _cameraDirty = true;
       } else {
         // close
-        document.body.classList.remove('chat-open');
-        document.body.classList.remove('chat-expanded');
-        _chatExpanded = false;
-        setChatBtnState(0);
+        closeChatContainer();
       }
-      _lastTickerListGen = -1;
-      _cameraDirty = true;
     });
 
     // Ticker-list scroll arrows
