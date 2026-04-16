@@ -306,6 +306,40 @@ function isMarketOpenNow() {
   return true;
 }
 
+// Year/month/day that `epochSec` falls on when viewed in timezone `tz`.
+function _dateInTz(epochSec, tz) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(epochSec * 1000));
+  return {
+    y:  +parts.find(p => p.type === "year").value,
+    mo: +parts.find(p => p.type === "month").value,
+    d:  +parts.find(p => p.type === "day").value,
+  };
+}
+
+// Convert a wall-clock date/time in timezone `tz` to a Unix epoch (seconds).
+// Uses the "guess as UTC, then correct by observed offset" trick so it stays
+// correct across DST without a tz library.
+function _tzDateTimeToEpoch(y, mo, d, h, mi, tz) {
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(utcGuess));
+  const py  = +parts.find(p => p.type === "year").value;
+  const pmo = +parts.find(p => p.type === "month").value;
+  const pd  = +parts.find(p => p.type === "day").value;
+  const ph  = +parts.find(p => p.type === "hour").value;
+  const pmi = +parts.find(p => p.type === "minute").value;
+  const tzAsUTC = Date.UTC(py, pmo - 1, pd, ph, pmi);
+  const offsetMs = tzAsUTC - utcGuess;
+  return (utcGuess - offsetMs) / 1000;
+}
+
 function updateClockLabel() {
   const $cl = document.getElementById("clock-label");
   if (!$cl) return;
@@ -636,17 +670,42 @@ function renderChart(data) {
     value: r.v,
     color: r.c >= r.o ? "#3fb95044" : "#f8514944",
   }));
+  const lineData = records.map(r => ({ time: r.t, value: r.c }));
+
+  // For 1d: pad each series with whitespace bars (items with just `time`,
+  // no OHLC/value) from the last real bar up to session close. Lightweight
+  // Charts v4 clamps setVisibleRange to the actual data extent, so we need
+  // the series itself to reserve the space — then fitContent naturally spans
+  // open→close, with the price curve reaching mid-chart mid-session and the
+  // right edge at close.
+  let sessionOpenEpoch  = null;
+  let sessionCloseEpoch = null;
+  if (state.period === "1d" && state.exchange && records.length > 0) {
+    const tz = state.exchange.tz;
+    const { y, mo, d } = _dateInTz(records[0].t, tz);
+    sessionOpenEpoch  = _tzDateTimeToEpoch(y, mo, d, state.exchange.open[0],  state.exchange.open[1],  tz);
+    sessionCloseEpoch = _tzDateTimeToEpoch(y, mo, d, state.exchange.close[0], state.exchange.close[1], tz);
+    const lastT = records[records.length - 1].t;
+    const step  = (records.length >= 2) ? Math.max(1, records[1].t - records[0].t) : 60;
+    for (let t = lastT + step; t <= sessionCloseEpoch; t += step) {
+      candles.push({ time: t });
+      lineData.push({ time: t });
+      volumes.push({ time: t });
+    }
+  }
 
   candleSeries.setData(candles);
-  // Line/area series use close prices only
-  const lineData = records.map(r => ({ time: r.t, value: r.c }));
   lineSeries.setData(lineData);
   areaSeries.setData(lineData);
   volumeSeries.setData(volumes);
 
-  // Suppress the zoom-subscription while we programmatically fit the view
+  // Suppress the zoom-subscription while we programmatically fit the view.
   _ignoreRangeChange = true;
-  chart.timeScale().fitContent();
+  if (sessionOpenEpoch != null && sessionCloseEpoch != null) {
+    chart.timeScale().setVisibleRange({ from: sessionOpenEpoch, to: sessionCloseEpoch });
+  } else {
+    chart.timeScale().fitContent();
+  }
   setTimeout(() => { _ignoreRangeChange = false; }, 250);
 
   // ── Price panel ───────────────────────────────────────────────────────────
