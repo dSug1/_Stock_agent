@@ -2179,6 +2179,7 @@
 
       try {
         const res  = await fetch(baseUrl + '&mode=swr');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.json();
         if (blob && blob.tickers) {
           for (const b of targets) {
@@ -2200,6 +2201,7 @@
         const url2  = `/api/data_batch?tickers=${encodeURIComponent([...needFresh].join(','))}`
                     + `&period=${encodeURIComponent(p)}`;
         const res2  = await fetch(url2);
+        if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
         const blob2 = await res2.json();
         if (!blob2 || !blob2.tickers) return;
         for (const b of targets) {

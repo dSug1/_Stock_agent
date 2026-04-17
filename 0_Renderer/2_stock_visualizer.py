@@ -19,7 +19,7 @@ Usage
     python 2_stock_visualizer.py          # prompts in terminal, opens browser
 """
 
-import os, sys, json, time, datetime, threading, webbrowser, sqlite3
+import time, datetime, threading, webbrowser, sqlite3
 import email.utils
 from pathlib import Path
 from contextlib import contextmanager
@@ -27,7 +27,6 @@ from contextlib import contextmanager
 import requests
 import yfinance as yf
 import pandas as pd
-import pytz
 from flask import Flask, jsonify, render_template, request, send_from_directory
 import market_calendars as mc
 
@@ -136,8 +135,8 @@ def _sync_clock_once() -> None:
 
 
 def _clock_sync_loop() -> None:
-    """Background thread: sync at startup then every CLOCK_SYNC_INTERVAL seconds."""
-    _sync_clock_once()
+    """Background thread: re-sync every CLOCK_SYNC_INTERVAL seconds. The first
+    sync is done synchronously in main() before this thread starts."""
     while True:
         time.sleep(CLOCK_SYNC_INTERVAL)
         _sync_clock_once()
@@ -863,9 +862,7 @@ if __name__ == "__main__":
     # is_market_open() is accurate before we pre-fetch any data).
     print("  [clock] calibrating against internet time …", end="", flush=True)
     _sync_clock_once()
-    # Then keep re-syncing every 30 min in the background
-    threading.Thread(target=lambda: (time.sleep(CLOCK_SYNC_INTERVAL), _clock_sync_loop()),
-                     daemon=True).start()
+    threading.Thread(target=_clock_sync_loop, daemon=True).start()
 
     mode = _prompt_mode()
     if mode == "debug":

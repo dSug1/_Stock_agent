@@ -428,14 +428,6 @@ function _fmtTime(t) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  Period UI (no buttons here anymore — the 3D scene parent (index.html)
-//  renders a single top-of-screen period bar that controls every billboard
-//  via postMessage. Wheel-zoom inside the chart still auto-switches period
-//  and broadcasts the change so the parent's top bar stays in sync.)
-// ══════════════════════════════════════════════════════════════════════════════
-function updatePeriodButtons() { /* no-op: buttons moved to parent scene */ }
-
-// ══════════════════════════════════════════════════════════════════════════════
 //  Lightweight Charts setup
 // ══════════════════════════════════════════════════════════════════════════════
 const chartEl = document.getElementById("chart");
@@ -670,7 +662,6 @@ window.addEventListener("message", (ev) => {
   // Parent forwarded preloaded batch data — render directly, no fetch needed.
   if (d.type === "sv-period-with-data" && d.data) {
     state.period = d.period;
-    updatePeriodButtons();
     clearLiveTimer();
     $loading.classList.add("hidden");
     try {
@@ -685,7 +676,6 @@ window.addEventListener("message", (ev) => {
   // Legacy path: parent only told us the new period — fetch our own data.
   if (d.type === "sv-period" && d.period !== state.period) {
     state.period = d.period;
-    updatePeriodButtons();
     loadChart();
   }
 });
@@ -773,6 +763,7 @@ async function loadChart() {
   try {
     const res = await fetch(url + "&mode=swr");
     if (res.status !== 204) {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data && !data.error && Array.isArray(data.records) && data.records.length) {
         renderChart(data);
@@ -788,6 +779,7 @@ async function loadChart() {
   if (needFresh) {
     try {
       const res  = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       renderChart(data);
@@ -948,6 +940,7 @@ function scheduleLive() {
       }
       try {
         const res  = await fetch(`/api/data?ticker=${encodeURIComponent(state.ticker)}&period=${state.period}`);
+        if (!res.ok) return;
         const data = await res.json();
         if (!data.error) renderChart(data);
       } catch (_) { /* silent — keep polling */ }
@@ -1012,7 +1005,6 @@ window.addEventListener('message', (ev) => {
   const t     = params.get("ticker") || "";
   const p     = params.get("period") || "1d";
   state.period = PERIODS.includes(p) ? p : "1d";
-  updatePeriodButtons();
 
   // Calibrate clock against internet before deciding market status
   await syncClock();
