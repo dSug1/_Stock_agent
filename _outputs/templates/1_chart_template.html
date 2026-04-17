@@ -448,6 +448,11 @@ document.addEventListener('mousedown', (ev) => {
   _rmbActive = true;
   _rmbLastSX = ev.screenX;
   _rmbLastSY = ev.screenY;
+  // Hide the crosshair + date/time/price readouts while orbiting so the
+  // chart doesn't show cursor-linked info under a drag that belongs to
+  // the 3D camera, not the chart.
+  chart.applyOptions({ crosshair: { mode: LightweightCharts.CrosshairMode.Hidden } });
+  $ohlcvTooltip.classList.remove('visible');
   ev.preventDefault();
 }, true);
 document.addEventListener('mousemove', (ev) => {
@@ -472,6 +477,7 @@ document.addEventListener('mousemove', (ev) => {
 document.addEventListener('mouseup', (ev) => {
   if (ev.button !== 2) return;
   _rmbActive = false;
+  chart.applyOptions({ crosshair: { mode: LightweightCharts.CrosshairMode.Normal } });
 }, true);
 document.addEventListener('contextmenu', (ev) => ev.preventDefault(), true);
 
