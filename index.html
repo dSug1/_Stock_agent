@@ -1888,10 +1888,19 @@
       }
     }
 
-    // Hits /api/data_batch ONCE for every interactive billboard's ticker, then
-    // pushes each iframe its own slice via postMessage(sv-period-with-data).
-    // The iframes render directly without each making their own roundtrip —
-    // this is the main reason a period change drops from ~2 s to ~300 ms.
+    // Stale-while-revalidate period change.
+    //
+    //   Phase 1 (mode=swr):  one DB-only request returns whatever's already
+    //                        cached. Iframes render INSTANTLY — no spinner,
+    //                        no yfinance roundtrip. Tickers absent from the
+    //                        response had nothing in the cache.
+    //   Phase 2 (mode=fresh): for every ticker that was either missing or
+    //                        flagged stale=true, do a normal batched yfinance
+    //                        fetch and re-render those iframes silently.
+    //
+    // First-ever load of a (ticker, period) goes straight through phase 2 with
+    // a spinner — there's no cached frame to render. Subsequent visits feel
+    // instant because phase 1 hits the cache.
     //
     // `excludeWindow`: if the period change originated from a chart iframe
     // (wheel-zoom inside it), that iframe already has the data — skip it.
@@ -1900,14 +1909,40 @@
         b.interactive && b.ticker && b.element.contentWindow !== excludeWindow);
       if (targets.length === 0) return;
       const tickers = [...new Set(targets.map(b => b.ticker))];
+      const baseUrl = `/api/data_batch?tickers=${encodeURIComponent(tickers.join(','))}`
+                    + `&period=${encodeURIComponent(p)}`;
+
+      // Track which tickers still need a fresh fetch after phase 1.
+      let needFresh = new Set(tickers);
+
       try {
-        const res  = await fetch(
-          `/api/data_batch?tickers=${encodeURIComponent(tickers.join(','))}`
-        + `&period=${encodeURIComponent(p)}`);
+        const res  = await fetch(baseUrl + '&mode=swr');
         const blob = await res.json();
-        if (!blob || !blob.tickers) throw new Error(blob && blob.error || 'bad batch response');
+        if (blob && blob.tickers) {
+          for (const b of targets) {
+            const data = blob.tickers[b.ticker];
+            if (!data) continue;             // SWR miss — keep in needFresh
+            // Render cached frame immediately.
+            try {
+              b.element.contentWindow.postMessage(
+                { type: 'sv-period-with-data', period: p, data }, '*');
+            } catch (_) { /* cross-origin safety net */ }
+            if (!data.stale) needFresh.delete(b.ticker);
+          }
+        }
+      } catch (_) { /* phase-1 failure → fall through to phase-2 for everyone */ }
+
+      if (needFresh.size === 0) return;
+
+      try {
+        const url2  = `/api/data_batch?tickers=${encodeURIComponent([...needFresh].join(','))}`
+                    + `&period=${encodeURIComponent(p)}`;
+        const res2  = await fetch(url2);
+        const blob2 = await res2.json();
+        if (!blob2 || !blob2.tickers) return;
         for (const b of targets) {
-          const data = blob.tickers[b.ticker];
+          if (!needFresh.has(b.ticker)) continue;
+          const data = blob2.tickers[b.ticker];
           if (!data) continue;
           try {
             b.element.contentWindow.postMessage(
@@ -1915,8 +1950,10 @@
           } catch (_) { /* cross-origin safety net */ }
         }
       } catch (_) {
-        // Batch failed — fall back to legacy per-iframe fetch path.
+        // Phase-2 failure: tell the iframes the period at least, so they can
+        // try their own fetch (loadChart) as a last-resort fallback.
         for (const b of targets) {
+          if (!needFresh.has(b.ticker)) continue;
           try {
             b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, '*');
           } catch (_) { /* same-origin safety net */ }

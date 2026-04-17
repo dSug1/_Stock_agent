@@ -1,4 +1,3 @@
-- upload data faster when I select a time window
 - detect tickers by company name in the ticker box
 - & and or filter a la Blender modifier
 

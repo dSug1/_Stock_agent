@@ -745,24 +745,51 @@ chart.subscribeCrosshairMove(param => {
 //  Data loading
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Stale-while-revalidate single-chart load.
+//   Phase 1 (mode=swr): instant render from SQLite cache, no network. The
+//                       server returns 204 if nothing is cached for this
+//                       (ticker, period), in which case we skip to phase 2
+//                       with the spinner — typical first-ever load path.
+//   Phase 2 (mode=fresh): real yfinance fetch. Always runs unless phase 1
+//                       returned data with stale=false.
 async function loadChart() {
   if (!state.ticker) return;
-
-  $loading.classList.remove("hidden");
   clearLiveTimer();
 
-  try {
-    const res  = await fetch(`/api/data?ticker=${encodeURIComponent(state.ticker)}&period=${state.period}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
+  const url = `/api/data?ticker=${encodeURIComponent(state.ticker)}&period=${state.period}`;
+  let renderedFromCache = false;
+  let needFresh         = true;
 
-    renderChart(data);
-    scheduleLive();
-  } catch (err) {
-    showError("Failed to load: " + err.message);
-  } finally {
-    $loading.classList.add("hidden");
+  try {
+    const res = await fetch(url + "&mode=swr");
+    if (res.status !== 204) {
+      const data = await res.json();
+      if (data && !data.error && Array.isArray(data.records) && data.records.length) {
+        renderChart(data);
+        renderedFromCache = true;
+        $loading.classList.add("hidden");
+        if (data.stale === false) needFresh = false;
+      }
+    }
+  } catch (_) { /* phase-1 failure → fall through to phase 2 */ }
+
+  if (!renderedFromCache) $loading.classList.remove("hidden");
+
+  if (needFresh) {
+    try {
+      const res  = await fetch(url);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      renderChart(data);
+    } catch (err) {
+      if (!renderedFromCache) showError("Failed to load: " + err.message);
+      // else: keep the cached frame; silent failure on background refresh.
+    } finally {
+      $loading.classList.add("hidden");
+    }
   }
+
+  scheduleLive();
 }
 
 function renderChart(data) {

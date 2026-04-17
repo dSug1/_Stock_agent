@@ -474,13 +474,29 @@ def _effective_ttl(interval: str, exchange_code: str) -> int:
     return base
 
 
-def get_chart_data(ticker: str, period: str) -> dict:
+def get_chart_data(ticker: str, period: str, mode: str = "fresh") -> dict | None:
     """
-    Return chart data for ticker+period, refreshing from yfinance only if the
-    SQLite cache row for that (ticker, period) is older than its TTL.
+    Return chart data for ticker+period.
+
+    mode="fresh" (default): refresh from yfinance if cache row is older than TTL.
+    mode="swr":             ZERO network calls. Returns whatever's in the cache,
+                            with `stale: true` if it's older than the TTL.
+                            Returns None if nothing is cached for this row —
+                            caller is expected to retry with mode="fresh".
     """
     ticker   = ticker.upper()
     interval = PERIOD_INTERVAL.get(period, "1d")
+
+    if mode == "swr":
+        meta       = db_get_meta(ticker)
+        fetched_at = db_get_period_fetched_at(ticker, period)
+        if not meta or not fetched_at:
+            return None
+        payload          = _build_payload(ticker, period, interval, meta)
+        ttl              = _effective_ttl(interval, meta.get("exchange") or mc.DEFAULT_EXCHANGE)
+        payload["stale"] = _age_seconds(fetched_at) > ttl
+        return payload
+
     meta     = _ensure_meta_fresh(ticker)
     exchange = meta.get("exchange") or mc.DEFAULT_EXCHANGE
     ttl      = _effective_ttl(interval, exchange)
@@ -492,19 +508,39 @@ def get_chart_data(ticker: str, period: str) -> dict:
         db_upsert_bars(ticker, interval, records)
         db_mark_period_fresh(ticker, period, datetime.datetime.utcnow().isoformat())
 
-    return _build_payload(ticker, period, interval, meta)
+    payload          = _build_payload(ticker, period, interval, meta)
+    payload["stale"] = False
+    return payload
 
 
-def get_chart_data_batch(tickers: list[str], period: str) -> dict[str, dict]:
+def get_chart_data_batch(tickers: list[str], period: str, mode: str = "fresh") -> dict[str, dict]:
     """
-    Batched equivalent of get_chart_data(). Refreshes any stale tickers in a
-    SINGLE yfinance.download() call instead of N sequential ones.
+    Batched equivalent of get_chart_data().
+
+    mode="fresh" (default): refresh stale tickers in a SINGLE yf.download() call.
+    mode="swr":             ZERO network calls. Tickers with no cache are simply
+                            omitted from the response — the frontend will request
+                            them in a follow-up fresh call.
     """
     tickers = [t.upper() for t in tickers if t]
     if not tickers:
         return {}
     interval = PERIOD_INTERVAL.get(period, "1d")
-    metas    = {t: _ensure_meta_fresh(t) for t in tickers}
+
+    if mode == "swr":
+        out: dict[str, dict] = {}
+        for t in tickers:
+            meta       = db_get_meta(t)
+            fetched_at = db_get_period_fetched_at(t, period)
+            if not meta or not fetched_at:
+                continue
+            payload          = _build_payload(t, period, interval, meta)
+            ttl              = _effective_ttl(interval, meta.get("exchange") or mc.DEFAULT_EXCHANGE)
+            payload["stale"] = _age_seconds(fetched_at) > ttl
+            out[t] = payload
+        return out
+
+    metas = {t: _ensure_meta_fresh(t) for t in tickers}
 
     stale: list[str] = []
     for t in tickers:
@@ -525,7 +561,12 @@ def get_chart_data_batch(tickers: list[str], period: str) -> dict[str, dict]:
             db_upsert_bars(t, interval, recs)
             db_mark_period_fresh(t, period, now_iso)
 
-    return {t: _build_payload(t, period, interval, metas[t]) for t in tickers}
+    out = {}
+    for t in tickers:
+        p          = _build_payload(t, period, interval, metas[t])
+        p["stale"] = False
+        out[t] = p
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -606,12 +647,18 @@ def chart_template():
 def api_data():
     ticker = (request.args.get("ticker") or "").upper().strip()
     period = (request.args.get("period") or "1d").strip()
+    mode   = (request.args.get("mode")   or "fresh").strip()
     if not ticker:
         return jsonify({"error": "ticker parameter required"}), 400
     if period not in VALID_PERIODS:
         period = "1d"
+    if mode not in ("fresh", "swr"):
+        mode = "fresh"
     try:
-        data = get_chart_data(ticker, period)
+        data = get_chart_data(ticker, period, mode)
+        if data is None:
+            # SWR cache miss — return 204 so the frontend knows to retry fresh.
+            return ("", 204)
         return jsonify(data)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
@@ -625,21 +672,25 @@ def api_data_batch():
     Query params:
       tickers — comma-separated symbols, e.g. "AAPL,MSFT,NVDA"
       period  — one of VALID_PERIODS
+      mode    — "fresh" (default) refreshes stale tickers from yfinance;
+                "swr" returns only what's already cached, with no network calls
 
     Response: { "period": "...", "tickers": { "AAPL": {…same shape as /api/data…}, … } }
-
-    Stale tickers are refreshed in a single yfinance.download() call, so a
-    period change that previously made N sequential roundtrips now makes one.
+              Each per-ticker payload includes `stale: true|false`. In swr mode,
+              tickers without any cache row are omitted entirely.
     """
     raw    = (request.args.get("tickers") or "").strip()
-    period = (request.args.get("period") or "1d").strip()
+    period = (request.args.get("period")  or "1d").strip()
+    mode   = (request.args.get("mode")    or "fresh").strip()
     if not raw:
         return jsonify({"error": "tickers parameter required"}), 400
     if period not in VALID_PERIODS:
         period = "1d"
+    if mode not in ("fresh", "swr"):
+        mode = "fresh"
     tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
     try:
-        return jsonify({"period": period, "tickers": get_chart_data_batch(tickers, period)})
+        return jsonify({"period": period, "tickers": get_chart_data_batch(tickers, period, mode)})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
