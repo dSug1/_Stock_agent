@@ -131,8 +131,17 @@
       transform: translateX(-100%);
       transition: transform 0.25s ease-out;
       box-shadow: 4px 0 24px #0006;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
     body.menu-open #menu-panel { transform: translateX(0); }
+
+    #display-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
 
     #menu-panel label {
       display: grid;
@@ -140,9 +149,8 @@
       align-items: center;
       gap: 6px;
       white-space: nowrap;
-      margin-bottom: 8px;
+      margin: 0;
     }
-    #menu-panel label:last-of-type { margin-bottom: 0; }
     #menu-panel input[type=range] {
       width: 100%;
       accent-color: var(--fg);
@@ -157,13 +165,30 @@
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      margin-bottom: 6px;
-      margin-top: 14px;
+      margin: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    #menu-panel .title:first-child { margin-top: 0; }
+    /* Collapsible "Display" header — button styled like a section title */
+    #menu-panel .display-toggle {
+      background: transparent;
+      border: none;
+      padding: 0;
+      width: 100%;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    #menu-panel .display-toggle .arrow {
+      transition: transform .15s;
+      font-size: 10px;
+      opacity: 0.7;
+    }
+    #menu-panel .display-toggle[aria-expanded="false"] .arrow {
+      transform: rotate(-90deg);
+    }
+    #menu-panel .display-toggle:hover { color: var(--accent); }
+    #display-group.collapsed { display: none; }
     #menu-panel .menu-btn {
       background: var(--btn-bg);
       border: 1px solid var(--fg);
@@ -602,18 +627,23 @@
   <!-- Slide-in menu panel on the left. Contains the orbit-speed and
        scroll-gain sliders plus the reset-view button. -->
   <div id="menu-panel">
-    <div class="title">Display <button id="theme-toggle" class="menu-btn" type="button">Dark</button> <button id="charttype-toggle" class="menu-btn" type="button">Candle</button></div>
-    <div class="title">Camera <button id="reset-view" class="menu-btn" type="button">Reset view</button></div>
-    <label>
-      Orbit speed
-      <input id="orbit-speed" type="range" min="0.1" max="3" step="0.05" value="1">
-      <span id="orbit-speed-val" class="val">1.00</span>
-    </label>
-    <label>
-      Scroll gain
-      <input id="scroll-gain" type="range" min="0.1" max="3" step="0.05" value="0.8">
-      <span id="scroll-gain-val" class="val">0.80</span>
-    </label>
+    <button id="display-toggle" class="title display-toggle" type="button" aria-expanded="false">
+      <span>Display</span><span class="arrow">▼</span>
+    </button>
+    <div id="display-group" class="collapsed">
+      <div class="title">Theme <button id="theme-toggle" class="menu-btn" type="button">Dark</button> <button id="charttype-toggle" class="menu-btn" type="button">Candle</button></div>
+      <div class="title">Camera <button id="reset-view" class="menu-btn" type="button">Reset view</button></div>
+      <label>
+        Orbit speed
+        <input id="orbit-speed" type="range" min="0.1" max="3" step="0.05" value="1">
+        <span id="orbit-speed-val" class="val">1.00</span>
+      </label>
+      <label>
+        Scroll gain
+        <input id="scroll-gain" type="range" min="0.1" max="3" step="0.05" value="0.8">
+        <span id="scroll-gain-val" class="val">0.80</span>
+      </label>
+    </div>
   </div>
 
   <!-- Period buttons — above the price overlay at bottom, or at bottom-center when chat open. -->
@@ -1505,6 +1535,24 @@
     const $menuToggle = document.getElementById('menu-toggle');
     $menuToggle.addEventListener('click', () => {
       document.body.classList.toggle('menu-open');
+    });
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  DISPLAY GROUP TOGGLE — collapses Theme + Camera sections
+    // ══════════════════════════════════════════════════════════════════════════
+    const $displayToggle = document.getElementById('display-toggle');
+    const $displayGroup  = document.getElementById('display-group');
+    function applyDisplayOpen(open) {
+      $displayGroup.classList.toggle('collapsed', !open);
+      $displayToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    // Always start collapsed on page load; clear any stale persisted state
+    // from earlier builds so the default is enforced.
+    try { localStorage.removeItem('sv.displayOpen'); } catch (_) {}
+    applyDisplayOpen(false);
+    $displayToggle.addEventListener('click', () => {
+      const open = $displayGroup.classList.contains('collapsed');  // currently collapsed → opening
+      applyDisplayOpen(open);
     });
 
     // ══════════════════════════════════════════════════════════════════════════
