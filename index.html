@@ -1161,6 +1161,37 @@
     controls.target.copy(ringCenter);
     controls.rotateSpeed   = 1.0;
 
+    // Position the camera on the same side as the first ring billboard so
+    // that billboard sits centered (vertically + horizontally) in the view.
+    // Used at startup AND on reset-view; preserves orbit distance.
+    function alignCameraToFirstBillboard() {
+      const first = billboards.find(b => b !== centerBillboard);
+      const D = Math.hypot(CAMERA_START_POS.x, CAMERA_START_POS.z);
+      if (first) {
+        const dx = first.worldPos.x - ringCenter.x;
+        const dz = first.worldPos.z - ringCenter.z;
+        const len = Math.hypot(dx, dz);
+        if (len > 1e-6) {
+          camera.position.set(
+            ringCenter.x + (dx / len) * D,
+            first.worldPos.y,
+            ringCenter.z + (dz / len) * D
+          );
+          controls.target.copy(ringCenter);
+          controls.update();
+          return;
+        }
+      }
+      camera.position.set(
+        ringCenter.x + CAMERA_START_POS.x,
+        CAMERA_START_POS.y,
+        ringCenter.z + CAMERA_START_POS.z
+      );
+      controls.target.copy(ringCenter);
+      controls.update();
+    }
+    alignCameraToFirstBillboard();
+
     // Dirty flag — skip expensive per-frame work when camera is idle.
     let _cameraDirty = true;
     controls.addEventListener('change', () => { _cameraDirty = true; });
@@ -1751,17 +1782,7 @@
     // ══════════════════════════════════════════════════════════════════════════
     const $resetView = document.getElementById('reset-view');
     $resetView.addEventListener('click', () => {
-      // Restore the camera to its default position RELATIVE to the
-      // current ring center (which may have shifted for >8 billboards).
-      camera.position.set(
-        ringCenter.x + CAMERA_START_POS.x,
-        CAMERA_START_POS.y,
-        ringCenter.z + CAMERA_START_POS.z
-      );
-      controls.target.copy(ringCenter);
-      // Flush any residual rotation damping from OrbitControls so the
-      // reset is instantaneous.
-      controls.update();
+      alignCameraToFirstBillboard();
     });
 
     // ══════════════════════════════════════════════════════════════════════════

@@ -193,28 +193,6 @@
     .ov { color: var(--txt-dim); margin-right: 2px; }
     .oval { color: var(--txt); }
 
-    /* ── Right-axis price label (custom, blue text) ───────────────────────── */
-    #price-axis-label {
-      position: absolute;
-      right: 2px;
-      top: 0;
-      transform: translateY(-50%);
-      background: var(--bg);
-      color: #58a6ff;
-      border: 1px solid #58a6ff;
-      padding: 1px 5px;
-      font-size: 11px;
-      font-weight: 600;
-      font-style: italic;
-      font-family: 'Consolas', 'Courier New', monospace;
-      border-radius: 3px;
-      pointer-events: none;
-      display: none;
-      z-index: 4;
-      white-space: nowrap;
-    }
-    #price-axis-label.visible { display: block; }
-
     /* ── Cursor-linked price/volume label (attached to time-axis) ─────────── */
     #cursor-pv-label {
       position: absolute;
@@ -257,7 +235,6 @@
     <div id="chart"></div>
     <div id="loading"><div class="spinner"></div> Loading data…</div>
     <div id="ohlcv-tooltip"></div>
-    <div id="price-axis-label"></div>
     <div id="cursor-pv-label"></div>
   </div>
 
@@ -428,7 +405,6 @@ const $updatedLabel = document.getElementById("updated-label");
 const $intervalLabel= document.getElementById("interval-label");
 const $errorToast   = document.getElementById("error-toast");
 const $ohlcvTooltip    = document.getElementById("ohlcv-tooltip");
-const $priceAxisLabel  = document.getElementById("price-axis-label");
 const $cursorPVLabel   = document.getElementById("cursor-pv-label");
 
 // Compact volume format: 1,234,567 → 1.23M
@@ -480,8 +456,8 @@ const chart = LightweightCharts.createChart(chartEl, {
   },
   crosshair: {
     mode: LightweightCharts.CrosshairMode.Normal,
-    // Native price label on the right scale is hidden — replaced by the
-    // custom #price-axis-label overlay so we can render it in blue text.
+    // Price label on the right scale is hidden entirely — the cursor-linked
+    // price+volume info is surfaced via the #cursor-pv-label overlay instead.
     horzLine: { labelVisible: false },
   },
   rightPriceScale: {
@@ -535,7 +511,6 @@ document.addEventListener('mousedown', (ev) => {
   // the 3D camera, not the chart.
   chart.applyOptions({ crosshair: { mode: LightweightCharts.CrosshairMode.Hidden } });
   $ohlcvTooltip.classList.remove('visible');
-  $priceAxisLabel.classList.remove('visible');
   $cursorPVLabel.classList.remove('visible');
   ev.preventDefault();
 }, true);
@@ -696,19 +671,8 @@ chart.subscribeCrosshairMove(param => {
   // cursor-linked chart overlays must stay hidden until the drag releases.
   if (_rmbActive || !param.point || !param.time) {
     $ohlcvTooltip.classList.remove("visible");
-    $priceAxisLabel.classList.remove("visible");
     $cursorPVLabel.classList.remove("visible");
     return;
-  }
-
-  // Blue custom price label on the right axis — follows the cursor y.
-  const price = candleSeries.coordinateToPrice(param.point.y);
-  if (typeof price === 'number' && isFinite(price)) {
-    $priceAxisLabel.textContent = price.toFixed(2);
-    $priceAxisLabel.style.top   = param.point.y + 'px';
-    $priceAxisLabel.classList.add('visible');
-  } else {
-    $priceAxisLabel.classList.remove('visible');
   }
 
   const bar = param.seriesData.get(candleSeries);
