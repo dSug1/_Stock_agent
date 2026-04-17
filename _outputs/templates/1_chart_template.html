@@ -540,6 +540,16 @@ document.addEventListener('mouseup', (ev) => {
 }, true);
 document.addEventListener('contextmenu', (ev) => ev.preventDefault(), true);
 
+// Forward double-clicks to the parent so it can orbit/select this billboard,
+// matching the behaviour of clicking the ticker's row in the chat list.
+document.addEventListener('dblclick', (ev) => {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'sv-dblclick' }, '*');
+    }
+  } catch (_) {}
+}, true);
+
 // Candlestick series
 const candleSeries = chart.addCandlestickSeries({
   upColor:          "#3fb950",

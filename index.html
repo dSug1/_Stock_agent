@@ -388,6 +388,26 @@
       margin-right: 6px;
       min-width: 0;
     }
+    /* Toggle button that shows/hides the ring-controls + ticker-input row.
+       Visible only in state 1; flips between ▼ (row shown, click to hide)
+       and ▶ (row hidden, click to show). */
+    #chat-bottom-toggle {
+      display: none;
+      align-self: center;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 10px;
+      line-height: 1;
+      opacity: 0.55;
+      padding: 2px 6px;
+      margin-top: 2px;
+      margin-right: 6px;
+    }
+    #chat-bottom-toggle:hover { opacity: 1; }
+    body.chat-open:not(.chat-expanded) #chat-bottom-toggle { display: inline-flex; }
+    body.chat-open.chat-bottom-hidden #chat-bottom-row { display: none; }
     #chat-bottom-row #ring-size-controls { flex: 0 0 auto; }
     #chat-bottom-row #ticker-input-group { flex: 1 1 auto; min-width: 0; display: flex; }
     #ticker-input-group #ticker-input { width: 0; flex: 1; min-width: 30px; }
@@ -517,6 +537,29 @@
       z-index: 1;
     }
     #chat-state-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Back button — mirror of #chat-state-btn, top-left of overlay.
+       Only shown in state 2 (chat-open + chat-expanded); returns to state 1. */
+    #chat-back-btn {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: transparent;
+      border: 1px solid var(--fg);
+      border-radius: 4px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 10px;
+      width: 22px;
+      height: 22px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      transition: all .15s;
+      z-index: 1;
+    }
+    #chat-back-btn:hover { border-color: var(--accent); color: var(--accent); }
+    body.chat-open.chat-expanded #chat-back-btn { display: flex; }
 
     /* When chat is open: switch overlay to column layout with chat body */
     body.chat-open #overlay-wrapper {
@@ -713,6 +756,7 @@
         <div id="ticker-list-scroll"></div>
       </div>
       <div id="chat-body"></div>
+      <button id="chat-bottom-toggle" type="button" title="Hide ring controls">▲</button>
       <div id="chat-bottom-row">
         <div id="ring-size-controls">
           <button id="ring-left"  type="button" title="Swap the closest billboard with its left neighbor and recenter">←</button>
@@ -725,6 +769,7 @@
           <button id="ticker-go-btn" class="menu-btn" type="button">Go</button>
         </div>
       </div>
+      <button id="chat-back-btn"  type="button" aria-label="Back to ticker list">←</button>
       <button id="chat-state-btn" type="button" aria-label="Chat state">+</button>
     </div>
     <button id="ticker-go" type="button" title="Chat"><img src="/utilities/renderer/logo.png" alt="Chat"></button>
@@ -1296,6 +1341,22 @@
       _applyWheelKick(d.deltaY, d.deltaMode | 0);
     });
 
+    // Double-clicks forwarded from a chart iframe — treat as selecting that
+    // billboard's ticker, i.e. orbit to frame it the same way a ticker-list
+    // row click does.
+    window.addEventListener('message', (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== 'sv-dblclick' || !ev.source) return;
+      for (let i = 0; i < billboards.length; i++) {
+        const b = billboards[i];
+        if (b.interactive && b.element && b.element.contentWindow === ev.source) {
+          _clickOrbitTarget = b;
+          _cameraDirty = true;
+          break;
+        }
+      }
+    });
+
     // Right-button drags forwarded from chart iframes as {sv-rmb-move, deltaX,
     // deltaY}. Mirror OrbitControls' damped-rotate exactly: accumulate the
     // delta into a pending (theta,phi) pair (in radians), then each frame
@@ -1687,9 +1748,11 @@
         // in the chat container for the ticker list, then show as many rows
         // as fit and scroll the rest.
         const bottomRowEl   = document.getElementById('chat-bottom-row');
+        const toggleEl      = document.getElementById('chat-bottom-toggle');
         const bottomRowH    = bottomRowEl ? bottomRowEl.offsetHeight : 0;
+        const toggleH       = toggleEl    ? toggleEl.offsetHeight    : 0;
         const overlayChrome = 32 /* top + bottom 16px viewport margins */ + 16 /* paddings/gaps */;
-        const maxAvail      = Math.max(60, window.innerHeight - overlayChrome - bottomRowH);
+        const maxAvail      = Math.max(60, window.innerHeight - overlayChrome - bottomRowH - toggleH);
         const naturalH      = measureRows(n);
 
         if (naturalH > maxAvail) {
@@ -1975,6 +2038,37 @@
     }
 
     $chatStateBtn.addEventListener('click', closeChatContainer);
+
+    // Back button — state 2 → state 1. Collapses the detail view and
+    // restores the scrollable ticker list.
+    document.getElementById('chat-back-btn').addEventListener('click', () => {
+      _chatExpanded = false;
+      document.body.classList.remove('chat-expanded');
+      $chatBody.replaceChildren();
+      _lastTickerListGen = -1;
+      _cameraDirty = true;
+    });
+
+    // Show/hide toggle for the state-1 ring-controls + ticker-input row.
+    const LS_CHAT_BOTTOM_HIDDEN = 'sv.chatBottomHidden';
+    const $chatBottomToggle = document.getElementById('chat-bottom-toggle');
+    function applyChatBottomHidden(hidden) {
+      document.body.classList.toggle('chat-bottom-hidden', hidden);
+      $chatBottomToggle.textContent = hidden ? '▼' : '▲';
+      $chatBottomToggle.title = hidden ? 'Show ring controls' : 'Hide ring controls';
+    }
+    try {
+      applyChatBottomHidden(localStorage.getItem(LS_CHAT_BOTTOM_HIDDEN) === '1');
+    } catch (_) { applyChatBottomHidden(false); }
+    $chatBottomToggle.addEventListener('click', () => {
+      const hidden = !document.body.classList.contains('chat-bottom-hidden');
+      applyChatBottomHidden(hidden);
+      lsSet(LS_CHAT_BOTTOM_HIDDEN, hidden ? '1' : '0');
+      // Row visibility change → available space for ticker list changes,
+      // so force a rebuild that recomputes the scroll clamp.
+      _lastTickerListGen = -1;
+      _cameraDirty = true;
+    });
 
     // ══════════════════════════════════════════════════════════════════════════
     //  TOP PERIOD BAR

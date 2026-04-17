@@ -1,4 +1,3 @@
-- when the chat container is in state 1 or state 2, when the foremost billboard is the closest to the camera (for example when the ticker is selected or on reset view), it shall sit in the left two third of the screen so that it is not obstructed by the chat container. see attachments 
 - when I left click on a billboard, select its ticker
 -  detect tickers by company name in the ticker box
 - & and or filter a la Blender modifier
