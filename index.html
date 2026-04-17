@@ -2392,20 +2392,24 @@
     }
 
     async function fetchSuggest(q) {
+      const cached = suggestCacheGet(q);
+      if (cached) { renderSuggest(cached); return; }
       const myId = ++_suggestReqId;
       try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
         if (!res.ok) return;
-        const data = await res.json();
+        const data  = await res.json();
+        const items = Array.isArray(data) ? data.slice(0, SUGGEST_MAX_ITEMS) : [];
+        suggestCacheSet(q, items);
         if (myId !== _suggestReqId) return;   // stale response — a newer query raced past us
-        renderSuggest(Array.isArray(data) ? data.slice(0, SUGGEST_MAX_ITEMS) : []);
+        renderSuggest(items);
       } catch (_) { /* network blip — leave previous state alone */ }
     }
 
     $tickerInput.addEventListener('input', () => {
       const q = $tickerInput.value.trim();
       clearTimeout(_suggestTimer);
-      if (!q) { hideSuggest(); return; }
+      if (q.length < SUGGEST_MIN_CHARS) { hideSuggest(); return; }
       _suggestTimer = setTimeout(() => fetchSuggest(q), SUGGEST_DEBOUNCE_MS);
     });
     $tickerInput.addEventListener('blur', () => {
