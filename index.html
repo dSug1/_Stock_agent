@@ -2603,11 +2603,33 @@
     const _snapNdc         = new THREE.Vector3();
 
     // Click-to-orbit: when a ticker row is clicked, rotate the camera around
-    // ringCenter until it points directly at the clicked billboard (camera
-    // angle = billboard angle → billboard sits on the camera's horizontal
-    // view axis, centered on screen). Fast exponential lerp so the motion
-    // completes in ~100 ms.
+    // ringCenter until the billboard lands on the desired screen position —
+    // dead-centre (NDC x = 0) when chat is closed, or shifted into the
+    // visible left 2/3 (NDC x = -1/3) when chat is half- or fully-open.
+    // Fast exponential lerp so the motion completes in ~100 ms.
     const _clickOrbitOffset = new THREE.Vector3();
+
+    // Solve for the camera orbit angle C such that the billboard at angle A,
+    // ringCenter-radius R_bb, appears at target horizontal NDC x_ndc, from a
+    // camera at ringCenter-radius R_cam.
+    //
+    // Derivation: with camera looking at ringCenter, billboard at angle A,
+    //   tan θ = R_bb · sin(C − A) / (R_cam − R_bb · cos(C − A))
+    // where θ is the billboard's horizontal angle off the camera view axis,
+    // and x_ndc = tan θ / tan(FOV_h/2). Setting τ = x_ndc · tan(FOV_h/2):
+    //   sin δ + τ cos δ = τ · R_cam / R_bb    with δ = C − A
+    // which resolves to δ = asin(r / √(1+τ²)) − atan(τ),  r = τ·R_cam/R_bb.
+    function solveTargetCameraAngle(A, R_bb, R_cam, xNdc) {
+      if (xNdc === 0) return A;
+      const halfFovV = camera.fov * Math.PI / 180 / 2;
+      const tanHalfH = Math.tan(halfFovV) * camera.aspect;
+      const tau = xNdc * tanHalfH;
+      const r   = tau * R_cam / R_bb;
+      const mag = Math.sqrt(1 + tau * tau);
+      if (Math.abs(r) > mag) return A;  // no solution — fall back to centre
+      return A + Math.asin(r / mag) - Math.atan(tau);
+    }
+
     function stepClickOrbit() {
       if (!_clickOrbitTarget) return;
       const b = _clickOrbitTarget;
@@ -2617,11 +2639,22 @@
       if (R_cam < 1e-4) { _clickOrbitTarget = null; return; }
 
       const C = Math.atan2(dz, dx);
-      const A = Math.atan2(b.worldPos.z - ringCenter.z, b.worldPos.x - ringCenter.x);
+      const bdx = b.worldPos.x - ringCenter.x;
+      const bdz = b.worldPos.z - ringCenter.z;
+      const A   = Math.atan2(bdz, bdx);
+
+      // Target screen NDC x for the billboard. Chat panel occludes the right
+      // 1/3, so when it's open we aim at the centre of the visible left 2/3.
+      const chatOpen = document.body.classList.contains('chat-open');
+      const xNdcTarget = chatOpen ? -1 / 3 : 0;
+      const R_bb = Math.hypot(bdx, bdz);
+      const targetC = (chatOpen && R_bb > 1e-4)
+        ? solveTargetCameraAngle(A, R_bb, R_cam, xNdcTarget)
+        : A;
 
       // applyAxisAngle(+Y, α) DECREASES atan2(z,x) by α (right-hand rule),
-      // so to move the camera angle from C toward A we rotate by (C - A).
-      let rot = C - A;
+      // so to move the camera angle from C toward targetC we rotate by (C − targetC).
+      let rot = C - targetC;
       while (rot >  Math.PI) rot -= 2 * Math.PI;
       while (rot < -Math.PI) rot += 2 * Math.PI;
 
