@@ -7,22 +7,58 @@ from typing import Callable
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
-# Migrations are keyed by target version. To introduce schema v2, add
-# entry 2: <callable(conn)> that mutates the DB into its v2 shape.
-# apply_migrations() runs every entry whose key > current version, in order.
-MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {}
+# Default DB location when callers pass no path. Resolved against cwd so
+# running from 1_Stock_Picker/ puts the file at 1_Stock_Picker/stockpicker.db.
+DEFAULT_DB_PATH = Path("stockpicker.db")
+
+
+def _migration_v3_add_institution_cik_fields(
+    conn: sqlite3.Connection,
+) -> None:
+    cols = {
+        r["name"]
+        for r in conn.execute(
+            "PRAGMA table_info(institutions)"
+        ).fetchall()
+    }
+    if "cik" not in cols:
+        conn.execute("ALTER TABLE institutions ADD COLUMN cik TEXT")
+    if "edgar_name" not in cols:
+        conn.execute(
+            "ALTER TABLE institutions ADD COLUMN edgar_name TEXT"
+        )
+
+
+# Migrations are keyed by target version. Each callable must be idempotent
+# (safe to re-run on a fresh DB where schema.sql already created the target
+# shape). apply_migrations() runs every entry whose key > current version.
+MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    3: _migration_v3_add_institution_cik_fields,
+}
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def get_connection(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
+def get_connection(
+    db_path: str | Path | None = None,
+) -> sqlite3.Connection:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    fresh = not path.exists()
+    conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if fresh:
+        # First-time open: populate schema + seed institutions so callers
+        # never need a separate init_db step before use.
+        conn.close()
+        init_db(path)
+        conn = sqlite3.connect(str(path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -43,12 +79,25 @@ def current_version(conn: sqlite3.Connection) -> int:
     return int(row["v"]) if row and row["v"] is not None else 0
 
 
-def init_db(db_path: str | Path) -> None:
-    conn = get_connection(db_path)
+def init_db(db_path: str | Path | None = None) -> None:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         conn.executescript(_load_schema_sql())
         version = current_version(conn)
-        if version < CURRENT_SCHEMA_VERSION:
+        for target in sorted(MIGRATIONS):
+            if target <= version:
+                continue
+            with conn:
+                MIGRATIONS[target](conn)
+                conn.execute(
+                    "INSERT INTO schema_version(version, applied_at) "
+                    "VALUES (?, ?)",
+                    (target, now_iso()),
+                )
+        if current_version(conn) < CURRENT_SCHEMA_VERSION:
             conn.execute(
                 "INSERT OR IGNORE INTO schema_version(version, applied_at) "
                 "VALUES (?, ?)",
@@ -62,8 +111,11 @@ def init_db(db_path: str | Path) -> None:
         conn.close()
 
 
-def apply_migrations(db_path: str | Path) -> int:
-    conn = get_connection(db_path)
+def apply_migrations(db_path: str | Path | None = None) -> int:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         version = current_version(conn)
         for target in sorted(MIGRATIONS):

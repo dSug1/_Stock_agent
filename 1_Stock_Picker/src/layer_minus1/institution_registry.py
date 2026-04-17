@@ -7,95 +7,189 @@ from typing import Optional
 from database.db import now_iso
 
 
-# Immutable spec-derived registry.
-# Format: (name, tier, tier_label, multiplier, primary_coverage)
-_INSTITUTIONS: tuple[tuple[str, str, str, float, Optional[str]], ...] = (
-    ("Baker Bros. Advisors",         "1A",
-     "Sector specialist, deep diligence", 4.0,
-     "Biotech — clinical stage, long hold through binary events"),
-    ("RA Capital Management",        "1A",
-     "Sector specialist, deep diligence", 4.0,
-     "Biotech/medtech — public/private crossover, early clinical"),
-    ("Perceptive Advisors",          "1A",
-     "Sector specialist, deep diligence", 4.0,
-     "Clinical-stage biotech, oncology and rare disease"),
-    ("Boxer Capital (Tavistock)",    "1A",
-     "Sector specialist, deep diligence", 4.0,
-     "Small/microcap biotech"),
-    ("Deerfield Management",         "1A",
-     "Sector specialist, deep diligence", 4.0,
-     "Healthcare — equity and royalty structures"),
-    ("Goehring & Rozencwajg",        "1A",
-     "Sector specialist, deep diligence", 4.0,
-     "Natural resources, commodity royalties"),
-    ("OrbiMed Advisors",             "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("BVF Inc.",                     "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("RTW Investments",              "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("Redmile Group",                "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("Cormorant Asset Management",   "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("Sio Capital Management",       "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("ARCH Venture Partners",        "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("Samsara BioCapital",           "1A",
-     "Sector specialist, deep diligence", 4.0, None),
-    ("Sofinnova Partners",           "1A",
-     "Sector specialist, deep diligence", 4.0, None),
+# Immutable spec-derived registry. CIKs verified by portfolio owner and
+# stored zero-padded to 10 digits for use in EDGAR API calls.
+_INSTITUTIONS: tuple[dict, ...] = (
+    {"name": "Baker Bros. Advisors", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0,
+     "primary_coverage":
+         "Biotech — clinical stage, long hold through binary events",
+     "cik": "0001263508",
+     "edgar_name": "Baker Bros. Advisors LP"},
+    {"name": "RA Capital Management", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0,
+     "primary_coverage":
+         "Biotech/medtech — public/private crossover, early clinical",
+     "cik": "0001346824",
+     "edgar_name": "RA Capital Management L.P."},
+    {"name": "Perceptive Advisors", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0,
+     "primary_coverage":
+         "Clinical-stage biotech, oncology and rare disease",
+     "cik": "0001411579",
+     "edgar_name": "Perceptive Advisors LLC"},
+    {"name": "Boxer Capital (Tavistock)", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0,
+     "primary_coverage": "Small/microcap biotech",
+     "cik": "0001505512",
+     "edgar_name": "Boxer Capital LLC"},
+    {"name": "Deerfield Management", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0,
+     "primary_coverage":
+         "Healthcare — equity and royalty structures",
+     "cik": "0001273931",
+     "edgar_name": "Deerfield Management LP"},
+    {"name": "Goehring & Rozencwajg", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0,
+     "primary_coverage":
+         "Natural resources, commodity royalties",
+     "cik": "0001665005",
+     "edgar_name": "Goehring & Rozencwajg Associates"},
+    {"name": "OrbiMed Advisors", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001060349", "edgar_name": "OrbiMed Advisors LLC"},
+    {"name": "BVF Inc.", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001099590", "edgar_name": "BVF Inc."},
+    {"name": "RTW Investments", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001701605", "edgar_name": "RTW Investments LP"},
+    {"name": "Redmile Group", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001478454", "edgar_name": "Redmile Group LLC"},
+    {"name": "Cormorant Asset Management", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001622879",
+     "edgar_name": "Cormorant Asset Management LP"},
+    {"name": "Sio Capital Management", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001595303",
+     "edgar_name": "Sio Capital Management LLC"},
+    {"name": "ARCH Venture Partners", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0000882603", "edgar_name": "ARCH Venture Partners"},
+    {"name": "Samsara BioCapital", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001744967", "edgar_name": "Samsara BioCapital LLC"},
+    {"name": "Sofinnova Partners", "tier": "1A",
+     "tier_label": "Sector specialist, deep diligence",
+     "multiplier": 4.0, "primary_coverage": None,
+     "cik": "0001631134", "edgar_name": "Sofinnova Partners SAS"},
 
-    ("Baupost Group",                "1B",
-     "High-conviction generalist superinvestor", 3.5,
-     "Deep value, cross-sector distress"),
-    ("Pershing Square",              "1B",
-     "High-conviction generalist superinvestor", 3.5,
-     "Concentrated activist, cross-sector"),
-    ("Appaloosa Management",         "1B",
-     "High-conviction generalist superinvestor", 3.5,
-     "Macro-aware, cross-sector"),
-    ("Third Point",                  "1B",
-     "High-conviction generalist superinvestor", 3.5,
-     "Activist, cross-sector, corporate events"),
-    ("Berkshire Hathaway",           "1B",
-     "High-conviction generalist superinvestor", 3.5,
-     "Consumer staples, financials, energy, insurance"),
+    {"name": "Baupost Group", "tier": "1B",
+     "tier_label": "High-conviction generalist superinvestor",
+     "multiplier": 3.5,
+     "primary_coverage": "Deep value, cross-sector distress",
+     "cik": "0001061219", "edgar_name": "Baupost Group LLC"},
+    {"name": "Pershing Square", "tier": "1B",
+     "tier_label": "High-conviction generalist superinvestor",
+     "multiplier": 3.5,
+     "primary_coverage": "Concentrated activist, cross-sector",
+     "cik": "0001336528",
+     "edgar_name": "Pershing Square Capital Mgmt"},
+    {"name": "Appaloosa Management", "tier": "1B",
+     "tier_label": "High-conviction generalist superinvestor",
+     "multiplier": 3.5,
+     "primary_coverage": "Macro-aware, cross-sector",
+     "cik": "0001004244",
+     "edgar_name": "Appaloosa Management LP"},
+    {"name": "Third Point", "tier": "1B",
+     "tier_label": "High-conviction generalist superinvestor",
+     "multiplier": 3.5,
+     "primary_coverage":
+         "Activist, cross-sector, corporate events",
+     "cik": "0001040273", "edgar_name": "Third Point LLC"},
+    {"name": "Berkshire Hathaway", "tier": "1B",
+     "tier_label": "High-conviction generalist superinvestor",
+     "multiplier": 3.5,
+     "primary_coverage":
+         "Consumer staples, financials, energy, insurance",
+     "cik": "0001067983", "edgar_name": "Berkshire Hathaway Inc"},
 
-    ("Greenlight Capital",           "2A",
-     "Generalist deep-value, concentrated", 2.5, None),
-    ("Gotham Asset Management",      "2A",
-     "Generalist deep-value, concentrated", 2.5, None),
-    ("Ariel Investments",            "2A",
-     "Generalist deep-value, concentrated", 2.5, None),
-    ("Oakmark Funds",                "2A",
-     "Generalist deep-value, concentrated", 2.5, None),
+    {"name": "Greenlight Capital", "tier": "2A",
+     "tier_label": "Generalist deep-value, concentrated",
+     "multiplier": 2.5, "primary_coverage": None,
+     "cik": "0001079114", "edgar_name": "Greenlight Capital Inc"},
+    {"name": "Gotham Asset Management", "tier": "2A",
+     "tier_label": "Generalist deep-value, concentrated",
+     "multiplier": 2.5, "primary_coverage": None,
+     "cik": "0001530721",
+     "edgar_name": "Gotham Asset Management LLC"},
+    {"name": "Ariel Investments", "tier": "2A",
+     "tier_label": "Generalist deep-value, concentrated",
+     "multiplier": 2.5, "primary_coverage": None,
+     "cik": "0001048268", "edgar_name": "Ariel Investments LLC"},
+    {"name": "Oakmark Funds", "tier": "2A",
+     "tier_label": "Generalist deep-value, concentrated",
+     "multiplier": 2.5, "primary_coverage": None,
+     "cik": "0000763749", "edgar_name": "Oakmark Funds"},
 
-    ("Coatue Management",            "2B",
-     "Sector specialist, broader mandate", 2.0, None),
-    ("Whale Rock Capital",           "2B",
-     "Sector specialist, broader mandate", 2.0, None),
-    ("Horizon Kinetics",             "2B",
-     "Sector specialist, broader mandate", 2.0, None),
-    ("Orbis Investment Management",  "2B",
-     "Sector specialist, broader mandate", 2.0, None),
+    {"name": "Coatue Management", "tier": "2B",
+     "tier_label": "Sector specialist, broader mandate",
+     "multiplier": 2.0, "primary_coverage": None,
+     "cik": "0001336920", "edgar_name": "Coatue Management LLC"},
+    {"name": "Whale Rock Capital", "tier": "2B",
+     "tier_label": "Sector specialist, broader mandate",
+     "multiplier": 2.0, "primary_coverage": None,
+     "cik": "0001516523",
+     "edgar_name": "Whale Rock Capital Management"},
+    {"name": "Horizon Kinetics", "tier": "2B",
+     "tier_label": "Sector specialist, broader mandate",
+     "multiplier": 2.0, "primary_coverage": None,
+     "cik": "0001010470", "edgar_name": "Horizon Kinetics LLC"},
+    {"name": "Orbis Investment Management", "tier": "2B",
+     "tier_label": "Sector specialist, broader mandate",
+     "multiplier": 2.0, "primary_coverage": None,
+     "cik": "0001056087",
+     "edgar_name": "Orbis Investment Management"},
 
-    ("Fidelity active funds",        "3",
-     "Quality institutional, active management", 1.0, None),
-    ("T. Rowe Price active",         "3",
-     "Quality institutional, active management", 1.0, None),
-    ("Wellington Management active", "3",
-     "Quality institutional, active management", 1.0, None),
-    ("Royce & Associates",           "3",
-     "Quality institutional, active management", 1.0, None),
+    {"name": "Fidelity active funds", "tier": "3",
+     "tier_label": "Quality institutional, active management",
+     "multiplier": 1.0, "primary_coverage": None,
+     "cik": "0000315066",
+     "edgar_name": "Fidelity Management & Research"},
+    {"name": "T. Rowe Price active", "tier": "3",
+     "tier_label": "Quality institutional, active management",
+     "multiplier": 1.0, "primary_coverage": None,
+     "cik": "0001113169",
+     "edgar_name": "T. Rowe Price Associates"},
+    {"name": "Wellington Management active", "tier": "3",
+     "tier_label": "Quality institutional, active management",
+     "multiplier": 1.0, "primary_coverage": None,
+     "cik": "0001080351",
+     "edgar_name": "Wellington Management Group"},
+    {"name": "Royce & Associates", "tier": "3",
+     "tier_label": "Quality institutional, active management",
+     "multiplier": 1.0, "primary_coverage": None,
+     "cik": "0000085700", "edgar_name": "Royce & Associates LP"},
 
-    ("Vanguard index",               "4",
-     "Large passive / index", 0.0, None),
-    ("BlackRock iShares",            "4",
-     "Large passive / index", 0.0, None),
-    ("SPDR index products",          "4",
-     "Large passive / index", 0.0, None),
+    {"name": "Vanguard index", "tier": "4",
+     "tier_label": "Large passive / index", "multiplier": 0.0,
+     "primary_coverage": None,
+     "cik": "0000102909", "edgar_name": "Vanguard Group Inc"},
+    {"name": "BlackRock iShares", "tier": "4",
+     "tier_label": "Large passive / index", "multiplier": 0.0,
+     "primary_coverage": None,
+     "cik": "0001364742", "edgar_name": "BlackRock Inc"},
+    {"name": "SPDR index products", "tier": "4",
+     "tier_label": "Large passive / index", "multiplier": 0.0,
+     "primary_coverage": None,
+     "cik": "0000093751",
+     "edgar_name": "State Street Corporation"},
 )
 
 
@@ -111,21 +205,8 @@ TIER_MULTIPLIERS: "MappingProxyType[str, float]" = MappingProxyType({
 VALID_TIERS: frozenset[str] = frozenset(TIER_MULTIPLIERS)
 
 
-def _row_to_dict(
-    row: tuple[str, str, str, float, Optional[str]],
-) -> dict:
-    name, tier, tier_label, multiplier, coverage = row
-    return {
-        "name": name,
-        "tier": tier,
-        "tier_label": tier_label,
-        "multiplier": multiplier,
-        "primary_coverage": coverage,
-    }
-
-
 def get_all_institutions() -> list[dict]:
-    return [_row_to_dict(r) for r in _INSTITUTIONS]
+    return [dict(i) for i in _INSTITUTIONS]
 
 
 def get_institutions_by_tier(tier: str) -> list[dict]:
@@ -134,13 +215,21 @@ def get_institutions_by_tier(tier: str) -> list[dict]:
             f"unknown tier: {tier!r} "
             f"(expected one of {sorted(VALID_TIERS)})"
         )
-    return [_row_to_dict(r) for r in _INSTITUTIONS if r[1] == tier]
+    return [dict(i) for i in _INSTITUTIONS if i["tier"] == tier]
 
 
 def get_institution_by_name(name: str) -> Optional[dict]:
-    for r in _INSTITUTIONS:
-        if r[0] == name:
-            return _row_to_dict(r)
+    for i in _INSTITUTIONS:
+        if i["name"] == name:
+            return dict(i)
+    return None
+
+
+def get_institution_by_cik(cik: str) -> Optional[dict]:
+    padded = cik.zfill(10)
+    for i in _INSTITUTIONS:
+        if i["cik"] == padded:
+            return dict(i)
     return None
 
 
@@ -154,14 +243,24 @@ def get_multiplier_for_institution(name: str) -> float:
 def seed_institutions(conn: sqlite3.Connection) -> int:
     ts = now_iso()
     inserted = 0
-    for name, tier, tier_label, mult, coverage in _INSTITUTIONS:
+    for i in _INSTITUTIONS:
         cur = conn.execute(
             "INSERT OR IGNORE INTO institutions "
             "(name, tier, tier_label, multiplier, primary_coverage, "
-            " created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name, tier, tier_label, mult, coverage, ts, ts),
+            " cik, edgar_name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (i["name"], i["tier"], i["tier_label"], i["multiplier"],
+             i["primary_coverage"], i["cik"], i["edgar_name"], ts, ts),
         )
         inserted += cur.rowcount
+    # Update CIK / edgar_name on rows that predate v3 (where seed_institutions
+    # was originally called without those fields).
+    for i in _INSTITUTIONS:
+        conn.execute(
+            "UPDATE institutions "
+            "SET cik = ?, edgar_name = ?, updated_at = ? "
+            "WHERE name = ? AND (cik IS NULL OR edgar_name IS NULL)",
+            (i["cik"], i["edgar_name"], ts, i["name"]),
+        )
     conn.commit()
     return inserted

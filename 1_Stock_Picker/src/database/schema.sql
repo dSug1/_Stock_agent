@@ -342,9 +342,87 @@ CREATE TABLE IF NOT EXISTS institutions (
     tier_label          TEXT NOT NULL,
     multiplier          REAL NOT NULL,
     primary_coverage    TEXT,
+    cik                 TEXT,
+    edgar_name          TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_institutions_tier
     ON institutions(tier);
+CREATE INDEX IF NOT EXISTS idx_institutions_cik
+    ON institutions(cik);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 — 13F holdings per institution per filing.
+-- filing_date is the ONLY date used for point-in-time queries.
+-- period_of_report is stored for reference but never filtered on.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS institution_holdings (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    institution_id      INTEGER NOT NULL,
+    filing_date         TEXT NOT NULL,
+    period_of_report    TEXT NOT NULL,
+    ticker              TEXT,
+    cusip               TEXT NOT NULL,
+    shares              INTEGER,
+    market_value        INTEGER,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    FOREIGN KEY (institution_id) REFERENCES institutions(id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    UNIQUE (institution_id, filing_date, cusip)
+);
+
+CREATE INDEX IF NOT EXISTS idx_holdings_filing_date
+    ON institution_holdings(filing_date);
+CREATE INDEX IF NOT EXISTS idx_holdings_institution_filing
+    ON institution_holdings(institution_id, filing_date);
+CREATE INDEX IF NOT EXISTS idx_holdings_ticker
+    ON institution_holdings(ticker);
+CREATE INDEX IF NOT EXISTS idx_holdings_cusip
+    ON institution_holdings(cusip);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 — per-ticker TWOS score per run_date.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS twos_scores (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker              TEXT NOT NULL,
+    run_date            TEXT NOT NULL,
+    twos_score          REAL NOT NULL,
+    processing_tier     TEXT NOT NULL
+        CHECK (processing_tier IN
+               ('active','passive','watchlist','not_tracked')),
+    crowding_flag       INTEGER NOT NULL DEFAULT 0
+        CHECK (crowding_flag IN (0,1)),
+    institution_count   INTEGER NOT NULL,
+    qoq_change_signal   TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE (ticker, run_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_twos_run_date
+    ON twos_scores(run_date);
+CREATE INDEX IF NOT EXISTS idx_twos_ticker
+    ON twos_scores(ticker);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 — CUSIP → ticker cache (OpenFIGI resolutions).
+-- NULL ticker = OpenFIGI returned no match; cached to avoid retries.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cusip_ticker_map (
+    cusip           TEXT PRIMARY KEY,
+    ticker          TEXT,
+    exchange        TEXT,
+    resolved_date   TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cusip_ticker
+    ON cusip_ticker_map(ticker);

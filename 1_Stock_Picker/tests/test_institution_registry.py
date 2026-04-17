@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from database.db import get_connection, init_db
+from database.db import CURRENT_SCHEMA_VERSION, get_connection, init_db
 from layer_minus1.institution_registry import (
     TIER_MULTIPLIERS,
     get_all_institutions,
@@ -167,4 +167,4 @@ def test_migration_on_existing_v1_database(tmp_path: Path) -> None:
     v = conn.execute(
         "SELECT MAX(version) AS v FROM schema_version"
     ).fetchone()["v"]
-    assert v == 2
+    assert v == CURRENT_SCHEMA_VERSION
