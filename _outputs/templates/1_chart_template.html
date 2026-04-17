@@ -174,13 +174,68 @@
       font-size: 11px;
       pointer-events: none;
       display: none;
-      gap: 8px;
-      flex-wrap: wrap;
-      max-width: 340px;
+      flex-direction: column;
+      gap: 3px;
+      max-width: 380px;
     }
     #ohlcv-tooltip.visible { display: flex; }
+    .ot-time { color: var(--txt); font-weight: 600; }
+    .ot-pv   {
+      display: flex;
+      gap: 14px;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 3px 0;
+      border-top: 1px solid var(--txt-dim);
+      border-bottom: 1px solid var(--txt-dim);
+    }
+    .ot-row  { display: flex; gap: 8px; flex-wrap: wrap; }
     .ov { color: var(--txt-dim); margin-right: 2px; }
     .oval { color: var(--txt); }
+
+    /* ── Right-axis price label (custom, blue text) ───────────────────────── */
+    #price-axis-label {
+      position: absolute;
+      right: 2px;
+      top: 0;
+      transform: translateY(-50%);
+      background: var(--bg);
+      color: #58a6ff;
+      border: 1px solid #58a6ff;
+      padding: 1px 5px;
+      font-size: 11px;
+      font-weight: 600;
+      font-style: italic;
+      font-family: 'Consolas', 'Courier New', monospace;
+      border-radius: 3px;
+      pointer-events: none;
+      display: none;
+      z-index: 4;
+      white-space: nowrap;
+    }
+    #price-axis-label.visible { display: block; }
+
+    /* ── Cursor-linked price/volume label (attached to time-axis) ─────────── */
+    #cursor-pv-label {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform: translateY(-100%);
+      background: var(--bg);
+      color: var(--txt);
+      border: 1px solid #58a6ff;
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 3px;
+      pointer-events: none;
+      display: none;
+      z-index: 6;
+      white-space: nowrap;
+    }
+    #cursor-pv-label.visible { display: block; }
+    #cursor-pv-label .cpv-sep { color: var(--txt-dim); margin: 0 6px; }
+    #cursor-pv-label .cpv-lab { color: var(--txt-dim); margin-right: 3px; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -202,6 +257,8 @@
     <div id="chart"></div>
     <div id="loading"><div class="spinner"></div> Loading data…</div>
     <div id="ohlcv-tooltip"></div>
+    <div id="price-axis-label"></div>
+    <div id="cursor-pv-label"></div>
   </div>
 
   <!-- ── Footer ───────────────────────────────────────────────────────────── -->
@@ -370,7 +427,29 @@ const $liveLabel    = document.getElementById("live-label");
 const $updatedLabel = document.getElementById("updated-label");
 const $intervalLabel= document.getElementById("interval-label");
 const $errorToast   = document.getElementById("error-toast");
-const $ohlcvTooltip = document.getElementById("ohlcv-tooltip");
+const $ohlcvTooltip    = document.getElementById("ohlcv-tooltip");
+const $priceAxisLabel  = document.getElementById("price-axis-label");
+const $cursorPVLabel   = document.getElementById("cursor-pv-label");
+
+// Compact volume format: 1,234,567 → 1.23M
+function _fmtVol(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—';
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+  return String(v);
+}
+// Date + HH:MM from epoch seconds (or BusinessDay {y,m,d}).
+function _fmtTime(t) {
+  if (typeof t === 'number') {
+    const d = new Date(t * 1000);
+    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
+  }
+  if (t && typeof t === 'object' && 'year' in t) {
+    return `${t.year}-${String(t.month).padStart(2,'0')}-${String(t.day).padStart(2,'0')}`;
+  }
+  return String(t);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  Period UI (no buttons here anymore — the 3D scene parent (index.html)
@@ -401,6 +480,9 @@ const chart = LightweightCharts.createChart(chartEl, {
   },
   crosshair: {
     mode: LightweightCharts.CrosshairMode.Normal,
+    // Native price label on the right scale is hidden — replaced by the
+    // custom #price-axis-label overlay so we can render it in blue text.
+    horzLine: { labelVisible: false },
   },
   rightPriceScale: {
     borderColor: _fg,
@@ -453,6 +535,8 @@ document.addEventListener('mousedown', (ev) => {
   // the 3D camera, not the chart.
   chart.applyOptions({ crosshair: { mode: LightweightCharts.CrosshairMode.Hidden } });
   $ohlcvTooltip.classList.remove('visible');
+  $priceAxisLabel.classList.remove('visible');
+  $cursorPVLabel.classList.remove('visible');
   ev.preventDefault();
 }, true);
 document.addEventListener('mousemove', (ev) => {
@@ -608,26 +692,72 @@ window.addEventListener("message", (ev) => {
 //  OHLCV crosshair tooltip
 // ══════════════════════════════════════════════════════════════════════════════
 chart.subscribeCrosshairMove(param => {
-  if (!param.point || !param.time) {
+  // While a right-drag is active the user is orbiting the 3D camera — any
+  // cursor-linked chart overlays must stay hidden until the drag releases.
+  if (_rmbActive || !param.point || !param.time) {
     $ohlcvTooltip.classList.remove("visible");
+    $priceAxisLabel.classList.remove("visible");
+    $cursorPVLabel.classList.remove("visible");
     return;
   }
+
+  // Blue custom price label on the right axis — follows the cursor y.
+  const price = candleSeries.coordinateToPrice(param.point.y);
+  if (typeof price === 'number' && isFinite(price)) {
+    $priceAxisLabel.textContent = price.toFixed(2);
+    $priceAxisLabel.style.top   = param.point.y + 'px';
+    $priceAxisLabel.classList.add('visible');
+  } else {
+    $priceAxisLabel.classList.remove('visible');
+  }
+
   const bar = param.seriesData.get(candleSeries);
-  if (!bar) { $ohlcvTooltip.classList.remove("visible"); return; }
+  if (!bar) {
+    $ohlcvTooltip.classList.remove("visible");
+    $cursorPVLabel.classList.remove("visible");
+    return;
+  }
 
   const { open: o, high: h, low: l, close: c } = bar;
-  const chg   = c - o;
-  const chgPct= ((chg / o) * 100).toFixed(2);
-  const color = chg >= 0 ? "#3fb950" : "#f85149";
-  const fmt   = v => typeof v === "number" ? v.toFixed(2) : "—";
+  const chg    = c - o;
+  const chgPct = ((chg / o) * 100).toFixed(2);
+  const color  = chg >= 0 ? "#3fb950" : "#f85149";
+  const fmt    = v => typeof v === "number" ? v.toFixed(2) : "—";
+  const volBar = param.seriesData.get(volumeSeries);
+  const vol    = volBar ? volBar.value : null;
 
   $ohlcvTooltip.innerHTML =
-    `<span><span class="ov">O</span><span class="oval">${fmt(o)}</span></span>
-     <span><span class="ov">H</span><span class="oval">${fmt(h)}</span></span>
-     <span><span class="ov">L</span><span class="oval">${fmt(l)}</span></span>
-     <span><span class="ov">C</span><span class="oval" style="color:${color}">${fmt(c)}</span></span>
-     <span><span class="ov">Δ</span><span class="oval" style="color:${color}">${chg>=0?"+":""}${fmt(chg)} (${chgPct}%)</span></span>`;
+    `<div class="ot-time">${_fmtTime(param.time)}</div>
+     <div class="ot-pv">
+       <span><span class="ov">Price</span><span class="oval" style="color:${color}">${fmt(c)}</span></span>
+       <span><span class="ov">Vol</span><span class="oval">${_fmtVol(vol)}</span></span>
+     </div>
+     <div class="ot-row">
+       <span><span class="ov">O</span><span class="oval">${fmt(o)}</span></span>
+       <span><span class="ov">H</span><span class="oval">${fmt(h)}</span></span>
+       <span><span class="ov">L</span><span class="oval">${fmt(l)}</span></span>
+       <span><span class="ov">C</span><span class="oval" style="color:${color}">${fmt(c)}</span></span>
+       <span><span class="ov">Δ</span><span class="oval" style="color:${color}">${chg>=0?"+":""}${fmt(chg)} (${chgPct}%)</span></span>
+     </div>`;
   $ohlcvTooltip.classList.add("visible");
+
+  // Floating Price + Volume label that tracks the crosshair's x-position
+  // at the bottom of the chart — appears right next to the native
+  // date/time axis label so price/volume are visible exactly where the
+  // cursor is.
+  $cursorPVLabel.innerHTML =
+    `<span class="cpv-lab">Price</span><span style="color:${color}">${fmt(c)}</span>` +
+    `<span class="cpv-sep">|</span>` +
+    `<span class="cpv-lab">Vol</span><span>${_fmtVol(vol)}</span>`;
+  // Make visible first so offsetWidth is measurable, then flip the label
+  // to the cursor's LEFT side whenever the default right-of-cursor position
+  // would overflow the chart pane (so it stays on-screen near the right edge).
+  $cursorPVLabel.classList.add('visible');
+  const _paneW   = chart.timeScale().width();
+  const _labW    = $cursorPVLabel.offsetWidth;
+  const _flip    = (param.point.x + 8 + _labW) > _paneW;
+  $cursorPVLabel.style.left = (_flip ? param.point.x - 8 - _labW : param.point.x + 8) + 'px';
+  $cursorPVLabel.style.top  = (param.point.y - 6) + 'px';
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
