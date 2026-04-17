@@ -1224,6 +1224,63 @@
       _applyWheelKick(d.deltaY, d.deltaMode | 0);
     });
 
+    // Right-button drags forwarded from chart iframes as {sv-rmb-move, deltaX,
+    // deltaY}. Mirror OrbitControls' damped-rotate exactly: accumulate the
+    // delta into a pending (theta,phi) pair (in radians), then each frame
+    // apply `dampingFactor` of the pending amount and decay what's left by
+    // `(1 - dampingFactor)`. This matches OrbitControls' handleMouseMoveRotate
+    // + update loop so iframe-forwarded drags feel identical to native ones,
+    // including the gentle coast after release.
+    //
+    // The camera.up quaternion transform (see OrbitControls.update) is
+    // essential — without it the offset is projected onto the wrong pole
+    // and the camera can flip to the apex on the first delta.
+    const _rmbOffset    = new THREE.Vector3();
+    const _rmbSpherical = new THREE.Spherical();
+    const _rmbQuat      = new THREE.Quaternion();
+    const _rmbQuatInv   = new THREE.Quaternion();
+    const _UP_Y         = new THREE.Vector3(0, 1, 0);
+    const _PHI_EPS      = 0.000001;
+    const _RMB_PEND_EPS = 1e-6;
+    let   _rmbPendTheta = 0;
+    let   _rmbPendPhi   = 0;
+    window.addEventListener('message', (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== 'sv-rmb-move') return;
+      if (typeof d.deltaX !== 'number' || typeof d.deltaY !== 'number') return;
+      const h = billboardsLayer.clientHeight;
+      if (!h) return;
+      _rmbPendTheta += 2 * Math.PI * d.deltaX * controls.rotateSpeed / h;
+      _rmbPendPhi   += 2 * Math.PI * d.deltaY * controls.rotateSpeed / h;
+    });
+
+    function stepRmbOrbit() {
+      if (Math.abs(_rmbPendTheta) < _RMB_PEND_EPS && Math.abs(_rmbPendPhi) < _RMB_PEND_EPS) {
+        _rmbPendTheta = 0;
+        _rmbPendPhi   = 0;
+        return;
+      }
+      const df = controls.enableDamping ? controls.dampingFactor : 1;
+      const applyTheta = _rmbPendTheta * df;
+      const applyPhi   = _rmbPendPhi   * df;
+      _rmbQuat.setFromUnitVectors(camera.up, _UP_Y);
+      _rmbQuatInv.copy(_rmbQuat).invert();
+      _rmbOffset.copy(camera.position).sub(controls.target);
+      _rmbOffset.applyQuaternion(_rmbQuat);
+      _rmbSpherical.setFromVector3(_rmbOffset);
+      _rmbSpherical.theta -= applyTheta;
+      _rmbSpherical.phi   -= applyPhi;
+      _rmbSpherical.phi = Math.max(_PHI_EPS, Math.min(Math.PI - _PHI_EPS, _rmbSpherical.phi));
+      _rmbSpherical.makeSafe();
+      _rmbOffset.setFromSpherical(_rmbSpherical);
+      _rmbOffset.applyQuaternion(_rmbQuatInv);
+      camera.position.copy(controls.target).add(_rmbOffset);
+      camera.lookAt(controls.target);
+      _rmbPendTheta -= applyTheta;
+      _rmbPendPhi   -= applyPhi;
+      _cameraDirty = true;
+    }
+
     // Apply the current zoom velocity to the camera once per frame, then decay.
     const _zoomDir = new THREE.Vector3();
     function stepZoomInertia() {
@@ -2395,6 +2452,7 @@
       stepClickOrbit();                  // orbit toward a clicked ticker row
       stepSnapMagnet();                  // modulate rotateSpeed before orbit step
       controls.update();                 // may set _cameraDirty via 'change' event
+      stepRmbOrbit();                    // damped iframe-forwarded right-drag
       stepZoomInertia();                 // may set _cameraDirty if zooming
       enforceBillboardMargin();          // may set _cameraDirty if camera pushed
 

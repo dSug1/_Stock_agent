@@ -435,6 +435,46 @@ window.addEventListener('wheel', (ev) => {
   } catch (_) { /* cross-origin safety net — same-origin in practice */ }
 }, { passive: false });
 
+// Forward right-mouse-button drags to the parent so the 3D camera orbits
+// even when the cursor is over this chart iframe. Use screenX/screenY
+// (not clientX/clientY) so deltas stay correct if the mouse leaves the
+// iframe mid-drag, and document-level capture-phase listeners so nothing
+// from lightweight-charts can swallow the events first.
+let _rmbActive = false;
+let _rmbLastSX = 0;
+let _rmbLastSY = 0;
+document.addEventListener('mousedown', (ev) => {
+  if (ev.button !== 2) return;
+  _rmbActive = true;
+  _rmbLastSX = ev.screenX;
+  _rmbLastSY = ev.screenY;
+  ev.preventDefault();
+}, true);
+document.addEventListener('mousemove', (ev) => {
+  if (!_rmbActive) return;
+  // Lose the drag if the button came up outside this document.
+  if (!(ev.buttons & 2)) { _rmbActive = false; return; }
+  const dx = ev.screenX - _rmbLastSX;
+  const dy = ev.screenY - _rmbLastSY;
+  _rmbLastSX = ev.screenX;
+  _rmbLastSY = ev.screenY;
+  if (dx === 0 && dy === 0) return;
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        type:   'sv-rmb-move',
+        deltaX: dx,
+        deltaY: dy,
+      }, '*');
+    }
+  } catch (_) {}
+}, true);
+document.addEventListener('mouseup', (ev) => {
+  if (ev.button !== 2) return;
+  _rmbActive = false;
+}, true);
+document.addEventListener('contextmenu', (ev) => ev.preventDefault(), true);
+
 // Candlestick series
 const candleSeries = chart.addCandlestickSeries({
   upColor:          "#3fb950",

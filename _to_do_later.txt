@@ -1,5 +1,7 @@
+- at start and at reset view, align the camera with the first billboard. the view shall be centered vertically and horizontally to the center of this first billboard.
 - when I hover the cursor over the price chart, there is a display of the date and time. Below this display, display also the stock price and volume.There is also a display of price at the right of the chart: change the font color of this display to blue (same color as the font color of ticker when it is hovered in the chart container)
 - use SQL instead of json caches
+- upload data faster when I select a time window
 - detect tickers by company name in the ticker box
 - & and or filter a la Blender modifier
 
