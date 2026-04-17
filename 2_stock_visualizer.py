@@ -19,9 +19,10 @@ Usage
     python 2_stock_visualizer.py          # prompts in terminal, opens browser
 """
 
-import os, sys, json, time, datetime, threading, webbrowser
+import os, sys, json, time, datetime, threading, webbrowser, sqlite3
 import email.utils
 from pathlib import Path
+from contextlib import contextmanager
 
 import requests
 import yfinance as yf
@@ -167,27 +168,164 @@ def is_market_open(exchange_code: str = mc.DEFAULT_EXCHANGE) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Cache helpers
+#  SQLite cache
+#
+#  One file `_outputs/cache/prices.db` stores three tables:
+#    meta(ticker, …, fetched_at)         – company info, weekly TTL
+#    bars(ticker, interval, t, o…v)      – OHLCV rows, deduped via PK
+#    period_fetch(ticker, period, …)     – per-period TTL bookkeeping
+#
+#  Bars are shared across periods that use the same interval, so fetching the
+#  longer period (1y @ 1d) automatically warms the shorter ones (3mo, 6mo).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _cache_file(ticker: str) -> Path:
-    return CACHE_DIR / f"{ticker.upper()}.json"
+DB_PATH = CACHE_DIR / "prices.db"
+
+# Approximate window per period — used as a lower bound when serving bars.
+# Generous buffers absorb yfinance's slightly inclusive date semantics.
+PERIOD_WINDOW_DAYS: dict[str, float | None] = {
+    "1d":  2,
+    "5d":  10,
+    "1mo": 40,
+    "3mo": 100,
+    "6mo": 200,
+    "1y":  400,
+    "2y":  750,
+    "5y":  1900,
+    "max": None,
+}
+
+# Period order (shortest → longest). Used to mark equal-or-shorter periods at
+# the same interval as fresh after a longer fetch covers them.
+PERIOD_ORDER = ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"]
 
 
-def _load_cache(ticker: str) -> dict:
-    p = _cache_file(ticker)
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
+def _init_db() -> None:
+    with sqlite3.connect(DB_PATH) as cx:
+        cx.executescript("""
+            CREATE TABLE IF NOT EXISTS meta (
+                ticker     TEXT PRIMARY KEY,
+                short_name TEXT, long_name TEXT,
+                sector     TEXT, industry  TEXT,
+                currency   TEXT, exchange  TEXT, website TEXT,
+                cik        TEXT,
+                fetched_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS bars (
+                ticker   TEXT,
+                interval TEXT,
+                t        INTEGER,
+                o REAL, h REAL, l REAL, c REAL, v INTEGER,
+                PRIMARY KEY(ticker, interval, t)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bars_lookup
+                ON bars(ticker, interval, t);
+            CREATE TABLE IF NOT EXISTS period_fetch (
+                ticker     TEXT,
+                period     TEXT,
+                fetched_at TEXT,
+                PRIMARY KEY(ticker, period)
+            );
+            PRAGMA journal_mode = WAL;
+        """)
 
 
-def _save_cache(ticker: str, data: dict) -> None:
-    _cache_file(ticker).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+@contextmanager
+def _db():
+    cx = sqlite3.connect(DB_PATH, timeout=10)
+    cx.row_factory = sqlite3.Row
+    try:
+        yield cx
+        cx.commit()
+    finally:
+        cx.close()
+
+
+def db_get_meta(ticker: str) -> dict:
+    with _db() as cx:
+        row = cx.execute("SELECT * FROM meta WHERE ticker = ?", (ticker,)).fetchone()
+    return dict(row) if row else {}
+
+
+def db_set_meta(meta: dict) -> None:
+    with _db() as cx:
+        cx.execute("""
+            INSERT INTO meta(ticker, short_name, long_name, sector, industry,
+                             currency, exchange, website, cik, fetched_at)
+            VALUES(:ticker, :short_name, :long_name, :sector, :industry,
+                   :currency, :exchange, :website, :cik, :fetched_at)
+            ON CONFLICT(ticker) DO UPDATE SET
+                short_name=excluded.short_name, long_name=excluded.long_name,
+                sector=excluded.sector,         industry=excluded.industry,
+                currency=excluded.currency,     exchange=excluded.exchange,
+                website=excluded.website,       cik=excluded.cik,
+                fetched_at=excluded.fetched_at
+        """, {
+            "ticker":     meta.get("ticker", "").upper(),
+            "short_name": meta.get("short_name", ""),
+            "long_name":  meta.get("long_name", ""),
+            "sector":     meta.get("sector", ""),
+            "industry":   meta.get("industry", ""),
+            "currency":   meta.get("currency", "USD"),
+            "exchange":   meta.get("exchange", ""),
+            "website":    meta.get("website", ""),
+            "cik":        meta.get("cik", ""),
+            "fetched_at": meta.get("fetched_at", ""),
+        })
+
+
+def db_get_bars(ticker: str, interval: str, since_unix: int | None) -> list[dict]:
+    sql = "SELECT t, o, h, l, c, v FROM bars WHERE ticker=? AND interval=?"
+    args: list = [ticker, interval]
+    if since_unix is not None:
+        sql += " AND t >= ?"
+        args.append(since_unix)
+    sql += " ORDER BY t"
+    with _db() as cx:
+        rows = cx.execute(sql, args).fetchall()
+    return [{"t": r["t"], "o": r["o"], "h": r["h"], "l": r["l"],
+             "c": r["c"], "v": r["v"]} for r in rows]
+
+
+def db_upsert_bars(ticker: str, interval: str, records: list[dict]) -> None:
+    if not records:
+        return
+    with _db() as cx:
+        cx.executemany("""
+            INSERT INTO bars(ticker, interval, t, o, h, l, c, v)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker, interval, t) DO UPDATE SET
+                o=excluded.o, h=excluded.h, l=excluded.l,
+                c=excluded.c, v=excluded.v
+        """, [(ticker, interval, r["t"], r["o"], r["h"], r["l"], r["c"], r["v"])
+              for r in records])
+
+
+def db_get_period_fetched_at(ticker: str, period: str) -> str:
+    with _db() as cx:
+        row = cx.execute(
+            "SELECT fetched_at FROM period_fetch WHERE ticker=? AND period=?",
+            (ticker, period)
+        ).fetchone()
+    return row["fetched_at"] if row else ""
+
+
+def db_mark_period_fresh(ticker: str, period: str, when_iso: str) -> None:
+    """
+    Mark `period` as fetched at `when_iso`, AND mark every shorter-or-equal
+    period that shares the same interval — fetching 1y @ 1d covers 6mo and 3mo
+    too, so they don't need their own roundtrips.
+    """
+    interval = PERIOD_INTERVAL.get(period, "1d")
+    covered = [p for p in PERIOD_ORDER
+               if PERIOD_INTERVAL.get(p) == interval
+               and PERIOD_ORDER.index(p) <= PERIOD_ORDER.index(period)]
+    with _db() as cx:
+        cx.executemany("""
+            INSERT INTO period_fetch(ticker, period, fetched_at)
+            VALUES(?, ?, ?)
+            ON CONFLICT(ticker, period) DO UPDATE SET fetched_at=excluded.fetched_at
+        """, [(ticker, p, when_iso) for p in covered])
 
 
 def _age_seconds(iso_str: str) -> float:
@@ -199,6 +337,14 @@ def _age_seconds(iso_str: str) -> float:
         return (datetime.datetime.utcnow() - dt).total_seconds()
     except Exception:
         return float("inf")
+
+
+def _period_since_unix(period: str) -> int | None:
+    """Lower bound for bar timestamps when serving a period, or None for max."""
+    days = PERIOD_WINDOW_DAYS.get(period)
+    if days is None:
+        return None
+    return int(time.time() - days * 86_400)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -240,17 +386,11 @@ def fetch_meta(ticker: str) -> dict:
         }
 
 
-def fetch_prices(ticker: str, period: str, interval: str) -> list[dict]:
-    """
-    Download OHLCV bars from Yahoo Finance.
-    Returns a list of dicts with keys: t (unix epoch), o, h, l, c, v.
-    """
-    df = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+def _df_to_records(df: pd.DataFrame) -> list[dict]:
+    """Convert a single-ticker yfinance DataFrame to OHLCV record dicts."""
     df = df.reset_index()
-
-    records: list[dict] = []
     dt_col = "Datetime" if "Datetime" in df.columns else "Date"
-
+    records: list[dict] = []
     for _, row in df.iterrows():
         raw_ts = row[dt_col]
         try:
@@ -264,75 +404,128 @@ def fetch_prices(ticker: str, period: str, interval: str) -> list[dict]:
         v = int(row.get("Volume",  0) or 0)
         if c == 0:
             continue
-        records.append({
-            "t": unix_ts,
-            "o": round(o, 4),
-            "h": round(h, 4),
-            "l": round(l, 4),
-            "c": round(c, 4),
-            "v": v,
-        })
+        records.append({"t": unix_ts,
+                        "o": round(o, 4), "h": round(h, 4),
+                        "l": round(l, 4), "c": round(c, 4),
+                        "v": v})
     return records
+
+
+def fetch_prices(ticker: str, period: str, interval: str) -> list[dict]:
+    """Download OHLCV bars for one ticker. Returns record dicts."""
+    return _df_to_records(yf.Ticker(ticker).history(
+        period=period, interval=interval, auto_adjust=True
+    ))
+
+
+def fetch_prices_batch(tickers: list[str], period: str, interval: str) -> dict[str, list[dict]]:
+    """
+    Download OHLCV for multiple tickers in a SINGLE yfinance call. yfinance
+    issues one HTTP request per batch (with internal threading), which is the
+    main reason a multi-ticker period change drops from ~2 s → ~300 ms.
+    """
+    if not tickers:
+        return {}
+    if len(tickers) == 1:
+        return {tickers[0]: fetch_prices(tickers[0], period, interval)}
+    df = yf.download(
+        tickers=" ".join(tickers),
+        period=period, interval=interval,
+        auto_adjust=True, group_by="ticker",
+        progress=False, threads=True,
+    )
+    out: dict[str, list[dict]] = {}
+    for t in tickers:
+        try:
+            out[t] = _df_to_records(df[t].dropna(how="all"))
+        except Exception:
+            out[t] = []
+    return out
+
+
+def _ensure_meta_fresh(ticker: str) -> dict:
+    """Return current meta row, refreshing from yfinance if older than META_TTL."""
+    meta = db_get_meta(ticker)
+    if _age_seconds(meta.get("fetched_at", "")) > META_TTL:
+        print(f"  [cache] fetching metadata for {ticker} …")
+        meta = fetch_meta(ticker)
+        db_set_meta(meta)
+    return meta
+
+
+def _build_payload(ticker: str, period: str, interval: str, meta: dict) -> dict:
+    """Assemble the JSON payload returned by /api/data and /api/data_batch."""
+    exchange_code = meta.get("exchange") or mc.DEFAULT_EXCHANGE
+    return {
+        "meta":              meta,
+        "interval":          interval,
+        "period":            period,
+        "fetched_at":        db_get_period_fetched_at(ticker, period),
+        "records":           db_get_bars(ticker, interval, _period_since_unix(period)),
+        "market_open":       is_market_open(exchange_code),
+        "exchange_schedule": mc.schedule_for_json(exchange_code),
+    }
+
+
+def _effective_ttl(interval: str, exchange_code: str) -> int:
+    base = CACHE_TTL.get(interval, 86_400)
+    if interval in ("1m", "5m", "1h") and is_market_open(exchange_code):
+        return 6
+    return base
 
 
 def get_chart_data(ticker: str, period: str) -> dict:
     """
-    Return chart data for ticker+period, using cache where fresh.
-
-    Cache strategy (trade-off):
-      - One JSON file per ticker → fast reuse, O(tickers) files on disk.
-      - Multiple period sections per file → single fetch covers many requests.
-      - Intraday sections refreshed every 6 s during market hours (live feel).
-      - Daily/weekly/monthly sections refreshed by their natural TTL.
+    Return chart data for ticker+period, refreshing from yfinance only if the
+    SQLite cache row for that (ticker, period) is older than its TTL.
     """
-    ticker        = ticker.upper()
-    interval      = PERIOD_INTERVAL.get(period, "1d")
-    base_ttl      = CACHE_TTL.get(interval, 86_400)
-    exchange_code = _load_cache(ticker).get("meta", {}).get("exchange", mc.DEFAULT_EXCHANGE) or mc.DEFAULT_EXCHANGE
+    ticker   = ticker.upper()
+    interval = PERIOD_INTERVAL.get(period, "1d")
+    meta     = _ensure_meta_fresh(ticker)
+    exchange = meta.get("exchange") or mc.DEFAULT_EXCHANGE
+    ttl      = _effective_ttl(interval, exchange)
+    age      = _age_seconds(db_get_period_fetched_at(ticker, period))
 
-    # During open market, intraday intervals use 6-second TTL
-    effective_ttl = (
-        6 if is_market_open(exchange_code) and interval in ("1m", "5m", "1h")
-        else base_ttl
-    )
-
-    cache    = _load_cache(ticker)
-    now_iso  = datetime.datetime.utcnow().isoformat()
-
-    # ── Refresh metadata if stale ──────────────────────────────────────────────
-    if _age_seconds(cache.get("meta", {}).get("fetched_at", "")) > META_TTL:
-        print(f"  [cache] fetching metadata for {ticker} …")
-        cache["meta"] = fetch_meta(ticker)
-        _save_cache(ticker, cache)
-
-    # ── Refresh price data if stale ───────────────────────────────────────────
-    key    = f"{period}_{interval}"
-    prices = cache.get("prices", {})
-    sec    = prices.get(key, {})
-
-    if not sec or _age_seconds(sec.get("fetched_at", "")) > effective_ttl:
+    if age > ttl:
         print(f"  [cache] fetching {interval} prices for {ticker} ({period}) …")
         records = fetch_prices(ticker, period, interval)
-        cache.setdefault("prices", {})[key] = {
-            "interval":   interval,
-            "period":     period,
-            "fetched_at": now_iso,
-            "records":    records,
-        }
-        _save_cache(ticker, cache)
+        db_upsert_bars(ticker, interval, records)
+        db_mark_period_fresh(ticker, period, datetime.datetime.utcnow().isoformat())
 
-    # Re-read exchange_code in case meta was just refreshed
-    exchange_code = cache.get("meta", {}).get("exchange", mc.DEFAULT_EXCHANGE) or mc.DEFAULT_EXCHANGE
-    sec = cache["prices"][key]
-    return {
-        "meta":              cache["meta"],
-        "interval":          interval,
-        "period":            period,
-        "fetched_at":        sec["fetched_at"],
-        "records":           sec["records"],
-        "market_open":       is_market_open(exchange_code),
-        "exchange_schedule": mc.schedule_for_json(exchange_code),
-    }
+    return _build_payload(ticker, period, interval, meta)
+
+
+def get_chart_data_batch(tickers: list[str], period: str) -> dict[str, dict]:
+    """
+    Batched equivalent of get_chart_data(). Refreshes any stale tickers in a
+    SINGLE yfinance.download() call instead of N sequential ones.
+    """
+    tickers = [t.upper() for t in tickers if t]
+    if not tickers:
+        return {}
+    interval = PERIOD_INTERVAL.get(period, "1d")
+    metas    = {t: _ensure_meta_fresh(t) for t in tickers}
+
+    stale: list[str] = []
+    for t in tickers:
+        exchange = metas[t].get("exchange") or mc.DEFAULT_EXCHANGE
+        ttl      = _effective_ttl(interval, exchange)
+        if _age_seconds(db_get_period_fetched_at(t, period)) > ttl:
+            stale.append(t)
+
+    if stale:
+        print(f"  [cache] batch fetching {interval} prices for {stale} ({period}) …")
+        now_iso = datetime.datetime.utcnow().isoformat()
+        try:
+            batch = fetch_prices_batch(stale, period, interval)
+        except Exception as exc:
+            print(f"  [cache] batch fetch failed ({exc}) — falling back to per-ticker")
+            batch = {t: fetch_prices(t, period, interval) for t in stale}
+        for t, recs in batch.items():
+            db_upsert_bars(t, interval, recs)
+            db_mark_period_fresh(t, period, now_iso)
+
+    return {t: _build_payload(t, period, interval, metas[t]) for t in tickers}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -424,6 +617,33 @@ def api_data():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/data_batch")
+def api_data_batch():
+    """
+    Batched chart data for multiple tickers at one period.
+
+    Query params:
+      tickers — comma-separated symbols, e.g. "AAPL,MSFT,NVDA"
+      period  — one of VALID_PERIODS
+
+    Response: { "period": "...", "tickers": { "AAPL": {…same shape as /api/data…}, … } }
+
+    Stale tickers are refreshed in a single yfinance.download() call, so a
+    period change that previously made N sequential roundtrips now makes one.
+    """
+    raw    = (request.args.get("tickers") or "").strip()
+    period = (request.args.get("period") or "1d").strip()
+    if not raw:
+        return jsonify({"error": "tickers parameter required"}), 400
+    if period not in VALID_PERIODS:
+        period = "1d"
+    tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
+    try:
+        return jsonify({"period": period, "tickers": get_chart_data_batch(tickers, period)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/search")
 def api_search():
     q = (request.args.get("q") or "").strip()
@@ -462,7 +682,7 @@ def api_time_info():
     ticker        = (request.args.get("ticker") or "").upper().strip()
     exchange_code = mc.DEFAULT_EXCHANGE
     if ticker:
-        exchange_code = (_load_cache(ticker).get("meta", {}).get("exchange") or mc.DEFAULT_EXCHANGE)
+        exchange_code = (db_get_meta(ticker).get("exchange") or mc.DEFAULT_EXCHANGE)
 
     local_utc_ms    = int(time.time() * 1000)
     internet_utc_ms = int((time.time() + offset_s) * 1000)
@@ -586,6 +806,8 @@ def _debug_prefetch() -> tuple[list[str], str]:
 
 
 if __name__ == "__main__":
+    _init_db()
+
     # Start internet clock calibration immediately (blocking first sync so
     # is_market_open() is accurate before we pre-fetch any data).
     print("  [clock] calibrating against internet time …", end="", flush=True)
@@ -611,4 +833,6 @@ if __name__ == "__main__":
     print("  Press Ctrl+C to stop.\n")
 
     threading.Thread(target=_open_browser, args=(url,), daemon=True).start()
-    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+    # threaded=True lets Flask serve the per-iframe live-poll requests
+    # concurrently instead of serialising them on a single worker.
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False, threaded=True)

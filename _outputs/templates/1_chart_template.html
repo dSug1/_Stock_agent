@@ -655,12 +655,29 @@ function broadcastPeriod(p) {
 
 window.addEventListener("message", (ev) => {
   const d = ev.data;
-  if (!d || d.type !== "sv-period" || typeof d.period !== "string") return;
-  if (!PERIODS.includes(d.period))   return;
-  if (d.period === state.period)      return;
-  state.period = d.period;
-  updatePeriodButtons();
-  loadChart();
+  if (!d || typeof d.period !== "string" || !PERIODS.includes(d.period)) return;
+
+  // Parent forwarded preloaded batch data — render directly, no fetch needed.
+  if (d.type === "sv-period-with-data" && d.data) {
+    state.period = d.period;
+    updatePeriodButtons();
+    clearLiveTimer();
+    $loading.classList.add("hidden");
+    try {
+      renderChart(d.data);
+      scheduleLive();
+    } catch (err) {
+      showError("Failed to render: " + err.message);
+    }
+    return;
+  }
+
+  // Legacy path: parent only told us the new period — fetch our own data.
+  if (d.type === "sv-period" && d.period !== state.period) {
+    state.period = d.period;
+    updatePeriodButtons();
+    loadChart();
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

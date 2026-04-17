@@ -1342,14 +1342,10 @@
     window.addEventListener('message', (ev) => {
       const d = ev.data;
       if (!d || d.type !== 'sv-period' || typeof d.period !== 'string') return;
-      // Forward to every other iframe so they all sync up.
-      for (const b of billboards) {
-        if (!b.interactive) continue;                    // skip placeholders
-        const el = b.element;
-        if (el.contentWindow === ev.source) continue;    // skip originator
-        try {
-          el.contentWindow.postMessage({ type: 'sv-period', period: d.period }, '*');
-        } catch (_) { /* cross-origin safety net — same-origin in practice */ }
+      // Batch-fetch for every other iframe (skip the originator — it already
+      // loaded its own data in response to the user's wheel/click).
+      if (typeof broadcastPeriodWithBatch === 'function') {
+        broadcastPeriodWithBatch(d.period, /*excludeWindow=*/ev.source);
       }
       // Update the top-bar highlight so it reflects chart-initiated changes
       // (e.g. wheel-zoom inside a billboard that auto-switches period).
@@ -1892,11 +1888,47 @@
       }
     }
 
+    // Hits /api/data_batch ONCE for every interactive billboard's ticker, then
+    // pushes each iframe its own slice via postMessage(sv-period-with-data).
+    // The iframes render directly without each making their own roundtrip —
+    // this is the main reason a period change drops from ~2 s to ~300 ms.
+    //
+    // `excludeWindow`: if the period change originated from a chart iframe
+    // (wheel-zoom inside it), that iframe already has the data — skip it.
+    async function broadcastPeriodWithBatch(p, excludeWindow) {
+      const targets = billboards.filter(b =>
+        b.interactive && b.ticker && b.element.contentWindow !== excludeWindow);
+      if (targets.length === 0) return;
+      const tickers = [...new Set(targets.map(b => b.ticker))];
+      try {
+        const res  = await fetch(
+          `/api/data_batch?tickers=${encodeURIComponent(tickers.join(','))}`
+        + `&period=${encodeURIComponent(p)}`);
+        const blob = await res.json();
+        if (!blob || !blob.tickers) throw new Error(blob && blob.error || 'bad batch response');
+        for (const b of targets) {
+          const data = blob.tickers[b.ticker];
+          if (!data) continue;
+          try {
+            b.element.contentWindow.postMessage(
+              { type: 'sv-period-with-data', period: p, data }, '*');
+          } catch (_) { /* cross-origin safety net */ }
+        }
+      } catch (_) {
+        // Batch failed — fall back to legacy per-iframe fetch path.
+        for (const b of targets) {
+          try {
+            b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, '*');
+          } catch (_) { /* same-origin safety net */ }
+        }
+      }
+    }
+
     function setGlobalPeriod(p, fromBroadcast) {
       if (!PERIODS.includes(p) || p === currentPeriod) return;
       currentPeriod = p;
       updatePeriodHighlight();
-      if (!fromBroadcast) broadcastPeriodToAll(p);
+      if (!fromBroadcast) broadcastPeriodWithBatch(p, /*excludeWindow=*/null);
       persistSession();
     }
 
