@@ -411,9 +411,29 @@ const chart = LightweightCharts.createChart(chartEl, {
     timeVisible: true,
     secondsVisible: false,
   },
-  handleScroll:  true,
-  handleScale:   true,
+  // Wheel / drag zoom inside the chart is disabled — all mouse-wheel
+  // interaction is forwarded to the parent 3D scene so scrolling always
+  // zooms the camera, never the chart's time scale.
+  handleScroll:  false,
+  handleScale:   false,
 });
+
+// Forward every wheel event to the parent so the 3D camera zooms even
+// when the cursor is over this chart iframe. Events can't bubble across
+// the frame boundary, so we relay {deltaY, deltaMode} via postMessage
+// and let the parent apply its own zoom-inertia math.
+window.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        type:      'sv-wheel',
+        deltaY:    ev.deltaY,
+        deltaMode: ev.deltaMode,
+      }, '*');
+    }
+  } catch (_) { /* cross-origin safety net — same-origin in practice */ }
+}, { passive: false });
 
 // Candlestick series
 const candleSeries = chart.addCandlestickSeries({
@@ -503,67 +523,11 @@ const ro = new ResizeObserver(entries => {
 });
 ro.observe(chartEl);
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  Dynamic zoom: auto-switch period & granularity on scroll
-//
-//  When the user scrolls / pinch-zooms, the visible time span changes.
-//  We map that span to the best-matching period, and if it differs from the
-//  current one we fetch new data at the right granularity and highlight the
-//  matching period button.
-//
-//  Guard rails:
-//    _ignoreRangeChange — suppressed during programmatic fitContent / setVisibleRange
-//    _zoomCooldown      — 1.5 s dead-zone after each auto-switch to avoid flicker
-// ══════════════════════════════════════════════════════════════════════════════
-
-const SPAN_TO_PERIOD = [
-  // [maxCalendarDays, period]
-  //  Thresholds are set slightly above the natural data span of each period
-  //  so the switch feels like "you clearly need more/less data now."
-  [1.5,      "1d"],      // ≤ 1.5 days   → 1-min bars
-  [7,        "5d"],      // ≤ 7 days     → 5-min bars
-  [35,       "1mo"],     // ≤ 35 days    → 1-hour bars
-  [100,      "3mo"],     // ≤ 100 days   → daily bars
-  [200,      "6mo"],     // ≤ 200 days   → daily bars
-  [400,      "1y"],      // ≤ 400 days   → daily bars
-  [800,      "2y"],      // ≤ 800 days   → weekly bars
-  [2000,     "5y"],      // ≤ 2000 days  → weekly bars
-];
-// Anything wider → "max" (monthly bars)
-
-function spanToPeriod(spanDays) {
-  for (const [maxDays, p] of SPAN_TO_PERIOD) {
-    if (spanDays <= maxDays) return p;
-  }
-  return "max";
-}
-
-let _zoomDebounce       = null;
-let _zoomCooldown       = false;
+// Programmatic range-change suppression flag, still used by renderChart
+// when it calls setVisibleRange/fitContent. Left in place even though the
+// wheel-zoom-to-period auto-switch has been removed — the rest of the
+// render pipeline references it.
 let _ignoreRangeChange  = false;
-
-chart.timeScale().subscribeVisibleTimeRangeChange(range => {
-  // Skip null ranges, missing ticker, programmatic changes, and cooldown
-  if (!range || range.from == null || range.to == null) return;
-  if (!state.ticker || _ignoreRangeChange || _zoomCooldown) return;
-
-  clearTimeout(_zoomDebounce);
-  _zoomDebounce = setTimeout(() => {
-    const spanDays = (range.to - range.from) / 86400;
-    const newPeriod = spanToPeriod(spanDays);
-
-    if (newPeriod !== state.period) {
-      // Activate cooldown to prevent rapid bounce between adjacent periods
-      _zoomCooldown = true;
-      setTimeout(() => { _zoomCooldown = false; }, 1500);
-
-      state.period = newPeriod;
-      updatePeriodButtons();
-      loadChart();
-      broadcastPeriod(newPeriod);
-    }
-  }, 400);   // 400 ms debounce — fast enough to feel responsive, slow enough to batch wheel ticks
-});
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  Cross-iframe period sync (used by the 3D Stock Visualizer parent)
@@ -589,10 +553,6 @@ window.addEventListener("message", (ev) => {
   if (!d || d.type !== "sv-period" || typeof d.period !== "string") return;
   if (!PERIODS.includes(d.period))   return;
   if (d.period === state.period)      return;
-  // Same cooldown pattern as the zoom-subscription auto-switch, so a fresh
-  // incoming broadcast isn't immediately clobbered by our own zoom handler.
-  _zoomCooldown = true;
-  setTimeout(() => { _zoomCooldown = false; }, 1500);
   state.period = d.period;
   updatePeriodButtons();
   loadChart();

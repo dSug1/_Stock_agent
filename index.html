@@ -1192,18 +1192,33 @@
     const ZOOM_FRICTION       = 0.88;           // per-frame velocity retention
     const ZOOM_VEL_EPS        = 1e-5;           // below this, clamp to 0
 
-    billboardsLayer.addEventListener('wheel', (ev) => {
-      ev.preventDefault();
+    function _applyWheelKick(deltaY, deltaMode) {
       // Normalize deltaY across input devices.
       //   deltaMode 0 = pixels (most mice ≈ ±100 per notch)
       //   deltaMode 1 = lines  (older Firefox)
       //   deltaMode 2 = pages
-      let dy = ev.deltaY;
-      if (ev.deltaMode === 1) dy *= 16;
-      if (ev.deltaMode === 2) dy *= 400;
+      let dy = deltaY;
+      if (deltaMode === 1) dy *= 16;
+      if (deltaMode === 2) dy *= 400;
       // dy > 0 means wheel-down → zoom out → log(r) should grow.
       _zoomVel += dy * ZOOM_KICK_PER_PIXEL * controls.zoomSpeed;
+    }
+
+    billboardsLayer.addEventListener('wheel', (ev) => {
+      ev.preventDefault();
+      _applyWheelKick(ev.deltaY, ev.deltaMode);
     }, { passive: false });
+
+    // Wheel events that happen over a chart iframe don't bubble across
+    // the frame boundary, so each iframe relays them back here via
+    // postMessage ({type:'sv-wheel', deltaY, deltaMode}). Funnel those
+    // through the same normalization path so zoom feel is identical
+    // whether the cursor is over a billboard or the 3D background.
+    window.addEventListener('message', (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== 'sv-wheel' || typeof d.deltaY !== 'number') return;
+      _applyWheelKick(d.deltaY, d.deltaMode | 0);
+    });
 
     // Apply the current zoom velocity to the camera once per frame, then decay.
     const _zoomDir = new THREE.Vector3();
