@@ -310,15 +310,33 @@
     #ticker-input:focus { border-color: var(--accent); }
     #ticker-input::placeholder { color: var(--text); opacity: 0.4; }
 
-    /* ── Chat body — merged inside price-overlay, visible when chat-open ── */
+    /* ── Chat body — repurposed as the per-ticker detail container.
+       Hidden in states 0 (closed) and 1 (half-open); only shown in state 2
+       (fully-open), where it fills the remaining vertical space below the
+       closest ticker row and hosts ticker-specific data / chat. ── */
     #chat-body {
       display: none;
-      padding: 14px;
+      padding: 10px 14px;
       overflow-y: auto;
       color: var(--text);
       font-size: 13px;
     }
-    body.chat-open #chat-body { display: none; }
+    #chat-body .cb-ticker {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--accent, #58a6ff);
+      margin-bottom: 4px;
+    }
+    #chat-body .cb-company {
+      font-size: 13px;
+      opacity: 0.7;
+      margin-bottom: 12px;
+    }
+    #chat-body .cb-placeholder {
+      font-size: 12px;
+      opacity: 0.5;
+      font-style: italic;
+    }
 
     /* Blank-slot placeholder shown when there aren't enough tickers.
        Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
@@ -360,14 +378,14 @@
       justify-content: center;
     }
     /* ── Chat bottom row — ring controls + ticker input (chat-open, not expanded) ──
-       margin-right matches #ticker-list-scroll (margin-right:30 + padding-right:14)
-       so the Go button's right edge aligns with where the ticker rows' text ends. */
+       margin-right matches #ticker-list-scroll (padding-right: 6px) so the Go
+       button's right edge aligns with where the ticker rows' text ends. */
     #chat-bottom-row {
       display: none;
       align-items: center;
       gap: 6px;
       margin-top: 6px;
-      margin-right: 44px;
+      margin-right: 6px;
       min-width: 0;
     }
     #chat-bottom-row #ring-size-controls { flex: 0 0 auto; }
@@ -390,7 +408,10 @@
       gap: 8px;
     }
     #overlay-wrapper.visible { display: flex; }
-    /* When chat is open: dock top-right, height adapts to row count */
+    /* When chat is open: dock top-right, height adapts to row count.
+       max-height clamps the overlay so it never extends past the viewport
+       even with a high ticker count — the ticker list inside shrinks to fit
+       and scrolls, keeping the bottom-row controls visible. */
     body.chat-open #overlay-wrapper {
       top: 16px;
       bottom: auto;
@@ -398,6 +419,7 @@
       left: auto;
       transform: none;
       align-items: stretch;
+      max-height: calc(100vh - 32px);
     }
 
     /* ── Price info overlay ───────────────────────────────────────────── */
@@ -525,7 +547,7 @@
     body.chat-open.chat-expanded #price-overlay   { flex: 1; }
     body.chat-open.chat-expanded #ticker-list {
       display: flex;
-      flex: 1 1 0;
+      flex: 0 0 auto;
       min-height: 0;
       justify-content: flex-start;
     }
@@ -535,6 +557,14 @@
     }
     body.chat-open.chat-expanded .tl-row:not(.closest) { display: none; }
     body.chat-open.chat-expanded .tl-sep              { display: none; }
+    body.chat-open.chat-expanded #chat-body {
+      display: block;
+      flex: 1 1 0;
+      min-height: 0;
+      border-top: 1px solid var(--fg);
+      margin-top: 6px;
+      padding-top: 10px;
+    }
 
     /* ── Ticker list (multi-row billboard list inside chat) ── */
     #ticker-list {
@@ -547,28 +577,29 @@
     }
     #ticker-list-scroll {
       overflow-y: auto;
-      padding-right: 14px;
-      margin-right: 30px;
+      padding-right: 6px;
       scrollbar-width: thin;
     }
     .tl-row {
       display: flex;
       align-items: center;
       gap: calc(8px * var(--ticker-row-scale, 1));
-      padding: calc(4px * var(--ticker-row-scale, 1)) 0;
+      height: calc(22px * var(--ticker-row-scale, 1));
+      padding: 0;
+      line-height: 1;
       white-space: nowrap;
       cursor: pointer;
     }
     .tl-row:hover .tl-ticker { color: var(--accent, #58a6ff); }
     .tl-row.closest .tl-ticker { color: var(--accent, #58a6ff); }
     .tl-ticker {
-      font-size: calc(14px * var(--ticker-row-scale, 1));
+      font-size: calc(13px * var(--ticker-row-scale, 1));
       font-weight: 700;
       color: var(--text);
       min-width: calc(52px * var(--ticker-row-scale, 1));
     }
     .tl-company {
-      font-size: calc(12px * var(--ticker-row-scale, 1));
+      font-size: calc(11px * var(--ticker-row-scale, 1));
       color: var(--text);
       opacity: 0.6;
       overflow: hidden;
@@ -577,11 +608,11 @@
       min-width: 0;
     }
     .tl-price {
-      font-size: calc(14px * var(--ticker-row-scale, 1));
+      font-size: calc(13px * var(--ticker-row-scale, 1));
       font-weight: 700;
     }
     .tl-change {
-      font-size: calc(12px * var(--ticker-row-scale, 1));
+      font-size: calc(11px * var(--ticker-row-scale, 1));
       font-weight: 600;
     }
     .tl-sep {
@@ -590,27 +621,30 @@
       margin: 0;
       width: 100%;
     }
-    .tl-arrow {
+    /* ── Per-row giraffe button (state 1 only) ── */
+    .tl-giraffe-btn {
       display: none;
-      position: absolute;
-      right: 2px;
-      background: var(--bg);
-      border: 1px solid var(--fg);
-      border-radius: 4px;
-      color: var(--text);
+      background: var(--fg);
+      border: none;
+      border-radius: 3px;
       cursor: pointer;
-      font-size: 10px;
-      width: 22px;
-      height: 22px;
+      padding: 0;
+      width: calc(16px * var(--ticker-row-scale, 1));
+      height: calc(16px * var(--ticker-row-scale, 1));
       align-items: center;
       justify-content: center;
-      z-index: 2;
-      opacity: 0.7;
+      flex-shrink: 0;
+      transition: opacity .15s;
+      margin-left: 4px;
     }
-    .tl-arrow:hover { opacity: 1; }
-    #tl-arrow-up   { top: 0; }
-    #tl-arrow-down { bottom: 0; }
-    #ticker-list-scroll.scrollable ~ .tl-arrow { display: flex; }
+    .tl-giraffe-btn:hover { opacity: .75; }
+    .tl-giraffe-btn img {
+      width: 65%;
+      height: 65%;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    body.chat-open:not(.chat-expanded) .tl-giraffe-btn { display: flex; }
   </style>
 
   <!-- Three.js ES modules pinned to 0.160.0.
@@ -677,8 +711,6 @@
       <hr class="po-separator">
       <div id="ticker-list">
         <div id="ticker-list-scroll"></div>
-        <button id="tl-arrow-up" class="tl-arrow" type="button">&#x25B2;</button>
-        <button id="tl-arrow-down" class="tl-arrow" type="button">&#x25BC;</button>
       </div>
       <div id="chat-body"></div>
       <div id="chat-bottom-row">
@@ -1462,12 +1494,9 @@
     // ── Ticker list (multi-row) state ──
     const $tickerList       = document.getElementById('ticker-list');
     const $tickerListScroll = document.getElementById('ticker-list-scroll');
-    const $tlArrowUp        = document.getElementById('tl-arrow-up');
-    const $tlArrowDown      = document.getElementById('tl-arrow-down');
     const _tickerRowMap     = new Map();   // billboard → {rowEl, sepEl, ticker, company, price, change}
     let _lastTickerListGen  = -1;
     let _lastClosestForList = null;
-    let _height15           = 0;       // cached height of 15 rows at scale=1
     let _clickOrbitTarget   = null;    // billboard to orbit toward after a row click
 
     window.addEventListener('message', (ev) => {
@@ -1532,6 +1561,7 @@
           _lastClosestForList = b;
         }
         updateTickerListData();
+        updateTickerDetail();
       }
     }
 
@@ -1590,7 +1620,15 @@
           const tCompany = document.createElement('span'); tCompany.className = 'tl-company';
           const tPrice   = document.createElement('span'); tPrice.className   = 'tl-price';
           const tChange  = document.createElement('span'); tChange.className  = 'tl-change';
-          rowEl.append(tTicker, tCompany, tPrice, tChange);
+          const giraffeBtn = document.createElement('button');
+          giraffeBtn.type = 'button';
+          giraffeBtn.className = 'tl-giraffe-btn';
+          giraffeBtn.title = 'Open this ticker';
+          const giraffeImg = document.createElement('img');
+          giraffeImg.src = '/utilities/renderer/logo.png';
+          giraffeImg.alt = '';
+          giraffeBtn.appendChild(giraffeImg);
+          rowEl.append(tTicker, tCompany, tPrice, tChange, giraffeBtn);
           const sepEl = document.createElement('hr');
           sepEl.className = 'tl-sep';
           const clickedBb = bb;
@@ -1598,7 +1636,16 @@
             _clickOrbitTarget = clickedBb;
             _cameraDirty = true;
           });
-          entry = { rowEl, sepEl, ticker: tTicker, company: tCompany, price: tPrice, change: tChange, _lastTicker: '', _lastPrice: '', _lastChange: '' };
+          giraffeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            _clickOrbitTarget = clickedBb;
+            _chatExpanded = true;
+            document.body.classList.add('chat-expanded');
+            setChatBtnState(1);
+            _lastTickerListGen = -1;
+            _cameraDirty = true;
+          });
+          entry = { rowEl, sepEl, ticker: tTicker, company: tCompany, price: tPrice, change: tChange, giraffe: giraffeBtn, _lastTicker: '', _lastPrice: '', _lastChange: '' };
           _tickerRowMap.set(bb, entry);
         }
         // appendChild moves existing nodes — achieves reorder
@@ -1613,11 +1660,12 @@
         entry.rowEl.classList.toggle('closest', i === 0);
       }
 
-      // Font scale — keep scale at 1 for ≤15, shrink beyond
+      // Rows are always rendered at their natural fixed size — no font
+      // scaling based on row count. Scroll-on-overflow handles the rest.
       const n = ring.length;
-      const scale = Math.max(0.55, Math.min(1, 15 / n));
+      $tickerList.style.setProperty('--ticker-row-scale', 1);
 
-      // Measure helper (must run BEFORE scale changes to capture current sizes)
+      // Measure helper
       const measureRows = (count) => {
         const rs = $tickerListScroll.querySelectorAll('.tl-row');
         const ss = $tickerListScroll.querySelectorAll('.tl-sep');
@@ -1627,44 +1675,34 @@
         return h;
       };
 
-      // Capture the 15-row height at scale=1 whenever we first need it
-      // (at exactly 15 rows, or on crossing past 15 for the first time).
-      // Measuring at scale=1 keeps the cached height independent of later
-      // font-shrinking so the scroll area stays the same size as more rows
-      // are added past 15.
-      const needHeight15 = (n >= 15) && (_height15 <= 0);
-      if (n === 15 || needHeight15) {
-        $tickerList.style.setProperty('--ticker-row-scale', 1);
-        $tickerListScroll.offsetHeight;  // force layout at scale=1
-        _height15 = measureRows(Math.min(15, n));
-      }
-
-      // Apply the actual font scale (may shrink below 1 for n>15).
-      $tickerList.style.setProperty('--ticker-row-scale', scale);
-
-      // Scrollable when >15 rows
-      const scrollable = n > 15;
-      $tickerListScroll.classList.toggle('scrollable', scrollable);
-
-      // Expand-state is driven purely by the user clicking the + button.
-      // Growing past 15 rows does NOT auto-expand: the chat stays adaptive
-      // so the ring controls + ticker input at the bottom stay visible, and
-      // closing the chat cleanly reinstates the bottom-center single-ticker
-      // overlay.
       document.body.classList.toggle('chat-expanded', _chatExpanded);
 
       if (_chatExpanded) {
-        // User-expanded: let the scroll area fill the stretched container.
+        // State 2: only the closest row is visible, no sizing needed.
         $tickerListScroll.style.maxHeight = '';
         $tickerListScroll.style.minHeight = '';
-      } else if (scrollable && _height15 > 0) {
-        // Adaptive + >15 rows: lock scroll viewport to 15-row height.
-        $tickerListScroll.style.maxHeight = _height15 + 'px';
-        $tickerListScroll.style.minHeight = _height15 + 'px';
+        $tickerListScroll.classList.remove('scrollable');
       } else {
-        // Adaptive + ≤15 rows: natural height, pad to 3 rows when fewer.
-        $tickerListScroll.style.maxHeight = '';
-        $tickerListScroll.style.minHeight = (n < 3) ? measureRows(3) + 'px' : '';
+        // State 1 (adaptive): compute how much vertical space is available
+        // in the chat container for the ticker list, then show as many rows
+        // as fit and scroll the rest.
+        const bottomRowEl   = document.getElementById('chat-bottom-row');
+        const bottomRowH    = bottomRowEl ? bottomRowEl.offsetHeight : 0;
+        const overlayChrome = 32 /* top + bottom 16px viewport margins */ + 16 /* paddings/gaps */;
+        const maxAvail      = Math.max(60, window.innerHeight - overlayChrome - bottomRowH);
+        const naturalH      = measureRows(n);
+
+        if (naturalH > maxAvail) {
+          // Rows overflow the available space → enable scrolling.
+          $tickerListScroll.style.maxHeight = maxAvail + 'px';
+          $tickerListScroll.style.minHeight = maxAvail + 'px';
+          $tickerListScroll.classList.add('scrollable');
+        } else {
+          // Everything fits: use natural height, pad to 3 rows when fewer.
+          $tickerListScroll.style.maxHeight = '';
+          $tickerListScroll.style.minHeight = (n < 3) ? measureRows(3) + 'px' : '';
+          $tickerListScroll.classList.remove('scrollable');
+        }
       }
     }
 
@@ -1701,6 +1739,40 @@
         entry.price.style.color  = color;
         entry.change.style.color = color;
       }
+    }
+
+    /**
+     * Populate the #chat-body detail panel (state 2 only) with data for the
+     * currently-closest billboard. The closest row is also the only ticker
+     * row visible at the top in state 2, so detail content tracks it.
+     * Cheap dirty-check: only rewrites DOM when the ticker identity changes.
+     */
+    let _detailLastTicker = null;
+    function updateTickerDetail() {
+      const expanded = document.body.classList.contains('chat-expanded');
+      if (!expanded) {
+        _detailLastTicker = null;
+        return;
+      }
+      const b = _closestInteractive;
+      let info;
+      try { if (b && b.element) info = _priceInfoMap.get(b.element.contentWindow); } catch (_) {}
+      const ticker  = info ? info.ticker  : (b && b.ticker) || '';
+      const company = info ? info.company : '';
+      if (_detailLastTicker === ticker) return;
+      _detailLastTicker = ticker;
+      $chatBody.replaceChildren();
+      if (!ticker) return;
+      const h = document.createElement('div');
+      h.className = 'cb-ticker';
+      h.textContent = ticker;
+      const c = document.createElement('div');
+      c.className = 'cb-company';
+      c.textContent = company;
+      const p = document.createElement('div');
+      p.className = 'cb-placeholder';
+      p.textContent = 'Ticker-specific data & chat will appear here.';
+      $chatBody.append(h, c, p);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1860,22 +1932,25 @@
     //  CHAT DIALOG — giraffe opens; single button cycles expand → reduce → close
     // ══════════════════════════════════════════════════════════════════════════
     const $chatStateBtn = document.getElementById('chat-state-btn');
+    const $chatBody     = document.getElementById('chat-body');
     let _chatExpanded   = false;
-    // State cycle: 0 = adaptive (next click expands)
-    //              1 = expanded (next click closes)
+    // State 0 = closed, 1 = half-open, 2 = fully-open.
+    // In states 1 and 2 the corner button always shows "×" and closes to 0.
+    // State 1 → 2 transition is triggered exclusively by the per-row giraffe
+    // button in the ticker list; there is no "+" expand affordance any more.
     let _chatBtnState = 0;
 
     function setChatBtnState(s) {
       _chatBtnState = s;
-      if (s === 0) { $chatStateBtn.textContent = '+'; $chatStateBtn.setAttribute('aria-label', 'Expand chat'); }
-      else         { $chatStateBtn.textContent = '×'; $chatStateBtn.setAttribute('aria-label', 'Close chat'); }
+      $chatStateBtn.textContent = '×';
+      $chatStateBtn.setAttribute('aria-label', 'Close chat');
     }
 
     document.getElementById('ticker-go').addEventListener('click', () => {
       document.body.classList.toggle('chat-open');
       _chatExpanded = false;
       document.body.classList.remove('chat-expanded');
-      setChatBtnState(0);
+      setChatBtnState(1);
       _lastTickerListGen = -1;
       _cameraDirty = true;
     });
@@ -1884,6 +1959,7 @@
       document.body.classList.remove('chat-expanded');
       _chatExpanded = false;
       setChatBtnState(0);
+      $chatBody.replaceChildren();
       // Reset chat-mode layout state on the ticker-list scroll container
       // so it can't linger under the now-hidden #ticker-list and affect
       // the bottom-center single-ticker overlay.
@@ -1898,27 +1974,7 @@
       _cameraDirty = true;
     }
 
-    $chatStateBtn.addEventListener('click', () => {
-      if (_chatBtnState === 0) {
-        // expand
-        _chatExpanded = true;
-        document.body.classList.add('chat-expanded');
-        setChatBtnState(1);
-        _lastTickerListGen = -1;
-        _cameraDirty = true;
-      } else {
-        // close
-        closeChatContainer();
-      }
-    });
-
-    // Ticker-list scroll arrows
-    $tlArrowUp.addEventListener('click', () => {
-      $tickerListScroll.scrollBy({ top: -60, behavior: 'smooth' });
-    });
-    $tlArrowDown.addEventListener('click', () => {
-      $tickerListScroll.scrollBy({ top: 60, behavior: 'smooth' });
-    });
+    $chatStateBtn.addEventListener('click', closeChatContainer);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  TOP PERIOD BAR
@@ -2643,6 +2699,9 @@
       camera.updateProjectionMatrix();
       webglRenderer.setSize(w, h);
       recomputeViewportCache();
+      // Force ticker-list rebuild so the clamped scroll height is
+      // recomputed against the new viewport size.
+      _lastTickerListGen = -1;
       _cameraDirty = true;
     });
   </script>
