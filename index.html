@@ -1321,6 +1321,72 @@
       _cameraDirty = true;
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  HORIZONTAL ORBIT LOCK
+    //
+    //  When the camera is at ≥95% of the maximum zoom-IN (i.e. distance to
+    //  target is within the bottom 5% of the [minDistance, maxDistance] range)
+    //  we flatten the view so the closest billboard is seen edge-on. While in
+    //  the lock zone:
+    //    - vertical orbit input is blocked (both OrbitControls drag and the
+    //      iframe-forwarded RMB-drag accumulator)
+    //    - the polar angle phi is animated toward π/2 with a damping factor,
+    //      so the camera glides into the horizontal plane instead of snapping
+    //
+    //  Below the threshold (zoomed out more than 5%) polar limits are restored
+    //  and vertical orbit works normally.
+    //
+    //  Zoom % is measured as (maxDistance − dist) / (maxDistance − minDistance):
+    //  100% at minDistance, 0% at maxDistance.
+    // ══════════════════════════════════════════════════════════════════════════
+    const HORIZONTAL_LOCK_ZOOM_PCT = 0.95;   // engage when zoom-in ≥ 95%
+    const HORIZONTAL_LOCK_DAMP     = 0.10;
+    const HORIZONTAL_LOCK_EPS      = 0.0005;
+    let   _lockPhi = null;   // null when below threshold; phi-being-animated when locked
+
+    function stepHorizontalLock() {
+      const dist    = camera.position.distanceTo(controls.target);
+      const minDist = getMinOrbitDistance();
+      const maxDist = controls.maxDistance;
+      const range   = maxDist - minDist;
+      // Guard: if the orbit range collapsed (min ≈ max), skip — there's no
+      // meaningful zoom percentage to compute.
+      const zoomIn  = range > 1e-6 ? (maxDist - dist) / range : 0;
+
+      if (zoomIn < HORIZONTAL_LOCK_ZOOM_PCT) {
+        if (_lockPhi !== null) {
+          _lockPhi = null;
+          controls.minPolarAngle = 0;
+          controls.maxPolarAngle = Math.PI;
+        }
+        return;
+      }
+
+      // First frame in the lock zone — seed _lockPhi from the camera's current
+      // polar angle so the animation starts from where the camera is.
+      if (_lockPhi === null) {
+        const dy = camera.position.y - controls.target.y;
+        _lockPhi = Math.acos(THREE.MathUtils.clamp(dy / dist, -1, 1));
+      }
+
+      // Damp toward horizontal (π/2). Snap when we're within EPS to avoid an
+      // asymptotic chase that never quite resolves.
+      const goal = Math.PI / 2;
+      _lockPhi  += (goal - _lockPhi) * HORIZONTAL_LOCK_DAMP;
+      if (Math.abs(_lockPhi - goal) < HORIZONTAL_LOCK_EPS) _lockPhi = goal;
+
+      // Pinning min == max == _lockPhi makes OrbitControls' next update() clamp
+      // the polar angle to exactly _lockPhi — both blocking new vertical drag
+      // and animating the camera into the horizontal plane.
+      controls.minPolarAngle = _lockPhi;
+      controls.maxPolarAngle = _lockPhi;
+
+      // Suppress iframe-forwarded vertical drag too — these come in via
+      // sv-rmb-move and bypass OrbitControls entirely.
+      _rmbPendPhi = 0;
+      _cameraDirty = true;
+    }
+
     // Apply the current zoom velocity to the camera once per frame, then decay.
     const _zoomDir = new THREE.Vector3();
     function stepZoomInertia() {
@@ -2550,6 +2616,7 @@
       requestAnimationFrame(animate);
       stepClickOrbit();                  // orbit toward a clicked ticker row
       stepSnapMagnet();                  // modulate rotateSpeed before orbit step
+      stepHorizontalLock();              // pin polar angle to π/2 when fully zoomed out
       controls.update();                 // may set _cameraDirty via 'change' event
       stepRmbOrbit();                    // damped iframe-forwarded right-drag
       stepZoomInertia();                 // may set _cameraDirty if zooming
