@@ -327,3 +327,24 @@ CREATE INDEX IF NOT EXISTS idx_filtered_date
     ON filtered_out_log(date);
 CREATE INDEX IF NOT EXISTS idx_filtered_ticker
     ON filtered_out_log(ticker);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 — tracked institution registry.
+-- Rows seeded idempotently by layer_minus1.institution_registry.
+-- Hardcoded spec values; multiplier must not be mutated at runtime.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS institutions (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT NOT NULL UNIQUE,
+    tier                TEXT NOT NULL
+        CHECK (tier IN ('1A','1B','2A','2B','3','4')),
+    tier_label          TEXT NOT NULL,
+    multiplier          REAL NOT NULL,
+    primary_coverage    TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_institutions_tier
+    ON institutions(tier);

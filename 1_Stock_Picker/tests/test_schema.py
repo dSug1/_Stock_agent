@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from database.db import get_connection, init_db, now_iso, current_version
+from database.db import (
+    CURRENT_SCHEMA_VERSION,
+    current_version,
+    get_connection,
+    init_db,
+    now_iso,
+)
 
 
 REQUIRED_TABLES = [
@@ -89,7 +95,7 @@ def test_all_tables_created(db_path: Path) -> None:
 
 def test_schema_version_recorded(db_path: Path) -> None:
     conn = get_connection(db_path)
-    assert current_version(conn) == 1
+    assert current_version(conn) == CURRENT_SCHEMA_VERSION
 
 
 def test_init_db_is_idempotent(db_path: Path) -> None:

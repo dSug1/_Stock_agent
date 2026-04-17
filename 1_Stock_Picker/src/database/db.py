@@ -7,7 +7,7 @@ from typing import Callable
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 # Migrations are keyed by target version. To introduce schema v2, add
 # entry 2: <callable(conn)> that mutates the DB into its v2 shape.
@@ -55,6 +55,9 @@ def init_db(db_path: str | Path) -> None:
                 (CURRENT_SCHEMA_VERSION, now_iso()),
             )
             conn.commit()
+        # Late import avoids a circular dependency at module-load time.
+        from layer_minus1.institution_registry import seed_institutions
+        seed_institutions(conn)
     finally:
         conn.close()
 
