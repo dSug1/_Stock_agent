@@ -5,7 +5,23 @@ Point-in-time rule: All processing uses filing_date field exclusively. Never use
 −1.1 Tracked Institution Registry
 25-35 institutions. Annually recalibrated per section −1.5.
 Tier 1A — Sector specialist, deep diligence (multiplier: 4.0×)
-InstitutionPrimary coverageBaker Bros. AdvisorsBiotech — clinical stage, long hold through binary eventsRA Capital ManagementBiotech/medtech — public/private crossover, early clinicalPerceptive AdvisorsClinical-stage biotech, oncology and rare diseaseBoxer Capital (Tavistock)Small/microcap biotechDeerfield ManagementHealthcare — equity and royalty structuresGoehring & RozencwajgNatural resources, commodity royalties
+| Institution | Primary coverage |
+|---|---|
+| Baker Bros. Advisors | Biotech — clinical stage, long hold through binary events |
+| RA Capital Management | Biotech/medtech — public/private crossover, early clinical |
+| Perceptive Advisors | Clinical-stage biotech, oncology and rare disease |
+| Boxer Capital (Tavistock) | Small/microcap biotech |
+| Deerfield Management | Healthcare — equity and royalty structures |
+| Goehring & Rozencwajg | Natural resources, commodity royalties |
+| OrbiMed Advisors | Global healthcare — public and private, all stages |
+| BVF Inc. | Biotech — deep value, activist, long/short |
+| RTW Investments | Biotech/medtech — royalties, public and private crossover |
+| Redmile Group | Biotech/healthcare — growth stage, long-term hold |
+| Cormorant Asset Management | Clinical-stage biotech — concentrated, high conviction |
+| Sio Capital Management | Biotech — small/midcap, event-driven |
+| ARCH Venture Partners | Deep early-stage biotech — pre-IPO and early public |
+| Samsara BioCapital | Clinical-stage biotech — science-first, concentrated |
+| Sofinnova Partners | European biotech — early stage, life sciences |
 Tier 1B — High-conviction generalist superinvestor (multiplier: 3.5×)
 InstitutionPrimary coverageBaupost Group (Klarman)Deep value, cross-sector distressPershing Square (Ackman)Concentrated activist, cross-sectorAppaloosa Management (Tepper)Macro-aware, cross-sectorThird Point (Loeb)Activist, cross-sector, corporate eventsBerkshire HathawayConsumer staples, financials, energy, insurance
 Tier 2A — Generalist deep-value, concentrated (multiplier: 2.5×)
@@ -104,7 +120,7 @@ RECALIBRATION_RULES {
 }
 
 −1.6 Feedback Loop Parameters — Layer −1
-ParameterFeedback valueCompute costCadenceInstitution count (25-35)ModerateLowAnnualTier multipliers (4.0/3.5/2.5/2.0/1.0/0.0)HighZeroQuarterlyChange momentum factors (2.0/1.5/1.2/1.0/0.7/0.0)Moderate-highZeroQuarterlySignificant increase threshold (15%/10%)Low-moderateLowAnnualCrowding penalty threshold (>4 institutions, >50%)ModerateZeroAnnual
+ParameterFeedback valueCompute costCadenceInstitution count (35-42)ModerateLowAnnualTier multipliers (4.0/3.5/2.5/2.0/1.0/0.0)HighZeroQuarterlyChange momentum factors (2.0/1.5/1.2/1.0/0.7/0.0)Moderate-highZeroQuarterlySignificant increase threshold (15%/10%)Low-moderateLowAnnualCrowding penalty threshold (>4 institutions, >50%)ModerateZeroAnnual
 MULTIPLIER_CALIBRATION_METHOD {
   fit_regression:
     dependent:              "position_return_at_horizon"

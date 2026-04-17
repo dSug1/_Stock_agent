@@ -386,6 +386,64 @@ ACTION_TYPES {
     reminder_lead: "7 days, 3 days",
     priority:     "medium",
     recurring:    false
+  },
+
+  INSIDER_PURCHASE_MONITOR: {
+    description:
+      "A Form 4 open market purchase (transaction code P) has been
+       detected for a ticker in the monitoring universe. Review the
+       filing to confirm: who purchased (role, name), dollar amount,
+       whether this is a C-suite or director purchase, and whether
+       the ticker is already in the watchlist or held portfolio.
+       If Tier 1 or Tier 2 signal (C-suite >$500K or director >$100K):
+       review current CCS for this ticker and assess whether the
+       insider signal warrants escalating the ticker to active
+       monitoring or adjusting position size on a held position.",
+    trigger:   "Form 4 transaction code P detected in Layer -1.3",
+    due_date:  "within 1 business day of filing date",
+    reminder_lead: "SMS_immediate on detection",
+    priority:  "high",
+    recurring: false,
+    outcome_options: [
+      "Reviewed — no action required, signal noted in registry",
+      "Escalated to active monitoring — ticker promoted",
+      "Position size increased — insider signal supports held position",
+      "Flagged for thesis_review — contradicts current bear view"
+    ]
+  },
+
+  ANNUAL_OPTIONS_DIVERGENCE_REVIEW: {
+    description:
+      "Annual calibration of the options divergence threshold
+       (currently 15%). Review Layer 5 outcome records for all
+       positions where divergence_flag was triggered during the year.
+       For each: was the registry EV or the options-implied move
+       more accurate (closer to actual price_impact_pct at
+       T_resolution)? Compute registry_accuracy_rate vs
+       options_accuracy_rate across all flagged positions.
+       Decision rules:
+       - If options more accurate > 60% of the time:
+         lower threshold from 15% to 10%
+       - If registry more accurate > 60% of the time:
+         raise threshold from 15% to 20%
+       - If fewer than 20 divergence_flag events in the year:
+         retain current 15% threshold and document reason.
+       Update the divergence_flag threshold in the parameters
+       table after review. This review is distinct from
+       ANNUAL_BRIER_REVIEW which covers broader calibration.",
+    trigger:   "system initialisation",
+    due_date:  "January 1 each year",
+    reminder_lead: "14 days, 7 days",
+    priority:  "medium",
+    recurring: true,
+    frequency: "annual",
+    auto_create: true,
+    outcome_options: [
+      "Threshold lowered to 10% — options more accurate > 60%",
+      "Threshold raised to 20% — registry more accurate > 60%",
+      "Threshold retained at 15% — insufficient events (<20)",
+      "Threshold retained at 15% — accuracy split, no clear winner"
+    ]
   }
 }
 
@@ -435,6 +493,13 @@ AUTO_CREATION_RULES {
     create: ["SURVIVAL_WARNING_REVIEW — due: same day, urgent"]
   },
 
+  on_INSIDER_PURCHASE_ALERT: {
+    create: [
+      "INSIDER_PURCHASE_MONITOR — due: within 1 business day,
+       priority: high, SMS_immediate on detection"
+    ]
+  },
+  
   on_system_initialisation: {
     create: [
       "WEEKLY_UNIVERSE_REVIEW — recurring every Sunday",
@@ -444,7 +509,8 @@ AUTO_CREATION_RULES {
       "QUARTERLY_CALIBRATION_RUN — due 15d after each 13F refresh",
       "SEMIANNUAL_LAYER0_RECALIBRATION — due Apr1/Oct1",
       "ANNUAL_INSTITUTION_RECALIBRATION — due Jan15",
-      "ANNUAL_BRIER_REVIEW — due Jan15"
+      "ANNUAL_BRIER_REVIEW — due Jan15",
+      "ANNUAL_OPTIONS_DIVERGENCE_REVIEW — due Jan1"      
     ]
   },
 
