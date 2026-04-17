@@ -7,7 +7,7 @@ from typing import Callable
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 # Default DB location when callers pass no path. Resolved against cwd so
 # running from 1_Stock_Picker/ puts the file at 1_Stock_Picker/stockpicker.db.
@@ -34,8 +34,38 @@ def _migration_v3_add_institution_cik_fields(
 # Migrations are keyed by target version. Each callable must be idempotent
 # (safe to re-run on a fresh DB where schema.sql already created the target
 # shape). apply_migrations() runs every entry whose key > current version.
+def _migration_v4_add_filings_log(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS filings_log ("
+        " id INTEGER PRIMARY KEY,"
+        " institution_id INTEGER NOT NULL"
+        "   REFERENCES institutions(id),"
+        " filing_date TEXT NOT NULL,"
+        " period_of_report TEXT NOT NULL,"
+        " accession_number TEXT NOT NULL,"
+        " document_url TEXT,"
+        " holdings_count INTEGER NOT NULL DEFAULT 0,"
+        " parse_status TEXT NOT NULL DEFAULT 'success',"
+        " created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL,"
+        " UNIQUE(institution_id, accession_number)"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_filings_log_institution "
+        "ON filings_log(institution_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_filings_log_filing_date "
+        "ON filings_log(filing_date)"
+    )
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migration_v3_add_institution_cik_fields,
+    4: _migration_v4_add_filings_log,
 }
 
 
@@ -47,18 +77,25 @@ def get_connection(
     db_path: str | Path | None = None,
 ) -> sqlite3.Connection:
     path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-    fresh = not path.exists()
+    if not path.exists():
+        # First-time open: populate schema + seed institutions so callers
+        # never need a separate init_db step before use.
+        init_db(path)
+    else:
+        # Existing DB: apply any migrations added since the file was
+        # created so a schema bump in code never leaves callers on a
+        # stale schema.
+        probe = sqlite3.connect(str(path))
+        probe.row_factory = sqlite3.Row
+        try:
+            stale = current_version(probe) < CURRENT_SCHEMA_VERSION
+        finally:
+            probe.close()
+        if stale:
+            apply_migrations(path)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    if fresh:
-        # First-time open: populate schema + seed institutions so callers
-        # never need a separate init_db step before use.
-        conn.close()
-        init_db(path)
-        conn = sqlite3.connect(str(path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 

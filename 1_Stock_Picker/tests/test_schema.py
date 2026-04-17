@@ -100,12 +100,17 @@ def test_schema_version_recorded(db_path: Path) -> None:
 
 def test_init_db_is_idempotent(db_path: Path) -> None:
     init_db(db_path)
-    init_db(db_path)
     conn = get_connection(db_path)
-    count = conn.execute(
+    first = conn.execute(
         "SELECT COUNT(*) AS c FROM schema_version"
     ).fetchone()["c"]
-    assert count == 1
+    conn.close()
+    init_db(db_path)
+    conn = get_connection(db_path)
+    second = conn.execute(
+        "SELECT COUNT(*) AS c FROM schema_version"
+    ).fetchone()["c"]
+    assert second == first
 
 
 def test_created_updated_columns_present(db_path: Path) -> None:

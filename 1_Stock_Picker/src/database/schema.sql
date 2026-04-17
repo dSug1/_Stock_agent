@@ -426,3 +426,33 @@ CREATE TABLE IF NOT EXISTS cusip_ticker_map (
 
 CREATE INDEX IF NOT EXISTS idx_cusip_ticker
     ON cusip_ticker_map(ticker);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 — filing-level ingestion log.
+-- Separate from institution_holdings so that dedup survives even if
+-- holdings are cleared. Successful and empty filings are recorded so
+-- they are never re-downloaded. Download errors are NOT written here
+-- (absence of row = retry on next run).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS filings_log (
+    id                  INTEGER PRIMARY KEY,
+    institution_id      INTEGER NOT NULL
+        REFERENCES institutions(id),
+    filing_date         TEXT NOT NULL,
+    period_of_report    TEXT NOT NULL,
+    accession_number    TEXT NOT NULL,
+    document_url        TEXT,
+    holdings_count      INTEGER NOT NULL DEFAULT 0,
+    parse_status        TEXT NOT NULL
+        DEFAULT 'success',
+        -- values: success, empty, parse_error, download_error
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE(institution_id, accession_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_filings_log_institution
+    ON filings_log(institution_id);
+CREATE INDEX IF NOT EXISTS idx_filings_log_filing_date
+    ON filings_log(filing_date);

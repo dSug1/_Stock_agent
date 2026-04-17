@@ -261,7 +261,7 @@ def _build_mock_http_get():
     def mock(url: str) -> bytes:
         if "/submissions/CIK" in url:
             return json.dumps(submissions).encode("utf-8")
-        if url.endswith("-index.json"):
+        if url.endswith("index.json"):
             return json.dumps(index).encode("utf-8")
         if url.endswith(".xml"):
             return _INGEST_XML.encode("utf-8")
@@ -311,5 +311,84 @@ def test_ingest_deduplication(tmp_path: Path) -> None:
         assert all(
             s["filings_processed"] == 0 for s in summary2.values()
         )
+    finally:
+        conn.close()
+
+
+def test_filing_level_dedup(tmp_path: Path) -> None:
+    """filings_log owns the dedup key: once an accession is logged, a
+    re-run never re-downloads the filing — not even if
+    institution_holdings is cleared.
+    """
+    conn = _fresh_db(tmp_path)
+    try:
+        ts = now_iso()
+        conn.execute(
+            "INSERT INTO cusip_ticker_map "
+            "(cusip, ticker, exchange, resolved_date, "
+            " created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("000360206", "ACME", "US", ts, ts, ts),
+        )
+        conn.commit()
+
+        mock_get = _build_mock_http_get()
+
+        # First run processes the filing and writes filings_log.
+        ingest_all_institutions(
+            conn,
+            from_date="2025-01-01",
+            to_date="2025-06-01",
+            http_get=mock_get,
+        )
+
+        logged = conn.execute(
+            "SELECT accession_number, parse_status, holdings_count "
+            "FROM filings_log"
+        ).fetchall()
+        assert any(
+            r["accession_number"] == "0001234567-25-000001"
+            and r["parse_status"] == "success"
+            and r["holdings_count"] == 1
+            for r in logged
+        )
+
+        # Simulate downstream wipe of holdings. filings_log must still
+        # suppress a re-download.
+        conn.execute("DELETE FROM institution_holdings")
+        conn.commit()
+
+        # Trace the second run to confirm no per-filing fetches.
+        calls: list[str] = []
+
+        def traced(url: str) -> bytes:
+            calls.append(url)
+            return mock_get(url)
+
+        summary2 = ingest_all_institutions(
+            conn,
+            from_date="2025-01-01",
+            to_date="2025-06-01",
+            http_get=traced,
+        )
+
+        for url in calls:
+            assert not url.endswith(".xml"), (
+                f"refetched xml after dedup: {url}"
+            )
+            assert "index.json" not in url, (
+                f"refetched index.json after dedup: {url}"
+            )
+
+        assert sum(s["filings_skipped"] for s in summary2.values()) >= 1
+        assert all(
+            s["filings_processed"] == 0 for s in summary2.values()
+        )
+
+        # Holdings stay cleared — nothing was re-processed.
+        count_after = conn.execute(
+            "SELECT COUNT(*) AS c FROM institution_holdings"
+        ).fetchone()["c"]
+        assert count_after == 0
     finally:
         conn.close()

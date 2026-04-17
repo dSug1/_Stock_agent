@@ -228,6 +228,9 @@ def ingest_all_institutions(
             "filings_processed": 0,
             "holdings_inserted": 0,
             "cusips_unresolved": 0,
+            "filings_skipped": 0,
+            "filings_empty": 0,
+            "filings_error": 0,
         }
         summary[inst_name] = stats
 
@@ -244,24 +247,31 @@ def ingest_all_institutions(
 
         for filing in filings:
             filing_date = filing["filing_date"]
+            accession = filing["accession_number"]
 
             existing = conn.execute(
-                "SELECT 1 FROM institution_holdings "
-                "WHERE institution_id = ? AND filing_date = ? LIMIT 1",
-                (inst_id, filing_date),
+                "SELECT 1 FROM filings_log "
+                "WHERE institution_id = ? AND accession_number = ? "
+                "LIMIT 1",
+                (inst_id, accession),
             ).fetchone()
             if existing is not None:
+                stats["filings_skipped"] += 1
                 log.debug(
-                    "skip %s %s (already ingested)",
-                    inst_name, filing_date,
+                    "skip %s %s %s (already logged)",
+                    inst_name, filing_date, accession,
                 )
                 continue
 
+            # Download phase: any failure here leaves no filings_log
+            # row so a future run retries.
+            doc_url: Optional[str] = None
             try:
                 doc_url = find_information_table_url(
                     filing, http_get=http_get,
                 )
                 if doc_url is None:
+                    stats["filings_error"] += 1
                     log.warning(
                         "no info table for %s %s",
                         inst_name, filing_date,
@@ -270,13 +280,29 @@ def ingest_all_institutions(
                 xml_content = download_13f_document(
                     doc_url, http_get=http_get,
                 )
-                holdings = parse_13f_xml(xml_content)
             except Exception as exc:  # noqa: BLE001
+                stats["filings_error"] += 1
                 log.warning(
-                    "filing failed %s %s: %s",
+                    "download failed %s %s: %s",
                     inst_name, filing_date, exc,
                 )
                 continue
+
+            # Parse phase: parse_13f_xml catches ET.ParseError internally
+            # and returns []. A raised exception here is something else
+            # (programmer error, unexpected content) and gets logged as
+            # parse_error so we don't retry it every run.
+            parse_status: str
+            try:
+                holdings = parse_13f_xml(xml_content)
+                parse_status = "success" if holdings else "empty"
+            except Exception as exc:  # noqa: BLE001
+                holdings = []
+                parse_status = "parse_error"
+                log.warning(
+                    "parse failed %s %s: %s",
+                    inst_name, filing_date, exc,
+                )
 
             ts = now_iso()
             before_insert = conn.total_changes
@@ -302,12 +328,36 @@ def ingest_all_institutions(
                     ),
                 )
             inserted = conn.total_changes - before_insert
-            conn.commit()
-            stats["filings_processed"] += 1
-            stats["holdings_inserted"] += inserted
-            log.info(
-                "ingested %s %s: %d holdings",
-                inst_name, filing_date, inserted,
+
+            conn.execute(
+                "INSERT INTO filings_log "
+                "(institution_id, filing_date, period_of_report, "
+                " accession_number, document_url, holdings_count, "
+                " parse_status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    inst_id, filing_date,
+                    filing["period_of_report"],
+                    accession, doc_url, len(holdings),
+                    parse_status, ts, ts,
+                ),
             )
+            conn.commit()
+
+            if parse_status == "success":
+                stats["filings_processed"] += 1
+                stats["holdings_inserted"] += inserted
+                log.info(
+                    "ingested %s %s: %d holdings",
+                    inst_name, filing_date, inserted,
+                )
+            elif parse_status == "empty":
+                stats["filings_empty"] += 1
+                log.info(
+                    "empty filing %s %s",
+                    inst_name, filing_date,
+                )
+            else:
+                stats["filings_error"] += 1
 
     return summary
