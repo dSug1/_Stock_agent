@@ -1,6 +1,7 @@
 - & and or filter a la Blender modifier
 
 
+
 License:
 - Use licensable data provider instead of yahoofinance. License:
 if in the future I deploy this project as an app on the public internet, do I have to pay royalties or license fees to yahoo finance or finviz for using their data or their chart template, or any other provider you are using to parse the data ? If I make a profit from the app through subscription or advertisement ? If I do not make a profit from the app ?
