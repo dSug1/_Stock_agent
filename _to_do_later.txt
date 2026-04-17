@@ -1,5 +1,4 @@
-- when I left click on a billboard, select its ticker
--  detect tickers by company name in the ticker box
+    -  detect tickers by company name in the ticker box
 - & and or filter a la Blender modifier
 
 
