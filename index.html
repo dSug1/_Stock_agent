@@ -873,7 +873,11 @@
     const MIN_ORBIT_MARGIN   = 1;
     function getMinOrbitDistance() { return circleRadius + MIN_ORBIT_MARGIN; }
     const MAX_ORBIT_DISTANCE = 40;
-    const CAMERA_START_POS   = new THREE.Vector3(0, 4, 14);
+    // Halved distance to the front billboard (was (0, 4, 14), ~8 wu from the
+    // closest billboard's face) so the billboard appears roughly twice its
+    // previous size at startup and on reset-view. XZ direction preserved so
+    // the >8-billboard ring-shift logic below still points the right way.
+    const CAMERA_START_POS   = new THREE.Vector3(0, 2, 10.5);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  SCENE / CAMERA / RENDERERS
