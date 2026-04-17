@@ -14,7 +14,7 @@ import sys
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 VENV = ROOT / ".venv"
 REQ  = ROOT / "requirements.txt"
 
