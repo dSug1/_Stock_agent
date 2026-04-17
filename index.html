@@ -518,14 +518,23 @@
     body.chat-open #chat-bottom-row { display: flex; }
     body.chat-open.chat-expanded #chat-bottom-row { display: none; }
 
-    /* Expanded mode — full-height container, vertically centered rows */
+    /* Expanded mode — full-height container.
+       Only the closest billboard's row is visible, anchored to the top; the
+       rest of the vertical space is reserved for the chat UI. */
     body.chat-open.chat-expanded #overlay-wrapper { top: 16px; bottom: 16px; }
     body.chat-open.chat-expanded #price-overlay   { flex: 1; }
     body.chat-open.chat-expanded #ticker-list {
       display: flex;
       flex: 1 1 0;
       min-height: 0;
+      justify-content: flex-start;
     }
+    body.chat-open.chat-expanded #ticker-list-scroll {
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
+    body.chat-open.chat-expanded .tl-row:not(.closest) { display: none; }
+    body.chat-open.chat-expanded .tl-sep              { display: none; }
 
     /* ── Ticker list (multi-row billboard list inside chat) ── */
     #ticker-list {
