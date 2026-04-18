@@ -1,4 +1,7 @@
 # Module 11 — Portfolio state tracker
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 ## Purpose
 Maintains current portfolio state. Enforces all hard constraints
 before any BUY recommendation executes. Tracks LTCG holding periods.

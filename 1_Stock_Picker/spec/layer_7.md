@@ -1,5 +1,7 @@
 # Layer 7 — Historical Simulation Harness
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 7.1 Data Assembly
 HISTORICAL_DATA_SOURCES {
 

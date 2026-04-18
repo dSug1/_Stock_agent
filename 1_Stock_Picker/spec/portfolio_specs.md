@@ -1,4 +1,7 @@
 # Portfolio Specifications - Purpose & Scope
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 This document specifies a complete autonomous stock picking system for a $75,000 real-money portfolio. It covers universe construction, signal generation, catalyst identification, portfolio management, feedback loop, historical simulation, and action tracking. No short selling. No options. All trades executed manually by the portfolio owner.
 This document is written to serve as the primary prompt input to Claude Code for implementation. Each layer and module is specified with sufficient precision that a code generation prompt can be derived directly from the relevant section without requiring cross-reference to prior documents.
 

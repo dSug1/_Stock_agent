@@ -1,5 +1,7 @@
 # Layer 3 — Living Catalyst Registry
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 3.1 Registry Entry Schema
 COMPANY_ENTRY {
   ticker:            string,

@@ -1,4 +1,7 @@
 # Module 10 — Alert dispatcher
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 ## Purpose
 Routes all system alerts to the correct delivery channel
 based on priority. Receives events from Layer 4 signal generator,

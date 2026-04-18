@@ -1,5 +1,7 @@
 # Pre-Revenue Mode
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 ## Purpose
 Suspends the standard qualitative gate for pre-revenue companies.
 Entry governed entirely by CCS and catalyst quality rather than

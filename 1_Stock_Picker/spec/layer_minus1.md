@@ -1,5 +1,8 @@
 # Layer −1 — Institutional Universe Construction
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+> Read that file alongside this one when implementing or reviewing Layer −1.
+
 **Schedule:** Quarterly on 13F release dates + continuous
 Form 4/13G/13D monitoring.
 

@@ -1,4 +1,7 @@
 # Layer 0 — Macro Regime Classifier
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 Critical design note: Two distinct cadences must not be conflated:
 
 Regime classification — how often to run the classifier and update the active regime tag

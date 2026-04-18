@@ -1,4 +1,7 @@
 # Module 12 — Action tracking calendar
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 This module is the portfolio owner's persistent memory. It automatically creates, schedules, reminds, and tracks every action the system requires. Nothing falls through the cracks because the portfolio owner does not need to remember dates manually.
 
 12.1 Action Record Schema

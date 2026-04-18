@@ -1,5 +1,7 @@
 # Layer 5 — Outcome Tracker
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 5.1 Outcome Record Schema
 OUTCOME_RECORD {
   outcome_id:     uuid,

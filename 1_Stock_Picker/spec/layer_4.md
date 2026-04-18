@@ -1,5 +1,7 @@
 # Layer 4 — Action Signal Generation
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 4.1 Watchlist Entry
 WATCHLIST_ENTRY_TRIGGER {
   conditions: [

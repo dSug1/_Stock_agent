@@ -1,4 +1,7 @@
 # Layer 2 - LLM Catalyst Extraction
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 Two operating modes:
 
 LIVE / SHADOW: Full extraction including LLM probability assessment

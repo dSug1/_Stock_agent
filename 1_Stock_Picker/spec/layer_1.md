@@ -1,4 +1,7 @@
 # Layer 1 — Document Ingestion & Pre-Filtering
+
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 Subscribes to: active_monitoring_universe from Layer −1.
 Passive monitoring tickers: SEC EDGAR sub-pipeline only — no press wire.
 

@@ -1,5 +1,7 @@
 # Layer 6 — Parameter Calibration Engine
 
+> Deviations from this spec are logged in [spec/decisions.md](decisions.md).
+
 6.1 Calibration Schedule
 CALIBRATION_SCHEDULE {
 
