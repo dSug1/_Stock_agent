@@ -457,3 +457,97 @@ CREATE INDEX IF NOT EXISTS idx_filings_log_institution
     ON filings_log(institution_id);
 CREATE INDEX IF NOT EXISTS idx_filings_log_filing_date
     ON filings_log(filing_date);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 Step 1.3 — CIK → ticker cache (EDGAR submissions API).
+-- Mirrors cusip_ticker_map. NULL ticker = resolution failed; cached to
+-- avoid retry storms on dead CIKs.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cik_ticker_map (
+    cik             TEXT PRIMARY KEY,
+    ticker          TEXT,
+    company_name    TEXT,
+    resolved_date   TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cik_ticker
+    ON cik_ticker_map(ticker);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 Step 1.3 — Form 4 open-market purchase signals.
+-- Only P-code transactions are inserted; everything else is rejected
+-- before persistence. source_tier reflects the dollar-bucket
+-- classification (1 = C-suite >$500K, 2 = Director >$100K, ...);
+-- Layer 4 consumes bull_probability_adjustment when lifted.
+-- processing_status drives Layer 4 / Module 12 handoff once wired.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS form4_signals (
+    id                           INTEGER PRIMARY KEY,
+    ticker                       TEXT NOT NULL,
+    cusip                        TEXT,
+    filer_name                   TEXT NOT NULL,
+    filer_cik                    TEXT,
+    filer_role                   TEXT,
+    transaction_code             TEXT NOT NULL,
+    shares                       INTEGER,
+    price_per_share              REAL,
+    total_value                  REAL,
+    source_tier                  INTEGER,
+    bull_probability_adjustment  REAL,
+    filing_date                  TEXT NOT NULL,
+    filing_url                   TEXT,
+    processing_status            TEXT NOT NULL DEFAULT 'pending',
+        -- values: pending, elevated, skipped_below_threshold,
+        --         skipped_not_active
+    created_at                   TEXT NOT NULL,
+    updated_at                   TEXT NOT NULL,
+    UNIQUE(filing_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_form4_ticker
+    ON form4_signals(ticker);
+CREATE INDEX IF NOT EXISTS idx_form4_filing_date
+    ON form4_signals(filing_date);
+CREATE INDEX IF NOT EXISTS idx_form4_status
+    ON form4_signals(processing_status);
+
+
+-- ---------------------------------------------------------------------
+-- Layer -1 Step 1.3 — SC 13D / 13G / 13G/A signals.
+-- SC 13D always inserted (is_activist = 1). SC 13G inserted only if
+-- filer_institution_id is a tracked fund with tier 1A/1B/2A. 13G/A
+-- amendments inserted only if |ownership_percent - prior| >= 1.0pp.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS thirteendg_signals (
+    id                       INTEGER PRIMARY KEY,
+    ticker                   TEXT NOT NULL,
+    cusip                    TEXT,
+    filing_type              TEXT NOT NULL
+        CHECK (filing_type IN ('SC 13D','SC 13G','SC 13G/A','SC 13D/A')),
+    filer_cik                TEXT,
+    filer_name               TEXT NOT NULL,
+    filer_institution_id     INTEGER
+        REFERENCES institutions(id),
+    ownership_percent        REAL,
+    ownership_percent_prior  REAL,
+    is_activist              INTEGER NOT NULL DEFAULT 0,
+    filing_date              TEXT NOT NULL,
+    filing_url               TEXT,
+    processing_status        TEXT NOT NULL DEFAULT 'pending',
+        -- values: pending, elevated, skipped_below_threshold,
+        --         skipped_not_active, skipped_untracked_filer
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL,
+    UNIQUE(filing_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_thirteendg_ticker
+    ON thirteendg_signals(ticker);
+CREATE INDEX IF NOT EXISTS idx_thirteendg_filing_date
+    ON thirteendg_signals(filing_date);
+CREATE INDEX IF NOT EXISTS idx_thirteendg_status
+    ON thirteendg_signals(processing_status);

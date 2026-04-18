@@ -7,7 +7,7 @@ from typing import Callable
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 # SEC Form 13F amendment effective 2023-01-03 (Release No. 34-93978)
 # changed the `value` field from thousands of USD to whole USD. Filings
@@ -105,11 +105,105 @@ def _migration_v6_add_cusip_security_type(
         )
 
 
+def _migration_v7_add_form4_and_thirteendg_signals(
+    conn: sqlite3.Connection,
+) -> None:
+    """Create the Step 1.3 tables: cik_ticker_map, form4_signals,
+    thirteendg_signals. All three carry a processing_status column
+    from day one so Layer 4 / Module 12 integration at Step 8.1
+    doesn't require a schema bump.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cik_ticker_map ("
+        " cik TEXT PRIMARY KEY,"
+        " ticker TEXT,"
+        " company_name TEXT,"
+        " resolved_date TEXT,"
+        " created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cik_ticker "
+        "ON cik_ticker_map(ticker)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS form4_signals ("
+        " id INTEGER PRIMARY KEY,"
+        " ticker TEXT NOT NULL,"
+        " cusip TEXT,"
+        " filer_name TEXT NOT NULL,"
+        " filer_cik TEXT,"
+        " filer_role TEXT,"
+        " transaction_code TEXT NOT NULL,"
+        " shares INTEGER,"
+        " price_per_share REAL,"
+        " total_value REAL,"
+        " source_tier INTEGER,"
+        " bull_probability_adjustment REAL,"
+        " filing_date TEXT NOT NULL,"
+        " filing_url TEXT,"
+        " processing_status TEXT NOT NULL DEFAULT 'pending',"
+        " created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL,"
+        " UNIQUE(filing_url)"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_form4_ticker "
+        "ON form4_signals(ticker)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_form4_filing_date "
+        "ON form4_signals(filing_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_form4_status "
+        "ON form4_signals(processing_status)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS thirteendg_signals ("
+        " id INTEGER PRIMARY KEY,"
+        " ticker TEXT NOT NULL,"
+        " cusip TEXT,"
+        " filing_type TEXT NOT NULL"
+        "   CHECK (filing_type IN "
+        "     ('SC 13D','SC 13G','SC 13G/A','SC 13D/A')),"
+        " filer_cik TEXT,"
+        " filer_name TEXT NOT NULL,"
+        " filer_institution_id INTEGER"
+        "   REFERENCES institutions(id),"
+        " ownership_percent REAL,"
+        " ownership_percent_prior REAL,"
+        " is_activist INTEGER NOT NULL DEFAULT 0,"
+        " filing_date TEXT NOT NULL,"
+        " filing_url TEXT,"
+        " processing_status TEXT NOT NULL DEFAULT 'pending',"
+        " created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL,"
+        " UNIQUE(filing_url)"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thirteendg_ticker "
+        "ON thirteendg_signals(ticker)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thirteendg_filing_date "
+        "ON thirteendg_signals(filing_date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_thirteendg_status "
+        "ON thirteendg_signals(processing_status)"
+    )
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migration_v3_add_institution_cik_fields,
     4: _migration_v4_add_filings_log,
     5: _migration_v5_normalize_pre_2023_market_value,
     6: _migration_v6_add_cusip_security_type,
+    7: _migration_v7_add_form4_and_thirteendg_signals,
 }
 
 
