@@ -15,7 +15,7 @@ from layer_minus1.institution_registry import (
 )
 
 
-EXPECTED_TOTAL = 35
+EXPECTED_TOTAL = 34
 
 EXPECTED_BY_TIER = {
     "1A": 15,
@@ -23,7 +23,7 @@ EXPECTED_BY_TIER = {
     "2A": 4,
     "2B": 4,
     "3":  4,
-    "4":  3,
+    "4":  2,
 }
 
 

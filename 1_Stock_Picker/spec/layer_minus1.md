@@ -31,7 +31,7 @@ Coatue Management, Whale Rock Capital, Horizon Kinetics, Orbis Investment Manage
 Tier 3 — Quality institutional, active management (multiplier: 1.0×)
 Fidelity active funds, T. Rowe Price active, Wellington Management active, Royce & Associates
 Tier 4 — Large passive / index (multiplier: 0.0×)
-Vanguard index, BlackRock iShares, SPDR index products. Zero signal value.
+Vanguard index, SPDR index products. Zero signal value.
 
 −1.2 Quarterly 13F Processing
 Step 1 — Position change classification:
