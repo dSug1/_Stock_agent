@@ -1,0 +1,79 @@
+What Step 1.3 does — plain English
+Step 1.3 builds the real-time signal detector that watches for insider buying activity. While Step 1.2 runs quarterly (downloading 13F filings every quarter), Step 1.3 runs every business day and detects signals that arrive continuously.
+
+The three things it monitors
+Form 4 — insider open market purchases
+Every time a company insider (CEO, CFO, director, or major shareholder) buys or sells stock in the open market, they must file a Form 4 with the SEC within 2 business days. Step 1.3 polls the EDGAR RSS feed for new Form 4 filings every day and processes only the ones where an insider bought stock in the open market.
+The key filter is transaction code "P" (purchase). All other codes are rejected immediately:
+
+S = sale → rejected
+A = grant/award → rejected
+M = option exercise → rejected
+F = tax withholding → rejected
+Everything else → rejected
+
+For each P-code filing, the code:
+
+Checks the company CIK against the active monitoring universe — if the ticker is not in active monitoring, skip without downloading the filing
+Downloads and parses the Form 4 XML
+Extracts: who bought (name and role), how many shares, at what price, total dollar value
+Classifies the source tier based on role and dollar amount:
+
+CEO/CFO/COO/CTO buying more than $500,000 → Tier 1, +8% bull probability signal
+Director buying more than $100,000 → Tier 2, +5% signal
+Any other officer or director below thresholds → Tier 3, +3% signal
+Other insiders → Tier 4, +1% signal
+
+
+Stores the signal in form4_signals table with processing_status = 'pending'
+
+SC 13D — activist stake
+When any investor acquires more than 5% of a company with intent to influence management, they must file an SC 13D. This is the activist investor filing. Step 1.3 polls the SC 13D RSS feed daily and processes every filing:
+
+Always elevates the ticker to active monitoring regardless of TWOS score
+Stores in thirteendg_signals with is_activist = 1
+Marks processing_status = 'pending' for Layer 4 to consume later
+
+SC 13D is the strongest signal in the entire system — an activist taking a >5% stake is a major corporate event.
+SC 13G / SC 13G/A — passive institutional stakes
+When a passive institutional investor crosses 5% ownership they file SC 13G. Amendments (SC 13G/A) are filed when their ownership changes. Step 1.3 processes these with filters:
+
+SC 13G: only process if the filer CIK matches a tracked institution with tier 1A, 1B, or 2A — ignore unknown funds
+SC 13G/A amendment: only process if the ownership change is >= 1.0 percentage point — ignore tiny fluctuations
+Stores in thirteendg_signals with is_activist = 0
+
+
+The CIK resolver
+Form 4 and 13D/13G filings identify companies by their SEC CIK number, not by ticker symbol. Step 1.3 adds a cik_resolver.py module that converts company CIK to ticker symbol using the EDGAR submissions API, caching results in cik_ticker_map so the same lookup never hits EDGAR twice.
+This is separate from the CUSIP resolver built in Step 1.2 — that resolves CUSIP codes from 13F holdings, while this resolves company CIKs from Form 4 and activist filings.
+
+The active monitoring gate
+Before downloading any Form 4 XML, the code checks whether the company's ticker is in the active monitoring universe (from twos_scores.processing_tier). If the ticker is not active, the filing is skipped entirely without downloading the full document. This is an important efficiency gain — on a typical day hundreds of Form 4 filings are submitted across all public companies, but only a fraction involve companies in your monitored universe.
+
+What it does NOT do yet
+
+Does not send SMS alerts (that is Module 10, Step 8.1)
+Does not create Module 12 calendar actions (that is Step 8.2)
+Does not update the catalyst registry (that is Layer 3, Steps 5.1-5.4)
+Does not affect TWOS scores (those are recomputed quarterly in Step 1.2)
+
+Everything Step 1.3 produces sits in form4_signals and thirteendg_signals as pending rows. Later steps consume these rows and act on them.
+
+How it fits into the daily orchestrator
+After Step 1.3 is wired into daily_orchestrator.py:
+Every day (Mon-Fri, SEC business days):
+  → poll Form 4 RSS → filter to P-code → check active universe
+    → download and parse → classify → store in form4_signals
+
+  → poll SC 13D RSS → check active universe
+    → store in thirteendg_signals
+
+  → poll SC 13G RSS → check if tracked institution
+    → store in thirteendg_signals
+
+Every Monday (in addition to the above):
+  → ingest 13F filings from EDGAR (Step 1.2)
+  → recompute TWOS scores (Step 1.2)
+
+Why this matters for the investment thesis
+Form 4 P-code filings are one of the most reliable signals in equity investing. A CEO buying $2M of their own company's stock in the open market — with their own personal money, not options — is meaningful information. They know more about the company than anyone and they chose to buy at the current price. Combined with the institutional accumulation signal from Step 1.2, a stock where both the institutions and the insiders are buying simultaneously is exactly the setup the system is designed to find.
