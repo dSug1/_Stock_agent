@@ -12,6 +12,7 @@ from layer_minus1.twos_calculator import (
     assign_processing_tier,
     compute_QoQ_change,
     compute_TWOS,
+    run_quarterly_update,
     score_ticker,
 )
 
@@ -276,12 +277,12 @@ def test_processing_tier_active_on_tier1_new_position() -> None:
 
 
 def test_processing_tier_active_on_high_twos() -> None:
-    assert assign_processing_tier(0.6, {}) == "active"
+    assert assign_processing_tier(3.5, {}) == "active"
 
 
 def test_processing_tier_passive_on_midrange_twos() -> None:
     tier = assign_processing_tier(
-        twos_score=0.1,
+        twos_score=1.0,
         signals={},
     )
     assert tier == "passive"
@@ -297,6 +298,89 @@ def test_processing_tier_watchlist_single_tier3_flat() -> None:
 
 def test_processing_tier_not_tracked_when_empty() -> None:
     assert assign_processing_tier(0.0, {}) == "not_tracked"
+
+
+def test_run_quarterly_update_matches_compute_TWOS(
+    tmp_path: Path,
+) -> None:
+    """Bulk path must produce the same twos_score / processing_tier /
+    institution_count / crowding_flag as compute_TWOS called per ticker.
+    Seeds 5 tickers across 2 institutions with a mix of new positions,
+    prior-only exits, increases, and flat holds.
+    """
+    conn = _fresh_db(tmp_path)
+    try:
+        baker = _inst_id_by_name(conn, "Baker Bros. Advisors")
+        greenlight = _inst_id_by_name(conn, "Greenlight Capital")
+
+        # AAA — Baker new position, Greenlight exit
+        _save(conn, greenlight, "2024-02-14", "2023-12-31",
+              "AAA", "C-AAA", 2000)
+        _save(conn, baker, "2024-05-15", "2024-03-31",
+              "AAA", "C-AAA", 1000)
+
+        # BBB — Baker significant increase, Greenlight moderate increase
+        _save(conn, baker, "2024-02-14", "2023-12-31",
+              "BBB", "C-BBB", 1000)
+        _save(conn, baker, "2024-05-15", "2024-03-31",
+              "BBB", "C-BBB", 1500)
+        _save(conn, greenlight, "2024-02-14", "2023-12-31",
+              "BBB", "C-BBB", 1000)
+        _save(conn, greenlight, "2024-05-15", "2024-03-31",
+              "BBB", "C-BBB", 1100)
+
+        # CCC — Baker flat
+        _save(conn, baker, "2024-02-14", "2023-12-31",
+              "CCC", "C-CCC", 1000)
+        _save(conn, baker, "2024-05-15", "2024-03-31",
+              "CCC", "C-CCC", 1020)
+
+        # DDD — Greenlight only, new position
+        _save(conn, greenlight, "2024-05-15", "2024-03-31",
+              "DDD", "C-DDD", 5000)
+
+        # EEE — Baker exit only (held prior, not in current filing)
+        _save(conn, baker, "2024-02-14", "2023-12-31",
+              "EEE", "C-EEE", 500)
+        # Baker's current filing already exists (from BBB/CCC/AAA) so EEE is an exit
+
+        run_date = "2024-05-15"
+        bulk_results = run_quarterly_update(
+            run_date, conn,
+            skip_ingest=True,
+        )
+        bulk_by_ticker = {r["ticker"]: r for r in bulk_results}
+
+        for ticker in ("AAA", "BBB", "CCC", "DDD", "EEE"):
+            single = compute_TWOS(ticker, run_date, conn)
+            bulk = bulk_by_ticker[ticker]
+
+            assert bulk["twos_score"] == pytest.approx(
+                single["twos_score"], rel=1e-9, abs=1e-12
+            ), f"{ticker}: twos mismatch"
+            assert bulk["institution_count"] == single["institution_count"], (
+                f"{ticker}: institution_count mismatch"
+            )
+            assert bulk["crowding_flag"] == single["crowding_flag"], (
+                f"{ticker}: crowding_flag mismatch"
+            )
+            assert bulk["qoq_change_signal"] == single["qoq_change_signal"], (
+                f"{ticker}: qoq_change_signal mismatch"
+            )
+
+            row = conn.execute(
+                "SELECT twos_score, processing_tier, institution_count, "
+                "       crowding_flag, qoq_change_signal "
+                "FROM twos_scores WHERE ticker = ? AND run_date = ?",
+                (ticker, run_date),
+            ).fetchone()
+            assert row is not None, f"{ticker}: no twos_scores row"
+            assert row["twos_score"] == pytest.approx(
+                single["twos_score"], rel=1e-9, abs=1e-12
+            )
+            assert row["institution_count"] == single["institution_count"]
+    finally:
+        conn.close()
 
 
 def test_score_ticker_persists_row(tmp_path: Path) -> None:

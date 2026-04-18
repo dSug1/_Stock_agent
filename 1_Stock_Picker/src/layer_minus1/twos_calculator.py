@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from typing import Callable, Optional
 
 from database.db import now_iso
@@ -107,17 +108,17 @@ def assign_processing_tier(twos_score: float, signals: dict) -> str:
       single_tier3_flat_or_decrease: bool
     """
     active = (
-        twos_score >= 0.5
+        twos_score >= 3.0
         or signals.get("tier1_new_position", False)
         or signals.get("tier1_significant_increase", False)
         or (
             signals.get("any_significant_increase", False)
-            and twos_score >= 0.1
+            and twos_score >= 0.3
         )
     )
     if active:
         return "active"
-    if twos_score >= 0.05:
+    if twos_score >= 0.5:
         return "passive"
     if signals.get("single_tier3_flat_or_decrease", False):
         return "watchlist"
@@ -215,7 +216,12 @@ def compute_TWOS(
     total_so: Optional[int] = total_shares_outstanding
     if total_so is None:
         total_so = current_shares_total if current_shares_total > 0 else None
-    if total_so is None and shares_outstanding_fetcher is not None:
+    # Exit-only / stale-ticker: no institution currently holds the
+    # ticker (numerator is 0 for every contribution, and there may be
+    # no contributions at all if the ticker is long-exited). Denominator
+    # is irrelevant — skip the fetcher and the proxy-fallback warning.
+    exit_only = total_so is None and current_shares_total == 0
+    if total_so is None and not exit_only and shares_outstanding_fetcher is not None:
         try:
             total_so = shares_outstanding_fetcher(ticker)
         except Exception as exc:  # noqa: BLE001
@@ -225,10 +231,11 @@ def compute_TWOS(
             )
             total_so = None
     if total_so is None or total_so <= 0:
-        log.warning(
-            "no shares_outstanding for %s; using market_value proxy",
-            ticker,
-        )
+        if not exit_only:
+            log.warning(
+                "no shares_outstanding for %s; using market_value proxy",
+                ticker,
+            )
         total_shares_proxy = sum(
             (c.get("current_shares") or 0) for c in contributions
         )
@@ -366,10 +373,12 @@ def run_quarterly_update(
 ) -> list[dict]:
     """Ingest 13Fs in [from_date, to_date] then score every held ticker.
 
-    from_date / to_date are passed through to
-    edgar_13f_parser.ingest_all_institutions. to_date defaults to today
-    (resolved inside the ingestor). Set skip_ingest=True to score only
-    what is already in institution_holdings.
+    Bulk implementation: two aggregate SQL queries load all current and
+    prior-quarter holdings; TWOS is computed in memory; writes to
+    twos_scores and companies are batched via executemany. For
+    per-ticker refresh (Layer 3 registry), use score_ticker() /
+    compute_TWOS() instead — those remain the canonical single-ticker
+    path and produce identical results.
     """
     if not skip_ingest:
         from layer_minus1.edgar_13f_parser import ingest_all_institutions
@@ -379,36 +388,243 @@ def run_quarterly_update(
             to_date=to_date,
             http_get=http_get,
         )
-    tickers = holdings_store.get_tickers_held_as_of(run_date, conn)
-    results = []
+
+    start = time.time()
+    institutions = _load_institution_rows(conn)
+
+    # --- STEP 1: all current holdings (most-recent filing <= run_date
+    # per institution), in one query.
+    current_rows = conn.execute(
+        """
+        SELECT
+            ih.ticker, ih.shares, ih.institution_id, ih.filing_date
+        FROM institution_holdings ih
+        WHERE ih.ticker IS NOT NULL
+          AND ih.filing_date = (
+              SELECT MAX(ih2.filing_date)
+              FROM institution_holdings ih2
+              WHERE ih2.institution_id = ih.institution_id
+                AND ih2.filing_date <= ?
+          )
+        """,
+        (run_date,),
+    ).fetchall()
+
+    current_fd_by_inst: dict[int, str] = {}
+    # {ticker: {inst_id: shares}}
+    current_by_ticker: dict[str, dict[int, int]] = {}
+    for r in current_rows:
+        inst_id = r["institution_id"]
+        current_fd_by_inst[inst_id] = r["filing_date"]
+        current_by_ticker.setdefault(r["ticker"], {})[inst_id] = r["shares"]
+
+    # --- STEP 2: all prior-quarter holdings (filing immediately before
+    # each institution's current filing), in one query.
+    prior_rows = conn.execute(
+        """
+        WITH current_filings AS (
+            SELECT institution_id, MAX(filing_date) AS cur_fd
+            FROM institution_holdings
+            WHERE filing_date <= ?
+            GROUP BY institution_id
+        ),
+        prior_filings AS (
+            SELECT ih.institution_id, MAX(ih.filing_date) AS prior_fd
+            FROM institution_holdings ih
+            JOIN current_filings cf
+              ON cf.institution_id = ih.institution_id
+            WHERE ih.filing_date < cf.cur_fd
+            GROUP BY ih.institution_id
+        )
+        SELECT ih.ticker, ih.shares, ih.institution_id
+        FROM institution_holdings ih
+        JOIN prior_filings pf
+          ON pf.institution_id = ih.institution_id
+          AND pf.prior_fd = ih.filing_date
+        WHERE ih.ticker IS NOT NULL
+        """,
+        (run_date,),
+    ).fetchall()
+
+    # {ticker: {inst_id: prior_shares}}
+    prior_by_ticker: dict[str, dict[int, int]] = {}
+    for r in prior_rows:
+        prior_by_ticker.setdefault(r["ticker"], {})[r["institution_id"]] = (
+            r["shares"]
+        )
+
+    # --- STEP 3: compute TWOS in memory for every ticker that appears
+    # in either the current or prior quarter (so exits are captured).
+    all_tickers: set[str] = set(current_by_ticker) | set(prior_by_ticker)
+
     ts = now_iso()
-    for ticker in tickers:
-        r = score_ticker(
-            ticker, run_date, conn,
-            price_fetcher=price_fetcher,
-            shares_outstanding_fetcher=shares_outstanding_fetcher,
+    twos_rows: list[tuple] = []
+    companies_rows: list[tuple] = []
+    results: list[dict] = []
+    processed = 0
+
+    for ticker in sorted(all_tickers):
+        cur_map = current_by_ticker.get(ticker, {})
+        prior_map = prior_by_ticker.get(ticker, {})
+        inst_ids = set(cur_map) | set(prior_map)
+
+        contributions: list[dict] = []
+        current_shares_total = 0
+        earliest_filing_date: Optional[str] = None
+
+        for inst_id in inst_ids:
+            inst = institutions.get(inst_id)
+            if inst is None:
+                continue
+            cur_shares = cur_map.get(inst_id)
+            prior_shares = prior_map.get(inst_id)
+            if cur_shares is None and prior_shares is None:
+                continue
+
+            qoq = compute_QoQ_change(cur_shares, prior_shares, inst["tier"])
+            contributions.append({
+                "institution_id": inst_id,
+                "institution_name": inst["name"],
+                "tier": inst["tier"],
+                "multiplier": inst["multiplier"],
+                "current_shares": cur_shares,
+                "prior_shares": prior_shares,
+                "change_type": qoq["change_type"],
+                "change_pct": qoq["change_pct"],
+                "change_momentum_factor": qoq["change_momentum_factor"],
+            })
+            if cur_shares is not None:
+                current_shares_total += cur_shares
+                fd = current_fd_by_inst.get(inst_id)
+                if fd and (
+                    earliest_filing_date is None or fd < earliest_filing_date
+                ):
+                    earliest_filing_date = fd
+
+        # --- denominator selection (mirrors compute_TWOS) ---
+        total_so: Optional[int] = (
+            current_shares_total if current_shares_total > 0 else None
         )
-        conn.execute(
-            "INSERT INTO companies (ticker, processing_tier, "
-            " twos, crowding_flag, qoq_change_signal, "
-            " created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(ticker) DO UPDATE SET "
-            " processing_tier = excluded.processing_tier, "
-            " twos = excluded.twos, "
-            " crowding_flag = excluded.crowding_flag, "
-            " qoq_change_signal = excluded.qoq_change_signal, "
-            " updated_at = excluded.updated_at",
-            (
-                ticker,
-                r["processing_tier"] if r["processing_tier"] != "not_tracked"
-                else "watchlist",
-                r["twos_score"],
-                r["crowding_flag"],
-                r["qoq_change_signal"],
-                ts, ts,
-            ),
-        )
-        results.append(r)
+        exit_only = total_so is None and current_shares_total == 0
+        if (
+            total_so is None
+            and not exit_only
+            and shares_outstanding_fetcher is not None
+        ):
+            try:
+                total_so = shares_outstanding_fetcher(ticker)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "shares_outstanding fetch failed for %s: %s",
+                    ticker, exc,
+                )
+                total_so = None
+        if total_so is None or total_so <= 0:
+            if not exit_only:
+                log.warning(
+                    "no shares_outstanding for %s; using market_value proxy",
+                    ticker,
+                )
+            total_shares_proxy = sum(
+                (c.get("current_shares") or 0) for c in contributions
+            )
+            total_so = total_shares_proxy if total_shares_proxy > 0 else 1
+
+        twos = 0.0
+        for c in contributions:
+            if c["current_shares"] is None:
+                ownership_pct = 0.0
+            else:
+                ownership_pct = c["current_shares"] / total_so
+            twos += (
+                ownership_pct
+                * float(c["multiplier"])
+                * float(c["change_momentum_factor"])
+            )
+
+        crowding_flag = 0
+        if (
+            len(contributions) > 4
+            and price_fetcher is not None
+            and earliest_filing_date is not None
+        ):
+            try:
+                earliest_price = price_fetcher(ticker, earliest_filing_date)
+                current_price = price_fetcher(ticker, run_date)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("price fetch failed for %s: %s", ticker, exc)
+                earliest_price = current_price = None
+            if (
+                earliest_price is not None
+                and current_price is not None
+                and earliest_price > 0
+            ):
+                appreciation = (current_price - earliest_price) / earliest_price
+                if appreciation > 0.50:
+                    crowding_flag = 1
+                    twos *= 0.60
+
+        qoq_signal = _aggregate_signal(contributions)
+        signals = _derive_signals(contributions)
+        tier = assign_processing_tier(twos, signals)
+
+        twos_rows.append((
+            ticker, run_date, twos, tier, crowding_flag,
+            len(contributions), qoq_signal, ts, ts,
+        ))
+        companies_rows.append((
+            ticker,
+            tier if tier != "not_tracked" else "watchlist",
+            twos, crowding_flag, qoq_signal, ts, ts,
+        ))
+        results.append({
+            "ticker": ticker,
+            "run_date": run_date,
+            "twos_score": twos,
+            "institution_count": len(contributions),
+            "qoq_change_signal": qoq_signal,
+            "crowding_flag": crowding_flag,
+            "contributing_institutions": contributions,
+            "earliest_filing_date": earliest_filing_date,
+            "total_shares_outstanding": total_so,
+            "processing_tier": tier,
+            "signals": signals,
+        })
+
+        processed += 1
+        if processed % 500 == 0:
+            print(".", end="", flush=True)
+
+    # --- STEP 4: bulk writes ---
+    conn.executemany(
+        "INSERT INTO twos_scores "
+        "(ticker, run_date, twos_score, processing_tier, crowding_flag, "
+        " institution_count, qoq_change_signal, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(ticker, run_date) DO UPDATE SET "
+        " twos_score = excluded.twos_score, "
+        " processing_tier = excluded.processing_tier, "
+        " crowding_flag = excluded.crowding_flag, "
+        " institution_count = excluded.institution_count, "
+        " qoq_change_signal = excluded.qoq_change_signal, "
+        " updated_at = excluded.updated_at",
+        twos_rows,
+    )
+    conn.executemany(
+        "INSERT INTO companies (ticker, processing_tier, "
+        " twos, crowding_flag, qoq_change_signal, "
+        " created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(ticker) DO UPDATE SET "
+        " processing_tier = excluded.processing_tier, "
+        " twos = excluded.twos, "
+        " crowding_flag = excluded.crowding_flag, "
+        " qoq_change_signal = excluded.qoq_change_signal, "
+        " updated_at = excluded.updated_at",
+        companies_rows,
+    )
     conn.commit()
+
+    elapsed = time.time() - start
+    print(f"\nScored {processed} tickers in {elapsed:.1f}s")
     return results
