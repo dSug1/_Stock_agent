@@ -133,7 +133,8 @@ exit:                 0.0
 testing on 34-institution universe):**
 
 *Active monitoring* — full Layer 0-4 processing, press wire
-tracked daily. Target 150-250 tickers.
+tracked daily. Target 1,500-1,800 tickers (revised April 2026;
+see "Empirically calibrated active monitoring universe" below).
 
 Criteria (any one sufficient):
 - TWOS >= 3.0
@@ -181,9 +182,41 @@ with flat or decreasing position.
 | 4.0 | 92 |
 | 5.0 | 48 |
 
-Threshold of 3.0 selected as it produces 243 active tickers,
-within the 150-250 target range. To be recalibrated annually
-as the institution list and market conditions evolve.
+Threshold of 3.0 selected as it produces 243 pure-TWOS active
+tickers. Signal-driven overrides (Tier 1A/1B new_position and
+significant_increase with $5M gate; any-institution
+significant_increase AND TWOS >= 0.3) add ~1,382 more, for a
+total active universe of ~1,625 tickers.
+
+**Empirically calibrated active monitoring universe
+(April 2026, 34 institutions, 3 quarters):**
+
+Target revised from the original 150-250 estimate to
+**1,500-1,800 tickers**. The original estimate assumed a
+smaller, more generalist institution list. With 13 Tier 1A
+biotech specialist funds (Baker Bros, RA Capital, Perceptive,
+OrbiMed, Cormorant, Samsara, RTW, Redmile, Sio, BVF, Boxer,
+Sofinnova, Deerfield) collectively holding 795 unique tickers,
+the signal-driven active universe is structurally larger but
+remains high quality — every active ticker has at least one
+qualified institutional holder, and signal-based entries pass
+the $5M position-size gate.
+
+Composition:
+- Pure TWOS threshold (>= 3.0):              243 tickers
+- Signal-driven additions ($5M gate applied): ~1,382 tickers
+- Total active:                              ~1,625 tickers
+
+Computational impact on Layer 1: negligible. RSS feed polling
+cost is independent of universe size. Layer 2 LLM extraction
+is gated by the keyword filter — document volume, not ticker
+count, determines API cost.
+
+Recalibrate annually alongside the TWOS threshold, or sooner
+if the institution list materially changes. A future
+signal-freshness constraint (only count signals from filings
+within the last N days) may be added once Layer 3 is live and
+stale-signal drift becomes measurable.
 
 **Crowding penalty:**
 If >4 tracked institutions hold a name AND appreciation >50%
@@ -397,8 +430,10 @@ minimum_observations: 30
 TWOS_threshold_recalibration:
 cadence: "annual"
 method:
-"run diagnose_twos2.py diagnostic
-select threshold producing 150-250 active tickers
+"run scripts/twos_distribution.py diagnostic
+select TWOS threshold whose pure-threshold count plus
+signal-driven overrides lands in the 1,500-1,800
+active target (revised April 2026)
 update assign_processing_tier() in twos_calculator.py
 update this spec file"
 current_threshold: 3.0
@@ -557,11 +592,15 @@ Then re-run Step 2 above so the universe reflects the cleaned cache.
 
 **Diagnosing active universe size:**
 ```bash
-python diagnose_twos2.py
+python scripts/twos_distribution.py
 ```
-Target: 150-250 active tickers.
-If outside range: adjust TWOS threshold in
-`assign_processing_tier()` and update −1.6 table above.
+Target: 1,500-1,800 total active tickers
+(revised April 2026 — see −1.2 "Empirically calibrated
+active monitoring universe"). Pure-TWOS count at threshold 3.0
+should land near ~240; signal-driven overrides add ~1,380.
+If total falls outside range: adjust TWOS threshold and/or the
+$5M signal gate in `assign_processing_tier()` and update −1.2
+tables above.
 
 **Diagnosing CUSIP resolution:**
 ```bash
@@ -577,5 +616,21 @@ to private placement and foreign-listed positions.
   ARCH Venture Management LLC.
 - ARCH last filed 13F in 2022 — expect zero holdings in
   2025 quarterly runs. Not an error.
+
+**Signal freshness — known limitation:**
+The signal-driven active monitoring path currently uses
+all filings from `from_date` onwards (currently 2025-01-01).
+A Tier 1A fund's Q1 2025 new_position signal is treated
+identically to a Q3 2025 signal — there is no freshness
+decay.
+
+This is acceptable during the 3-quarter calibration window
+because `from_date=2025-01-01` implicitly caps signal age.
+When Layer 3 (living catalyst registry) comes online, add
+a signal_freshness_weight that decays QoQ signals older
+than 2 quarters — a Q1 position not increased or confirmed
+in Q2/Q3 is stale conviction, not current conviction.
+
+Planned enhancement: Layer 3 integration, post-Step 5.4.
 
   
