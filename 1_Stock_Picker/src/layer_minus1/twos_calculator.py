@@ -22,6 +22,15 @@ CHANGE_MOMENTUM_FACTORS = {
 
 _TIER1 = frozenset({"1A", "1B"})
 
+# Minimum position market_value (raw USD, post-migration v5 all filings
+# are stored in whole dollars) for a Tier 1A/1B new_position or
+# significant_increase signal to override the TWOS >= 3.0 threshold and
+# force active monitoring. Positions below this are treated as clerical,
+# tracking, or warrant positions; they still contribute to TWOS but do
+# not alone trigger an active override.
+# Calibrated April 2026.
+TIER1_MIN_MARKET_VALUE_USD: int = 5_000_000
+
 
 PriceFetcher = Callable[[str, str], Optional[float]]
 SharesFetcher = Callable[[str], Optional[int]]
@@ -182,6 +191,10 @@ def compute_TWOS(
         cur_shares = (
             current_for_ticker["shares"] if current_for_ticker else None
         )
+        cur_market_value = (
+            current_for_ticker["market_value"]
+            if current_for_ticker else None
+        )
         prior_shares = (
             prior_for_ticker["shares"] if prior_for_ticker else None
         )
@@ -197,6 +210,7 @@ def compute_TWOS(
             "multiplier": inst["multiplier"],
             "current_shares": cur_shares,
             "prior_shares": prior_shares,
+            "market_value": cur_market_value,
             "change_type": qoq["change_type"],
             "change_pct": qoq["change_pct"],
             "change_momentum_factor": qoq["change_momentum_factor"],
@@ -298,10 +312,13 @@ def _derive_signals(contributions: list[dict]) -> dict:
     ]
     return {
         "tier1_new_position": any(
-            c["change_type"] == "new_position" for c in tier1_contribs
+            c["change_type"] == "new_position"
+            and (c.get("market_value") or 0) >= TIER1_MIN_MARKET_VALUE_USD
+            for c in tier1_contribs
         ),
         "tier1_significant_increase": any(
             c["change_type"] == "significant_increase"
+            and (c.get("market_value") or 0) >= TIER1_MIN_MARKET_VALUE_USD
             for c in tier1_contribs
         ),
         "any_significant_increase": any(
@@ -397,7 +414,8 @@ def run_quarterly_update(
     current_rows = conn.execute(
         """
         SELECT
-            ih.ticker, ih.shares, ih.institution_id, ih.filing_date
+            ih.ticker, ih.shares, ih.market_value,
+            ih.institution_id, ih.filing_date
         FROM institution_holdings ih
         WHERE ih.ticker IS NOT NULL
           AND ih.filing_date = (
@@ -411,12 +429,15 @@ def run_quarterly_update(
     ).fetchall()
 
     current_fd_by_inst: dict[int, str] = {}
-    # {ticker: {inst_id: shares}}
-    current_by_ticker: dict[str, dict[int, int]] = {}
+    # {ticker: {inst_id: {shares, market_value}}}
+    current_by_ticker: dict[str, dict[int, dict]] = {}
     for r in current_rows:
         inst_id = r["institution_id"]
         current_fd_by_inst[inst_id] = r["filing_date"]
-        current_by_ticker.setdefault(r["ticker"], {})[inst_id] = r["shares"]
+        current_by_ticker.setdefault(r["ticker"], {})[inst_id] = {
+            "shares": r["shares"],
+            "market_value": r["market_value"],
+        }
 
     # --- STEP 2: all prior-quarter holdings (filing immediately before
     # each institution's current filing), in one query.
@@ -476,7 +497,9 @@ def run_quarterly_update(
             inst = institutions.get(inst_id)
             if inst is None:
                 continue
-            cur_shares = cur_map.get(inst_id)
+            cur = cur_map.get(inst_id)
+            cur_shares = cur["shares"] if cur else None
+            cur_market_value = cur["market_value"] if cur else None
             prior_shares = prior_map.get(inst_id)
             if cur_shares is None and prior_shares is None:
                 continue
@@ -489,6 +512,7 @@ def run_quarterly_update(
                 "multiplier": inst["multiplier"],
                 "current_shares": cur_shares,
                 "prior_shares": prior_shares,
+                "market_value": cur_market_value,
                 "change_type": qoq["change_type"],
                 "change_pct": qoq["change_pct"],
                 "change_momentum_factor": qoq["change_momentum_factor"],

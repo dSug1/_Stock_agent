@@ -138,9 +138,24 @@ tracked daily. Target 150-250 tickers.
 Criteria (any one sufficient):
 - TWOS >= 3.0
 - OR any Tier 1A/1B institution initiated new position
-  this quarter
+  this quarter (subject to $5M gate, below)
 - OR any Tier 1A/1B institution increased >10% QoQ
+  (subject to $5M gate, below)
 - OR any institution increased >15% QoQ AND TWOS >= 0.3
+
+**Minimum position size gate for signal-based overrides:**
+Tier 1A/1B `new_position` and `significant_increase` signals
+only trigger the active-monitoring override when the
+position's `market_value >= $5M` (5,000,000 USD; all filings
+are normalized to whole dollars by schema migration v5).
+Positions below this threshold are treated as clerical,
+tracking, or warrant positions — they still contribute to
+the TWOS score but do not by themselves override the
+TWOS >= 3.0 threshold.
+
+Calibrated April 2026: the $5M gate reduces signal-driven
+noise firings by ~32% while preserving genuine conviction
+signals. Recalibrate annually alongside the TWOS threshold.
 
 *Passive monitoring* — SEC EDGAR only, no press wire.
 Target 300-500 tickers.
@@ -202,25 +217,54 @@ Batch up to 10 CUSIPs per request.
 Free tier: 25 requests/minute, 250/day.
 With API key (recommended): 250 requests/minute.
 
-Filter for US equity exchanges:
-exchCode in: US, UN, UA, UW, UR
+**Two-stage filter (must pass both):**
 
-Cache all resolutions in `cusip_ticker_map` table.
-Unresolved CUSIPs stored as NULL — do not crash.
+1. **Exchange filter** — `exchCode` in `{US, UN, UA, UW, UR}`.
+
+2. **Security-type filter** — OpenFIGI returns ETFs, closed-end
+   trusts, preferreds, warrants, bond units, and other non-common
+   instruments that trade on these same exchanges. 13F filings
+   legitimately include such positions but the picker scores only
+   common stock, so we reject them at resolution time.
+
+   ACCEPT only when `securityType` or `securityType2` is:
+   - `Common Stock`
+   - `Depositary Receipt` (ADRs)
+
+   REJECT if either field contains any of these substrings
+   (case-insensitive): `ETF`, `ETP`, `Fund`, `Trust`, `Note`,
+   `Bond`, `Preferred`, `Right`, `Warrant`, `Unit`.
+
+   The reject check runs before the accept check so a composite
+   label like "ETF Common Stock" cannot slip through on the accept
+   match alone.
+
+Cache all resolutions in `cusip_ticker_map` table. The cache row
+also stores the OpenFIGI `securityType` we picked (column
+`security_type`) so the filter decision is auditable per CUSIP.
+
+Unresolved CUSIPs — whether because OpenFIGI returned no match or
+because every candidate record was a non-equity instrument — are
+cached as `ticker = NULL` and logged at **DEBUG** (not WARNING).
+13F filings routinely list ETF and bond positions; a warning per
+non-equity holding would drown the ingestion log in noise.
 
 **Empirical CUSIP resolution rates (April 2026):**
 
-Overall rate: ~69% across 34 institutions.
-Low resolution funds (45-58%) hold primarily:
+Overall match rate pre-filter: ~69% across 34 institutions.
+Low-resolution funds (45-58%) hold primarily:
 - Private placement warrants (PIPE deals)
 - Convertible notes
 - Foreign-listed biotechs (Israeli, European, Canadian)
 - Pre-IPO instruments
 
-These unresolved instruments are not actionable retail
-portfolio positions. The resolved 69% represents the
-relevant publicly-traded US equity universe.
-No further improvement required at this stage.
+After the security-type filter was added (April 2026) the
+accepted-as-equity rate is lower because ETFs, grantor trusts
+(e.g. GBTC), and preferreds — previously mis-resolved to their
+trading ticker and propagating into `twos_scores` — now cache as
+NULL. This is the intended behaviour: the unresolved set now
+represents non-actionable instruments and the resolved set
+represents the scoring-eligible US common-stock / ADR universe.
 
 ### Filing-level deduplication
 
@@ -411,9 +455,16 @@ Current migrations covering Layer −1:
 - Version 2: 13F ingestion tables
   (institution_holdings, twos_scores, cusip_ticker_map,
   cik_ticker_map)
-- Version 3: filings_log
-- Version 4: form4_signals, thirteendg_signals
-  (added in Step 1.3)
+- Version 3: institutions.cik / institutions.edgar_name columns
+- Version 4: filings_log table
+- Version 5: normalize pre-2023 `institution_holdings.market_value`
+  from thousands-of-USD to whole USD (SEC Form 13F amendment
+  effective 2023-01-03, Release No. 34-93978, changed the
+  reported unit). Downstream code can treat market_value as raw
+  USD uniformly across history.
+- Version 6: `cusip_ticker_map.security_type` column, populated by
+  the OpenFIGI resolver so the non-equity filter decision is
+  auditable per CUSIP.
 
 ---
 
@@ -436,11 +487,15 @@ discovery_pipeline.py     Step 1.4 — supplementary discovery
 
 **Running quarterly updates:**
 
+All commands assume `cwd = 1_Stock_Picker/`, venv active, and
+`PYTHONPATH=src` — so imports use `from database.db ...` rather
+than `from src.database.db ...`.
+
 ```bash
 # Step 1: ingest new 13F filings from EDGAR
 python -c "
-from src.database.db import get_connection
-from src.layer_minus1.edgar_13f_parser import ingest_all_institutions
+from database.db import get_connection
+from layer_minus1.edgar_13f_parser import ingest_all_institutions
 from datetime import date
 conn = get_connection()
 summary = ingest_all_institutions(
@@ -453,14 +508,52 @@ conn.close()
 
 # Step 2: recompute TWOS scores
 python -c "
-from src.database.db import get_connection
-from src.layer_minus1.twos_calculator import run_quarterly_update
+from database.db import get_connection
+from layer_minus1.twos_calculator import run_quarterly_update
 from datetime import date
 conn = get_connection()
 run_quarterly_update(run_date=date.today().isoformat(), conn=conn)
 conn.close()
 "
 ```
+
+**One-off: clearing stale CUSIP resolutions after a filter change.**
+
+When the security-type reject list is tightened (or a new false
+positive is discovered in the diagnostic), previously-cached ETF
+or trust resolutions will still be returned from
+`cusip_ticker_map` and keep propagating into `twos_scores`. To
+force re-resolution under the current filter:
+
+```bash
+python scripts/clear_etf_cusips.py
+# deletes known non-equity tickers + every NULL row
+# (NULLs may include pre-filter false negatives that the
+#  new filter can now classify correctly)
+```
+
+Then re-resolve the cleared CUSIPs (`filings_log` dedup prevents
+any EDGAR re-download — only OpenFIGI is hit):
+
+```bash
+python -c "
+from database.db import get_connection
+from layer_minus1.cusip_resolver import resolve_cusip_batch
+conn = get_connection()
+cusips = [r['cusip'] for r in conn.execute(
+    'SELECT DISTINCT ih.cusip FROM institution_holdings ih '
+    'LEFT JOIN cusip_ticker_map ctm ON ih.cusip = ctm.cusip '
+    'WHERE ctm.cusip IS NULL AND ih.ticker IS NULL'
+).fetchall()]
+print(f'Re-resolving {len(cusips)} CUSIPs...')
+resolved = resolve_cusip_batch(cusips, conn)
+kept = sum(1 for v in resolved.values() if v is not None)
+print(f'Resolved: {kept}, filtered as non-equity: {len(cusips)-kept}')
+conn.close()
+"
+```
+
+Then re-run Step 2 above so the universe reflects the cleaned cache.
 
 **Diagnosing active universe size:**
 ```bash

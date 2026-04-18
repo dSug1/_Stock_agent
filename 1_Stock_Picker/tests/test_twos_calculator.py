@@ -9,6 +9,8 @@ from database.db import init_db, get_connection
 from layer_minus1 import holdings_store
 from layer_minus1 import cusip_resolver
 from layer_minus1.twos_calculator import (
+    TIER1_MIN_MARKET_VALUE_USD,
+    _derive_signals,
     assign_processing_tier,
     compute_QoQ_change,
     compute_TWOS,
@@ -298,6 +300,66 @@ def test_processing_tier_watchlist_single_tier3_flat() -> None:
 
 def test_processing_tier_not_tracked_when_empty() -> None:
     assert assign_processing_tier(0.0, {}) == "not_tracked"
+
+
+def _tier1_contrib(
+    change_type: str, market_value: int, tier: str = "1A",
+) -> dict:
+    return {
+        "institution_id": 1,
+        "institution_name": "Test Fund",
+        "tier": tier,
+        "multiplier": 4.0 if tier == "1A" else 3.5,
+        "current_shares": 1000,
+        "prior_shares": 500 if change_type == "significant_increase" else None,
+        "market_value": market_value,
+        "change_type": change_type,
+        "change_pct": 1.0 if change_type == "significant_increase" else None,
+        "change_momentum_factor": 2.0 if change_type == "new_position" else 1.5,
+    }
+
+
+def test_tier1_new_position_gate_blocks_below_threshold() -> None:
+    """$4M (4_000_000 USD) is below the $5M gate — signal must not fire."""
+    signals = _derive_signals(
+        [_tier1_contrib("new_position", market_value=4_000_000)]
+    )
+    assert signals["tier1_new_position"] is False
+
+
+def test_tier1_new_position_gate_fires_at_threshold() -> None:
+    """$5M (5_000_000 USD) is exactly at the gate — signal must fire."""
+    signals = _derive_signals(
+        [_tier1_contrib(
+            "new_position", market_value=TIER1_MIN_MARKET_VALUE_USD
+        )]
+    )
+    assert signals["tier1_new_position"] is True
+
+
+def test_tier1_new_position_gate_fires_well_above_threshold() -> None:
+    """$50M position — signal must fire."""
+    signals = _derive_signals(
+        [_tier1_contrib("new_position", market_value=50_000_000)]
+    )
+    assert signals["tier1_new_position"] is True
+
+
+def test_tier1_significant_increase_gate_blocks_below_threshold() -> None:
+    signals = _derive_signals(
+        [_tier1_contrib("significant_increase", market_value=4_000_000)]
+    )
+    assert signals["tier1_significant_increase"] is False
+
+
+def test_tier1_significant_increase_gate_fires_at_threshold() -> None:
+    signals = _derive_signals(
+        [_tier1_contrib(
+            "significant_increase",
+            market_value=TIER1_MIN_MARKET_VALUE_USD,
+        )]
+    )
+    assert signals["tier1_significant_increase"] is True
 
 
 def test_run_quarterly_update_matches_compute_TWOS(

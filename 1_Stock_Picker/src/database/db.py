@@ -7,7 +7,13 @@ from typing import Callable
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 6
+
+# SEC Form 13F amendment effective 2023-01-03 (Release No. 34-93978)
+# changed the `value` field from thousands of USD to whole USD. Filings
+# submitted before this date report in thousands; on or after report in
+# whole dollars.
+MARKET_VALUE_RAW_USD_CUTOFF = "2023-01-03"
 
 # Default DB location when callers pass no path. Resolved against cwd so
 # running from 1_Stock_Picker/ puts the file at 1_Stock_Picker/stockpicker.db.
@@ -63,9 +69,47 @@ def _migration_v4_add_filings_log(
     )
 
 
+def _migration_v5_normalize_pre_2023_market_value(
+    conn: sqlite3.Connection,
+) -> None:
+    """Multiply market_value by 1000 for filings submitted before the
+    SEC Form 13F raw-USD amendment (2023-01-03). Pre-amendment filings
+    report in thousands; post-amendment report in whole dollars. This
+    migration unifies everything to whole USD across history.
+    """
+    conn.execute(
+        "UPDATE institution_holdings "
+        "SET market_value = market_value * 1000 "
+        "WHERE market_value IS NOT NULL "
+        "  AND filing_date < ?",
+        (MARKET_VALUE_RAW_USD_CUTOFF,),
+    )
+
+
+def _migration_v6_add_cusip_security_type(
+    conn: sqlite3.Connection,
+) -> None:
+    """Add security_type column to cusip_ticker_map so the CUSIP resolver
+    can record what OpenFIGI returned (Common Stock, ETF, Preferred, ...)
+    and the non-equity filter can be audited per-row.
+    """
+    cols = {
+        r["name"]
+        for r in conn.execute(
+            "PRAGMA table_info(cusip_ticker_map)"
+        ).fetchall()
+    }
+    if "security_type" not in cols:
+        conn.execute(
+            "ALTER TABLE cusip_ticker_map ADD COLUMN security_type TEXT"
+        )
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migration_v3_add_institution_cik_fields,
     4: _migration_v4_add_filings_log,
+    5: _migration_v5_normalize_pre_2023_market_value,
+    6: _migration_v6_add_cusip_security_type,
 }
 
 

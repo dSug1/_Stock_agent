@@ -419,6 +419,7 @@ CREATE TABLE IF NOT EXISTS cusip_ticker_map (
     cusip           TEXT PRIMARY KEY,
     ticker          TEXT,
     exchange        TEXT,
+    security_type   TEXT,
     resolved_date   TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL

@@ -9,7 +9,25 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from typing import Callable, Optional
 
+from database.db import MARKET_VALUE_RAW_USD_CUTOFF
+
 log = logging.getLogger(__name__)
+
+
+def _normalize_market_value(
+    filing_date: str, market_value: Optional[int]
+) -> Optional[int]:
+    """Return market_value in whole USD regardless of filing era.
+
+    SEC Form 13F amendment (2023-01-03) changed the reported unit from
+    thousands of USD to whole USD. Pre-cutoff values are multiplied by
+    1000 so downstream code can treat market_value as raw USD uniformly.
+    """
+    if market_value is None:
+        return None
+    if filing_date < MARKET_VALUE_RAW_USD_CUTOFF:
+        return market_value * 1000
+    return market_value
 
 EDGAR_USER_AGENT = "StockPicker contact@stockpicker.local"
 EDGAR_RATE_LIMIT_SLEEP = 0.11
@@ -323,7 +341,10 @@ def ingest_all_institutions(
                         inst_id, filing_date,
                         filing["period_of_report"],
                         ticker, cusip,
-                        h.get("shares"), h.get("market_value"),
+                        h.get("shares"),
+                        _normalize_market_value(
+                            filing_date, h.get("market_value")
+                        ),
                         ts, ts,
                     ),
                 )
