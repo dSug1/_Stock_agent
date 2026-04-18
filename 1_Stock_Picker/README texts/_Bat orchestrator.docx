@@ -1,0 +1,65 @@
+Task Scheduler — exact settings
+Open Task Scheduler → Create Task (not "Create Basic Task" — that hides half the options).
+
+General tab
+Name: StockPicker Daily
+☑ "Run only when user is logged on" (simplest — keeps stdout visible on screen for debugging; switch to "Run whether user is logged on or not" later if you want it headless)
+Configure for: Windows 10 / 11
+Triggers tab — New…
+Begin the task: On a schedule
+Daily, Start: today, 18:00:00, recur every 1 day
+☑ Enabled
+Leave "Delay task for up to (random delay)" unchecked
+Actions tab — New…
+Action: Start a program
+Program/script: C:\Users\sugit\Documents\Claude\_Stock_agent\run_1_Stock_Picker.bat
+Start in (optional): C:\Users\sugit\Documents\Claude\_Stock_agent\ ← critical, don't skip this
+Conditions tab
+☐ "Start the task only if the computer is on AC power" — uncheck (laptop battery shouldn't block it)
+☑ "Wake the computer to run this task" — so sleeping PC gets woken at 18:00
+☐ "Start only if the following network connection is available" — leave unchecked; EDGAR is the dependency but the orchestrator logs the failure cleanly if the net is down
+Settings tab — this is where catch-up lives
+☑ "Run task as soon as possible after a scheduled start is missed" ← this is your "fire on boot if 18:00 was missed" switch
+☑ "If the task fails, restart every 15 minutes. Attempt to restart up to 3 times"
+☐ "Stop the task if it runs longer than 1 hour"
+☑ "If the running task does not end when requested, force it to stop"
+"If the task is already running, then the following rule applies": Do not start a new instance
+The multi-day-off caveat
+That "Run task as soon as possible after a scheduled start is missed" setting only fires ONE catch-up run, not one per missed day. So if your PC is off Thu-Sat-Sun, Monday boot fires exactly one task.
+
+For our pipeline the failure mode is subtle but real:
+
+Mon-Fri + Sun missed → nothing of value lost (heartbeat only).
+Saturday missed → next ingest slips to the following Saturday, making the gap up to 14 days.
+For quarterly 13F data a 14-day gap is still operationally fine — a fund that files Wed will appear 10 days later instead of 4. But it means Task Scheduler's catch-up alone doesn't guarantee the Saturday ingest actually happens.
+
+My recommendation — add a staleness check to the orchestrator
+Let the orchestrator decide to ingest if (today is Saturday) OR (last successful ingest was >7 days ago). Two-line change to _should_ingest:
+
+
+INGEST_MAX_AGE_DAYS = 7
+
+
+def _last_ingest_date(conn) -> date | None:
+    row = conn.execute(
+        "SELECT MAX(created_at) AS ts FROM filings_log"
+    ).fetchone()
+    if not row or not row["ts"]:
+        return None
+    return datetime.fromisoformat(row["ts"]).date()
+
+
+def _should_ingest(today: date, conn) -> bool:
+    if today.weekday() == INGEST_WEEKDAY:
+        return True
+    last = _last_ingest_date(conn)
+    if last is None:
+        return True
+    return (today - last).days >= INGEST_MAX_AGE_DAYS
+This gives you:
+
+Normal week: fires Saturday as planned.
+PC off all weekend: fires on next boot (Mon/Tue), still catching the missed Saturday window.
+PC off 10 days straight: fires on first boot after day 7.
+PC off for a month: fires on first boot; filings_log dedup still prevents duplicate work.
+

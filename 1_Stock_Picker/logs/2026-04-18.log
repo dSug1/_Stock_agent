@@ -1,0 +1,9 @@
+2026-04-18 20:08:33,509 INFO stockpicker.daily === daily run start 2026-04-18T20:08:33.509957 ===
+2026-04-18 20:08:33,599 INFO stockpicker.daily ingesting 13F-HR filings from EDGAR
+2026-04-18 20:09:04,113 INFO stockpicker.daily ingest done: 0 new holdings, 168 filings skipped (dedup)
+2026-04-18 20:09:04,114 INFO stockpicker.daily recomputing TWOS for run_date=2026-04-18
+2026-04-18 20:09:35,566 INFO stockpicker.daily tier active: 1625 tickers
+2026-04-18 20:09:35,567 INFO stockpicker.daily tier not_tracked: 1193 tickers
+2026-04-18 20:09:35,567 INFO stockpicker.daily tier passive: 1361 tickers
+2026-04-18 20:09:35,567 INFO stockpicker.daily tier watchlist: 2086 tickers
+2026-04-18 20:09:35,568 INFO stockpicker.daily === daily run end ===
