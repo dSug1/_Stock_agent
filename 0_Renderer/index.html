@@ -392,11 +392,16 @@
       pointer-events: none;
     }
 
-    /* The iframes themselves: backdrop + thin border. */
+    /* The iframes themselves: backdrop + thin border.
+       box-sizing: border-box so the 1px border is INSIDE the 800×500 box —
+       otherwise the chart's visual left edge sits at sx - (800+2)/2*scale
+       while the marker computes sx - 800/2*scale, producing a per-billboard
+       misalignment that varies with scale. */
     .chart-frame {
       border: 1px solid var(--fg);
       background: var(--bg);
       display: block;
+      box-sizing: border-box;
     }
     .chart-frame.no-detail { border-color: transparent; }
 
@@ -737,12 +742,15 @@
        ABOVE the chart's top-left corner in screen space (doesn't overlap the
        chart). Positioned per-frame by the projector, hidden when the chart
        is behind the camera or the marker text is empty. transform-origin is
-       bottom-left so the anchor point (chart's top-left) is the marker's
-       bottom-left → it rises above the chart as it scales. */
+       top-left so scaling is unambiguous — the projector computes `top` to
+       place the marker's bottom edge exactly at the chart's top edge.
+       box-sizing: border-box keeps the element's outer box size predictable
+       if a border is ever added. */
     .chart-marker {
       position: absolute;
       display: none;
       pointer-events: none;
+      box-sizing: border-box;
       background: var(--accent, #58a6ff);
       color: #fff;
       padding: 6px 12px;
@@ -754,7 +762,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      transform-origin: 0 100%;
+      transform-origin: 0 0;
       box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     }
 
@@ -1031,14 +1039,19 @@
         refreshPlusButton(entry, b);
       }
     }
-    // Glyph + active state on the "+"/"−" button. "−" means "text is set,
-    // click to clear"; "+" means "no text, click to open input".
+    // Glyph + active state on the "+"/"−" button.
+    //   "−" → input row is currently OPEN; click to hide (close) the row.
+    //         Marker text is NOT cleared — the billboard keeps displaying it.
+    //   "+" → input row is closed; click to open it (empty or to edit text).
+    // The `.active` class stays on whenever marker text is set, so the button
+    // still visually indicates "this billboard has a marker" even when closed.
     function refreshPlusButton(entry, b) {
       if (!entry || !entry.plus) return;
       const hasText = !!(b && b.markerText);
-      entry.plus.classList.toggle('active', hasText || !!entry.inputRowEl);
-      entry.plus.textContent = hasText ? '\u2212' : '+';
-      entry.plus.title = hasText ? 'Remove marker text' : 'Add marker text';
+      const rowOpen = !!entry.inputRowEl;
+      entry.plus.classList.toggle('active', hasText || rowOpen);
+      entry.plus.textContent = rowOpen ? '\u2212' : '+';
+      entry.plus.title = rowOpen ? 'Hide marker text field' : 'Edit marker text';
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1101,13 +1114,19 @@
       initialRingTickers = new Array(CIRCLE_COUNT).fill('');
     }
 
-    // Resolve initial period.
+    // Resolve initial period. Priority: URL param → cached session → 1d default.
+    // In Production mode the Python launcher passes no query string, so the
+    // cached period wins and the session picks up exactly where it left off.
     let initialPeriod = DEFAULT_PERIOD;
     if (_urlPeriodRaw && PERIODS.includes(_urlPeriodRaw)) {
       initialPeriod = _urlPeriodRaw;
+    } else if (
+      _cachedSession &&
+      typeof _cachedSession.period === 'string' &&
+      PERIODS.includes(_cachedSession.period)
+    ) {
+      initialPeriod = _cachedSession.period;
     }
-    // Cached session period intentionally ignored — always start at DEFAULT_PERIOD
-    // unless overridden by URL param.
 
     // Snapshot the current session state to localStorage. Called after every
     // user-driven mutation (period change, ticker update, ring +/-) AND once
@@ -1915,21 +1934,9 @@
           });
           plusBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (clickedBb.markerText) {
-              // "−" click: clear the marker text and close any open input row.
-              setMarkerText(clickedBb.ticker, '');
-              clickedBb.markerText = '';
-              if (clickedBb.markerEl) clickedBb.markerEl.textContent = '';
-              const ent = _tickerRowMap.get(clickedBb);
-              if (ent && ent.inputRowEl) {
-                ent.inputRowEl.remove();
-                ent.inputRowEl = null;
-                ent.inputEl = null;
-              }
-              if (ent) refreshPlusButton(ent, clickedBb);
-            } else {
-              toggleMarkerInputRow(clickedBb);
-            }
+            // Toggle the input row. Never clears the marker text — the
+            // billboard keeps displaying whatever's stored for this ticker.
+            toggleMarkerInputRow(clickedBb);
           });
           entry = {
             rowEl, sepEl,
@@ -2952,6 +2959,11 @@
     // is a no-op overwrite.
     persistSession();
 
+    // Safety-net: flush session state when the tab closes. Every user-driven
+    // mutation already calls persistSession(), so this is belt-and-braces for
+    // any in-flight state (e.g. a pending ticker edit that hasn't committed).
+    window.addEventListener('beforeunload', () => { try { persistSession(); } catch (_) {} });
+
     // ══════════════════════════════════════════════════════════════════════════
     //  ZOOM CLAMP — keep a background margin around every billboard
     //
@@ -3118,18 +3130,24 @@
           if (!b.markerText) {
             if (b.markerEl.style.display !== 'none') b.markerEl.style.display = 'none';
           } else {
-            // Anchor at the chart's top-left corner in screen space. The
-            // marker's transform-origin is bottom-left (0 100%) and we apply
-            // translateY(-100%) so the marker's visual bottom sits at the
-            // anchor — placing the whole marker ABOVE the chart without
-            // overlapping it. Scale matches the chart's distance scale.
-            const mx = sx - (IFRAME_WIDTH_PX  * 0.5) * scale;
-            const my = sy - (IFRAME_HEIGHT_PX * 0.5) * scale;
-            b.markerEl.style.left      = mx + 'px';
-            b.markerEl.style.top       = my + 'px';
-            b.markerEl.style.transform = `translateY(-100%) scale(${scale})`;
-            b.markerEl.style.zIndex    = String(rank + 1);
+            // Anchor at the chart's top-left corner in screen space. We use
+            // transform-origin: 0 0 (top-left) and a pure scale, then offset
+            // `top` by the marker's own scaled height so its bottom edge lands
+            // exactly on the chart's top edge. This avoids the subpixel jitter
+            // that percentage-based translates can introduce when the reference
+            // box size varies per marker.
+            const mx  = sx - (IFRAME_WIDTH_PX  * 0.5) * scale;
+            const chartTop = sy - (IFRAME_HEIGHT_PX * 0.5) * scale;
+            // offsetHeight reads un-transformed height — cheap, and we need a
+            // fresh read because the marker's height can change when text wraps
+            // near the max-width boundary or when the class list toggles. Show
+            // the element first (needed for offsetHeight to be non-zero).
             if (b.markerEl.style.display !== 'block') b.markerEl.style.display = 'block';
+            const mh = b.markerEl.offsetHeight;
+            b.markerEl.style.left      = mx + 'px';
+            b.markerEl.style.top       = (chartTop - mh * scale) + 'px';
+            b.markerEl.style.transform = `scale(${scale})`;
+            b.markerEl.style.zIndex    = String(rank + 1);
           }
         }
 

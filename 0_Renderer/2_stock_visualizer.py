@@ -786,15 +786,22 @@ def _prompt_mode() -> str:
     """
     Ask the user whether to run in Debug or Production mode.
     Returns 'debug' or 'production'.  Defaults to 'production' on blank input.
+
+    Production mode is non-interactive: no ticker / period prompts. The browser
+    launches with no URL query params, and index.html restores the previous
+    session from its own localStorage cache (tickers, marker texts, ring order,
+    selected time window). On the very first launch the cache is empty and the
+    HTML falls back to 6 blank billboards @ 1d. Financial data is refreshed
+    automatically by /api/data_batch when the page loads.
     """
     print()
     print("╔══════════════════════════════════════════════════════╗")
     print("║      Stock Visualizer — 3D Scene  v1.3               ║")
     print("╠══════════════════════════════════════════════════════╣")
     print("║  Run mode:                                           ║")
-    print("║    [1] Production  (interactive — prompt for input)  ║")
+    print("║    [1] Production  (restore last session, no prompt) ║")
     print("║    [2] Debug       (hardcoded TCRX,BCYC,TTE,AAPL,    ║")
-    print("║                     GOOGL,MCD  @ 3mo)                ║")
+    print("║                     GOOGL,MCD  @ 1d)                 ║")
     print("╚══════════════════════════════════════════════════════╝")
     raw = input("  Mode [1/2] (↵=1): ").strip()
     return "debug" if raw == "2" else "production"
@@ -867,14 +874,14 @@ if __name__ == "__main__":
     mode = _prompt_mode()
     if mode == "debug":
         tickers, period = _debug_prefetch()
+        url = f"http://localhost:{PORT}/?tickers={','.join(tickers)}&period={period}"
     else:
-        tickers, period = _prompt_and_prefetch()
-
-    url = f"http://localhost:{PORT}/"
-    qs  = [f"period={period}"]
-    if tickers:
-        qs.insert(0, "tickers=" + ",".join(tickers))
-    url += "?" + "&".join(qs)
+        # Production: no prompts. Browser opens with no query string, and the
+        # HTML restores tickers / period / marker text / ring order from its
+        # own localStorage cache. First-ever launch → 6 blank billboards @ 1d.
+        print()
+        print("  [production] launching browser — session will be restored from cache.")
+        url = f"http://localhost:{PORT}/"
 
     print()
     print(f"  Starting server on http://localhost:{PORT}")
