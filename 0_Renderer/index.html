@@ -727,9 +727,11 @@
       overflow-y: auto;
       /* Top + left padding makes room for the .tl-plus overhang (-8px top,
          -22px left) so it isn't clipped at the first row or the left edge,
-         and the ticker text isn't obstructed by the button.
+         and the ticker text isn't obstructed by the button. The bottom
+         padding gives the last row's wrapped target line breathing room
+         at the scroll terminus so it isn't flush against the clip edge.
          box-sizing: border-box so the JS max-height clamp stays accurate. */
-      padding: 10px 6px 0 24px;
+      padding: 10px 6px 10px 24px;
       box-sizing: border-box;
       scrollbar-width: thin;
     }
@@ -2069,17 +2071,31 @@
 
       // Rows are always rendered at their natural fixed size — no font
       // scaling based on row count. Scroll-on-overflow handles the rest.
-      const n = ring.length;
       $tickerList.style.setProperty('--ticker-row-scale', 1);
 
-      // Measure helper
+      sizeTickerListScroll();
+    }
+
+    /**
+     * Size the #ticker-list-scroll container to fit the currently-rendered
+     * rows. Safe to re-call whenever row heights may have changed (e.g.
+     * after target text is populated and .tl-target flips from display:none
+     * to visible, adding a wrapped line below the row).
+     */
+    function sizeTickerListScroll() {
+      const rows = $tickerListScroll.querySelectorAll('.tl-row');
+      const seps = $tickerListScroll.querySelectorAll('.tl-sep');
+      const n = rows.length;
+      // Sum of row + separator heights, plus the scroll container's own
+      // padding (top + bottom) — measures the total content-box height
+      // the scroll container needs if no clamp is applied.
+      const cs    = getComputedStyle($tickerListScroll);
+      const padY  = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
       const measureRows = (count) => {
-        const rs = $tickerListScroll.querySelectorAll('.tl-row');
-        const ss = $tickerListScroll.querySelectorAll('.tl-sep');
         let h = 0;
-        for (let i = 0; i < count && i < rs.length; i++) h += rs[i].offsetHeight;
-        for (let i = 0; i < count - 1 && i < ss.length; i++) h += ss[i].offsetHeight;
-        return h;
+        for (let i = 0; i < count && i < n; i++) h += rows[i].offsetHeight;
+        for (let i = 0; i < count - 1 && i < seps.length; i++) h += seps[i].offsetHeight;
+        return h + padY;
       };
 
       document.body.classList.toggle('chat-expanded', _chatExpanded);
@@ -2089,29 +2105,30 @@
         $tickerListScroll.style.maxHeight = '';
         $tickerListScroll.style.minHeight = '';
         $tickerListScroll.classList.remove('scrollable');
-      } else {
-        // State 1 (adaptive): compute how much vertical space is available
-        // in the chat container for the ticker list, then show as many rows
-        // as fit and scroll the rest.
-        const bottomRowEl   = document.getElementById('chat-bottom-row');
-        const toggleEl      = document.getElementById('chat-bottom-toggle');
-        const bottomRowH    = bottomRowEl ? bottomRowEl.offsetHeight : 0;
-        const toggleH       = toggleEl    ? toggleEl.offsetHeight    : 0;
-        const overlayChrome = 32 /* top + bottom 16px viewport margins */ + 16 /* paddings/gaps */;
-        const maxAvail      = Math.max(60, window.innerHeight - overlayChrome - bottomRowH - toggleH);
-        const naturalH      = measureRows(n);
+        return;
+      }
 
-        if (naturalH > maxAvail) {
-          // Rows overflow the available space → enable scrolling.
-          $tickerListScroll.style.maxHeight = maxAvail + 'px';
-          $tickerListScroll.style.minHeight = maxAvail + 'px';
-          $tickerListScroll.classList.add('scrollable');
-        } else {
-          // Everything fits: use natural height, pad to 3 rows when fewer.
-          $tickerListScroll.style.maxHeight = '';
-          $tickerListScroll.style.minHeight = (n < 3) ? measureRows(3) + 'px' : '';
-          $tickerListScroll.classList.remove('scrollable');
-        }
+      // State 1 (adaptive): compute how much vertical space is available
+      // in the chat container for the ticker list, then show as many rows
+      // as fit and scroll the rest.
+      const bottomRowEl   = document.getElementById('chat-bottom-row');
+      const toggleEl      = document.getElementById('chat-bottom-toggle');
+      const bottomRowH    = bottomRowEl ? bottomRowEl.offsetHeight : 0;
+      const toggleH       = toggleEl    ? toggleEl.offsetHeight    : 0;
+      const overlayChrome = 32 /* top + bottom 16px viewport margins */ + 16 /* paddings/gaps */;
+      const maxAvail      = Math.max(60, window.innerHeight - overlayChrome - bottomRowH - toggleH);
+      const naturalH      = measureRows(n);
+
+      if (naturalH > maxAvail) {
+        // Rows overflow the available space → enable scrolling.
+        $tickerListScroll.style.maxHeight = maxAvail + 'px';
+        $tickerListScroll.style.minHeight = maxAvail + 'px';
+        $tickerListScroll.classList.add('scrollable');
+      } else {
+        // Everything fits: use natural height, pad to 3 rows when fewer.
+        $tickerListScroll.style.maxHeight = '';
+        $tickerListScroll.style.minHeight = (n < 3) ? measureRows(3) + 'px' : '';
+        $tickerListScroll.classList.remove('scrollable');
       }
     }
 
@@ -2120,6 +2137,7 @@
      * Uses dirty checks to minimise DOM writes on the hot path.
      */
     function updateTickerListData() {
+      let targetVisibilityChanged = false;
       for (const [bb, entry] of _tickerRowMap) {
         let info;
         try { info = _priceInfoMap.get(bb.element.contentWindow); } catch (_) {}
@@ -2152,6 +2170,11 @@
         const priceNum    = info ? info.priceNum : null;
         const tl          = formatTargetLabel(targetPrice, priceNum);
         if (entry._lastTarget !== tl.text) {
+          // A flip between empty and non-empty changes row height (wraps
+          // a new line on/off), so we need to re-size the scroll clamp.
+          if ((entry._lastTarget === '') !== (tl.text === '')) {
+            targetVisibilityChanged = true;
+          }
           entry.target.textContent = tl.text;
           entry._lastTarget = tl.text;
         }
@@ -2161,6 +2184,7 @@
           entry._lastTargetCls = newCls;
         }
       }
+      if (targetVisibilityChanged) sizeTickerListScroll();
     }
 
     /**
