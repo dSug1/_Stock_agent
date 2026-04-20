@@ -657,7 +657,12 @@
     }
     #ticker-list-scroll {
       overflow-y: auto;
-      padding-right: 6px;
+      /* Top + left padding makes room for the .tl-plus overhang (-8px top,
+         -22px left) so it isn't clipped at the first row or the left edge,
+         and the ticker text isn't obstructed by the button.
+         box-sizing: border-box so the JS max-height clamp stays accurate. */
+      padding: 10px 6px 0 24px;
+      box-sizing: border-box;
       scrollbar-width: thin;
     }
     .tl-row {
@@ -669,6 +674,7 @@
       line-height: 1;
       white-space: nowrap;
       cursor: pointer;
+      position: relative;  /* for absolute-positioned .tl-plus */
     }
     .tl-row:hover .tl-ticker { color: var(--accent, #58a6ff); }
     .tl-row.closest .tl-ticker { color: var(--accent, #58a6ff); }
@@ -725,6 +731,98 @@
       pointer-events: none;
     }
     body.chat-open:not(.chat-expanded) .tl-giraffe-btn { display: flex; }
+
+    /* ── Chart marker billboards ──
+       Each ring chart billboard gets a pure-text marker element that floats
+       ABOVE the chart's top-left corner in screen space (doesn't overlap the
+       chart). Positioned per-frame by the projector, hidden when the chart
+       is behind the camera or the marker text is empty. transform-origin is
+       bottom-left so the anchor point (chart's top-left) is the marker's
+       bottom-left → it rises above the chart as it scales. */
+    .chart-marker {
+      position: absolute;
+      display: none;
+      pointer-events: none;
+      background: var(--accent, #58a6ff);
+      color: #fff;
+      padding: 6px 12px;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.1;
+      border-radius: 6px;
+      max-width: 480px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transform-origin: 0 100%;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    }
+
+    /* ── Ticker-list "+" button (marker toggle) ──
+       Positioned absolutely at the top-left of each row, overhanging upward
+       into the gap between rows. Subtle by default, amplified on hover.
+       Click toggles an input row inserted above the ticker row. */
+    .tl-plus {
+      position: absolute;
+      top: calc(-8px * var(--ticker-row-scale, 1));
+      left: calc(-22px * var(--ticker-row-scale, 1));
+      width: calc(16px * var(--ticker-row-scale, 1));
+      height: calc(16px * var(--ticker-row-scale, 1));
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--fg);
+      border-radius: 50%;
+      font-size: calc(12px * var(--ticker-row-scale, 1));
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0.35;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity .15s, border-color .15s, color .15s;
+    }
+    .tl-plus:hover,
+    .tl-row:hover .tl-plus {
+      opacity: 1;
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .tl-plus.active {
+      opacity: 1;
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    /* ── Marker input row (inserted above the ticker row when "+" active) ── */
+    .tl-marker-input-row {
+      display: flex;
+      align-items: center;
+      padding-left: calc(14px * var(--ticker-row-scale, 1));
+      height: calc(20px * var(--ticker-row-scale, 1));
+    }
+    .tl-marker-input {
+      flex: 1;
+      min-width: 0;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--fg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: calc(11px * var(--ticker-row-scale, 1));
+      font-weight: 600;
+      outline: none;
+      padding: 0 0 2px 0;
+    }
+    .tl-marker-input:focus {
+      border-bottom-color: var(--accent);
+    }
+    .tl-marker-input::placeholder {
+      color: var(--text);
+      opacity: 0.35;
+    }
   </style>
 
   <!-- Three.js ES modules pinned to 0.160.0.
@@ -870,6 +968,7 @@
     const LS_ORBIT_SPEED_KEY  = 'sv.orbitSpeed';
     const LS_SCROLL_GAIN_KEY  = 'sv.scrollGain';
     const LS_SESSION_KEY      = 'sv.session';      // {period, ringTickers:[...]}
+    const LS_MARKER_KEY_PFX   = 'sv.markerText.';  // + TICKER → text
     const DEFAULT_ORBIT_SPEED = 1.0;
     const DEFAULT_SCROLL_GAIN = 0.8;
 
@@ -896,6 +995,50 @@
         if (raw == null) return null;
         return JSON.parse(raw);
       } catch (_) { return null; }
+    }
+
+    // Marker text helpers — keyed by ticker symbol so markers follow the
+    // ticker across ring swaps / add / remove operations.
+    function getMarkerText(ticker) {
+      if (!ticker) return '';
+      try { return localStorage.getItem(LS_MARKER_KEY_PFX + ticker) || ''; }
+      catch (_) { return ''; }
+    }
+    function setMarkerText(ticker, text) {
+      if (!ticker) return;
+      const key = LS_MARKER_KEY_PFX + ticker;
+      try {
+        if (text) localStorage.setItem(key, text);
+        else      localStorage.removeItem(key);
+      } catch (_) {}
+    }
+    // Apply the stored text for b.ticker to b.markerEl and b.markerText.
+    // Visibility is finalised each frame by the projector. Also refreshes
+    // any open input row so it mirrors the new ticker's stored text.
+    function syncBillboardMarker(b) {
+      if (!b || !b.markerEl) return;
+      if (b._markerTicker === b.ticker) return;  // nothing changed
+      const text = getMarkerText(b.ticker);
+      b.markerText = text;
+      b.markerEl.textContent = text;
+      b._markerTicker = b.ticker;
+      // Reflect the ticker change in the ticker-list row, if one exists.
+      const entry = (typeof _tickerRowMap !== 'undefined') ? _tickerRowMap.get(b) : null;
+      if (entry) {
+        if (entry.inputEl && document.activeElement !== entry.inputEl) {
+          entry.inputEl.value = text;
+        }
+        refreshPlusButton(entry, b);
+      }
+    }
+    // Glyph + active state on the "+"/"−" button. "−" means "text is set,
+    // click to clear"; "+" means "no text, click to open input".
+    function refreshPlusButton(entry, b) {
+      if (!entry || !entry.plus) return;
+      const hasText = !!(b && b.markerText);
+      entry.plus.classList.toggle('active', hasText || !!entry.inputRowEl);
+      entry.plus.textContent = hasText ? '\u2212' : '+';
+      entry.plus.title = hasText ? 'Remove marker text' : 'Add marker text';
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1188,12 +1331,31 @@
       // Hide until the first projection frame so nothing flashes at (0,0).
       el.style.display = 'none';
       billboardsLayer.appendChild(el);
-      billboards.push({
+      // Each chart billboard gets a pure-text marker element anchored to its
+      // top-left. Hidden until a user types text via the ticker-list "+" UI.
+      const markerEl = isIframe ? makeMarkerElement() : null;
+      if (markerEl) billboardsLayer.appendChild(markerEl);
+      const b = {
         element:     el,
         worldPos:    worldPos.clone(),
         interactive: isIframe,
         ticker:      (isIframe && ticker) ? String(ticker).toUpperCase() : '',
-      });
+        markerEl,
+        markerText:  '',
+        _markerTicker: null,  // dirty-check: resync when ticker changes
+      };
+      billboards.push(b);
+      // Don't syncBillboardMarker here — _tickerRowMap isn't declared yet
+      // during initial setup. The projector's per-frame dirty-check will
+      // pick up the stored text on the first render pass.
+    }
+
+    // Factory for the pure-text marker element (DOM, not an iframe — it's
+    // purely visual and interactive input happens in the ticker-list UI).
+    function makeMarkerElement() {
+      const div = document.createElement('div');
+      div.className = 'chart-marker';
+      return div;
     }
 
     // 1) MainObject at origin — placeholder div (NOT a ticker chart).
@@ -1703,6 +1865,7 @@
         if (!currentSet.has(bb)) {
           entry.rowEl.remove();
           entry.sepEl.remove();
+          if (entry.inputRowEl) entry.inputRowEl.remove();
           _tickerRowMap.delete(bb);
         }
       }
@@ -1714,6 +1877,11 @@
         if (!entry) {
           const rowEl = document.createElement('div');
           rowEl.className = 'tl-row';
+          const plusBtn = document.createElement('button');
+          plusBtn.type = 'button';
+          plusBtn.className = 'tl-plus';
+          plusBtn.textContent = '+';
+          plusBtn.title = 'Add marker text';
           const tTicker  = document.createElement('span'); tTicker.className  = 'tl-ticker';
           const tCompany = document.createElement('span'); tCompany.className = 'tl-company';
           const tPrice   = document.createElement('span'); tPrice.className   = 'tl-price';
@@ -1726,11 +1894,13 @@
           giraffeImg.src = '/utilities/renderer/logo.png';
           giraffeImg.alt = '';
           giraffeBtn.appendChild(giraffeImg);
-          rowEl.append(tTicker, tCompany, tPrice, tChange, giraffeBtn);
+          rowEl.append(plusBtn, tTicker, tCompany, tPrice, tChange, giraffeBtn);
           const sepEl = document.createElement('hr');
           sepEl.className = 'tl-sep';
           const clickedBb = bb;
-          rowEl.addEventListener('click', () => {
+          rowEl.addEventListener('click', (e) => {
+            // Clicks on the plus or input row must not trigger orbit.
+            if (e.target.closest('.tl-plus, .tl-marker-input-row')) return;
             _clickOrbitTarget = clickedBb;
             _cameraDirty = true;
           });
@@ -1743,9 +1913,38 @@
             _lastTickerListGen = -1;
             _cameraDirty = true;
           });
-          entry = { rowEl, sepEl, ticker: tTicker, company: tCompany, price: tPrice, change: tChange, giraffe: giraffeBtn, _lastTicker: '', _lastPrice: '', _lastChange: '' };
+          plusBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (clickedBb.markerText) {
+              // "−" click: clear the marker text and close any open input row.
+              setMarkerText(clickedBb.ticker, '');
+              clickedBb.markerText = '';
+              if (clickedBb.markerEl) clickedBb.markerEl.textContent = '';
+              const ent = _tickerRowMap.get(clickedBb);
+              if (ent && ent.inputRowEl) {
+                ent.inputRowEl.remove();
+                ent.inputRowEl = null;
+                ent.inputEl = null;
+              }
+              if (ent) refreshPlusButton(ent, clickedBb);
+            } else {
+              toggleMarkerInputRow(clickedBb);
+            }
+          });
+          entry = {
+            rowEl, sepEl,
+            ticker: tTicker, company: tCompany, price: tPrice, change: tChange,
+            giraffe: giraffeBtn, plus: plusBtn,
+            inputRowEl: null, inputEl: null,
+            _lastTicker: '', _lastPrice: '', _lastChange: '',
+          };
           _tickerRowMap.set(bb, entry);
         }
+        // Reflect current marker state on the "+"/"−" button.
+        syncBillboardMarker(bb);
+        refreshPlusButton(entry, bb);
+        // If the input row is open, append it before the main row.
+        if (entry.inputRowEl) $tickerListScroll.appendChild(entry.inputRowEl);
         // appendChild moves existing nodes — achieves reorder
         $tickerListScroll.appendChild(entry.rowEl);
         // separator after every row except the last
@@ -1839,6 +2038,51 @@
         entry.price.style.color  = color;
         entry.change.style.color = color;
       }
+    }
+
+    /**
+     * Toggle the marker-text input row for a billboard's ticker list entry.
+     * Creates the row lazily on first open; removes it on second click.
+     * Typing updates localStorage + the 3D marker element live.
+     */
+    function toggleMarkerInputRow(b) {
+      const entry = _tickerRowMap.get(b);
+      if (!entry) return;
+      if (entry.inputRowEl) {
+        entry.inputRowEl.remove();
+        entry.inputRowEl = null;
+        entry.inputEl = null;
+        refreshPlusButton(entry, b);
+        return;
+      }
+      const inputRow = document.createElement('div');
+      inputRow.className = 'tl-marker-input-row';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tl-marker-input';
+      input.placeholder = 'Marker text\u2026';
+      input.value = b.markerText || '';
+      inputRow.appendChild(input);
+      input.addEventListener('input', () => {
+        const text = input.value;
+        setMarkerText(b.ticker, text);
+        b.markerText = text;
+        if (b.markerEl) b.markerEl.textContent = text;
+        refreshPlusButton(entry, b);
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); toggleMarkerInputRow(b); }
+        else if (e.key === 'Enter') { input.blur(); }
+      });
+      entry.inputRowEl = inputRow;
+      entry.inputEl = input;
+      // Insert before the main row so it reads as "above the ticker".
+      if (entry.rowEl.parentNode) {
+        entry.rowEl.parentNode.insertBefore(inputRow, entry.rowEl);
+      }
+      refreshPlusButton(entry, b);
+      input.focus();
+      input.select();
     }
 
     /**
@@ -2529,11 +2773,16 @@
       }, { once: true });
       iframe.style.display = 'none';  // hidden until the next projection frame
       billboardsLayer.appendChild(iframe);
+      const markerEl = makeMarkerElement();
+      billboardsLayer.appendChild(markerEl);
       const b = {
         element:     iframe,
         worldPos:    new THREE.Vector3(),
         interactive: true,
         ticker:      '',
+        markerEl,
+        markerText:  '',
+        _markerTicker: null,
       };
       billboards.push(b);
       // Expand ring geometry if crossing the threshold (radius + center shift).
@@ -2557,6 +2806,9 @@
       // Detach from the DOM and splice from the master billboards array.
       if (target.element && target.element.parentNode) {
         target.element.parentNode.removeChild(target.element);
+      }
+      if (target.markerEl && target.markerEl.parentNode) {
+        target.markerEl.parentNode.removeChild(target.markerEl);
       }
       const idx = billboards.indexOf(target);
       if (idx >= 0) billboards.splice(idx, 1);
@@ -2833,6 +3085,9 @@
         const inFront = _ndc.z > -1 && _ndc.z < 1;
         if (!inFront) {
           if (el.style.display !== 'none') el.style.display = 'none';
+          if (b.markerEl && b.markerEl.style.display !== 'none') {
+            b.markerEl.style.display = 'none';
+          }
           continue;
         }
         if (el.style.display === 'none') el.style.display = '';
@@ -2853,6 +3108,28 @@
             b._detail = show;
             el.classList.toggle('no-detail', !show);
             try { el.contentWindow.postMessage({ type: 'sv-detail', show }, '*'); } catch (_) {}
+          }
+        }
+
+        // Marker billboard — anchored to the chart's top-left corner in screen
+        // space. Only shown when the linked ticker has non-empty marker text.
+        if (b.markerEl) {
+          syncBillboardMarker(b);
+          if (!b.markerText) {
+            if (b.markerEl.style.display !== 'none') b.markerEl.style.display = 'none';
+          } else {
+            // Anchor at the chart's top-left corner in screen space. The
+            // marker's transform-origin is bottom-left (0 100%) and we apply
+            // translateY(-100%) so the marker's visual bottom sits at the
+            // anchor — placing the whole marker ABOVE the chart without
+            // overlapping it. Scale matches the chart's distance scale.
+            const mx = sx - (IFRAME_WIDTH_PX  * 0.5) * scale;
+            const my = sy - (IFRAME_HEIGHT_PX * 0.5) * scale;
+            b.markerEl.style.left      = mx + 'px';
+            b.markerEl.style.top       = my + 'px';
+            b.markerEl.style.transform = `translateY(-100%) scale(${scale})`;
+            b.markerEl.style.zIndex    = String(rank + 1);
+            if (b.markerEl.style.display !== 'block') b.markerEl.style.display = 'block';
           }
         }
 
