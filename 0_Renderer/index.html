@@ -512,6 +512,19 @@
       padding: 4px 8px;
       font-size: 11px;
     }
+    /* Sort-order toggle: sits to the right of Go. Shows an up/down arrow
+       alongside either "%" (rows sorted by user input) or "T" (rows sorted
+       by entry-price percentage). Same visual weight as the Go button. */
+    #ticker-sort-btn {
+      padding: 4px 6px;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      line-height: 1;
+    }
+    #ticker-sort-btn .tsb-arrow { font-size: 13px; line-height: 1; }
+    #ticker-sort-btn .tsb-mode  { font-weight: 700; min-width: 8px; text-align: center; }
 
     /* ── Overlay wrapper — holds price-overlay + giraffe button side by side ── */
     #overlay-wrapper {
@@ -1002,6 +1015,9 @@
         <div id="ticker-input-group">
           <input id="ticker-input" type="text" placeholder="Ticker" autocomplete="off" spellcheck="false">
           <button id="ticker-go-btn" class="menu-btn" type="button">Go</button>
+          <button id="ticker-sort-btn" class="menu-btn" type="button" title="Toggle ticker-row ordering">
+            <span class="tsb-arrow">&#x21C5;</span><span class="tsb-mode">%</span>
+          </button>
         </div>
       </div>
       <button id="chat-back-btn"  type="button" aria-label="Back to ticker list">←</button>
@@ -1231,7 +1247,17 @@
     function persistSession() {
       if (typeof billboards === 'undefined') return;
       if (typeof getRingBillboards !== 'function') return;
-      const ringTickers = getRingBillboards().map(b => (b && b.ticker) || '');
+      // Save in angular (ring-visual) order so ←/→ swaps — which only
+      // exchange worldPos, not array order — survive a reload. On restart
+      // initialRingTickers[i] is placed at angle (i/n)·2π; preserving the
+      // visual neighbour sequence is what keeps the "user's default order"
+      // stable across sessions.
+      const ring = getRingBillboards().slice().sort((a, b) => {
+        const aa = Math.atan2(a.worldPos.z - ringCenter.z, a.worldPos.x - ringCenter.x);
+        const bb = Math.atan2(b.worldPos.z - ringCenter.z, b.worldPos.x - ringCenter.x);
+        return aa - bb;
+      });
+      const ringTickers = ring.map(b => (b && b.ticker) || '');
       lsSetJSON(LS_SESSION_KEY, {
         period:      currentPeriod,
         ringTickers: ringTickers,
@@ -1871,6 +1897,18 @@
     let _lastClosestForList = null;
     let _clickOrbitTarget   = null;    // billboard to orbit toward after a row click
 
+    // Sort mode for the ticker-list rows.
+    //   'default' → user-input order (ring angle, closest first).
+    //   'percent' → ascending by (entry − current)/current; billboards without
+    //               a parsed entry price keep their relative order at the top.
+    // Persisted to localStorage (per the "cache every user-selectable setting"
+    // rule) and restored on startup.
+    const LS_SORT_MODE_KEY = 'sv.tickerSortMode';
+    let _sortMode = (localStorage.getItem(LS_SORT_MODE_KEY) === 'percent') ? 'percent' : 'default';
+    // Signature of the last applied sort so we don't rebuild the DOM when
+    // percent-mode recomputes to the same order.
+    let _lastSortSig = '';
+
     window.addEventListener('message', (ev) => {
       const d = ev.data;
       if (!d || d.type !== 'sv-price-info') return;
@@ -1938,10 +1976,33 @@
       if (document.body.classList.contains('chat-open')) {
         const ring = getRingBillboards();
         const gen  = ring.length;
-        if (gen !== _lastTickerListGen || b !== _lastClosestForList) {
+        // In percent-sort mode, row ordering depends on live prices + target
+        // inputs, so we can't early-out on gen/closest alone. Compute a
+        // signature of the sort-relevant fields and rebuild when it changes.
+        let sortSig = '';
+        if (_sortMode === 'percent') {
+          const parts = [];
+          for (const bb of ring) {
+            const t = getTargetPrice(bb.ticker);
+            let info;
+            try { info = _priceInfoMap.get(bb.element.contentWindow); } catch (_) {}
+            const c = info && Number.isFinite(info.priceNum) ? info.priceNum : null;
+            const pct = (t != null && c != null && c > 0) ? ((t - c) / c) : null;
+            // Bucket at 0.01% so tiny fluctuations don't thrash the DOM.
+            const key = pct == null ? 'x' : Math.round(pct * 10000);
+            parts.push(bb.ticker + ':' + key);
+          }
+          sortSig = parts.join('|');
+        }
+        const needRebuild =
+          gen !== _lastTickerListGen ||
+          b !== _lastClosestForList ||
+          sortSig !== _lastSortSig;
+        if (needRebuild) {
           buildTickerListRows(ring, b);
           _lastTickerListGen  = gen;
           _lastClosestForList = b;
+          _lastSortSig        = sortSig;
         }
         updateTickerListData();
         updateTickerDetail();
@@ -1971,7 +2032,8 @@
         );
       }
 
-      // Sort by angular offset from closest (ascending, clockwise)
+      // Sort by angular offset from closest (ascending, clockwise) — the
+      // default "user-input" order used as the stable baseline.
       const TWO_PI = Math.PI * 2;
       withAngle.sort((a, b) => {
         const da = ((a.a - closestAngle) % TWO_PI + TWO_PI) % TWO_PI;
@@ -1979,6 +2041,33 @@
         if (Math.abs(da - db) < 1e-9) return a.idx - b.idx;  // tiebreaker
         return da - db;
       });
+
+      // Percent-sort overlay: tickers without a parsed entry price keep their
+      // default order at the top; tickers with an entry price follow, sorted
+      // ascending by (entry − current)/current so the most negative %Δ comes
+      // first and the most positive %Δ last.
+      if (_sortMode === 'percent') {
+        const keyed = withAngle.map((it, i) => {
+          const bb = it.b;
+          const t  = getTargetPrice(bb.ticker);
+          let info;
+          try { info = _priceInfoMap.get(bb.element.contentWindow); } catch (_) {}
+          const c  = info && Number.isFinite(info.priceNum) ? info.priceNum : null;
+          const pct = (t != null && c != null && c > 0) ? ((t - c) / c) : null;
+          return { it, pct, baseIdx: i };
+        });
+        keyed.sort((a, b) => {
+          // Group 1: no pct → retain default (baseIdx) order at the top.
+          // Group 2: has pct → sorted ascending by pct.
+          if (a.pct == null && b.pct == null) return a.baseIdx - b.baseIdx;
+          if (a.pct == null) return -1;
+          if (b.pct == null) return  1;
+          if (a.pct === b.pct) return a.baseIdx - b.baseIdx;
+          return a.pct - b.pct;
+        });
+        withAngle.length = 0;
+        for (const k of keyed) withAngle.push(k.it);
+      }
 
       // Mark which billboards are still present
       const currentSet = new Set(ring);
@@ -2780,8 +2869,33 @@
     //  upper-cased text) and rewrites the closest billboard's iframe src so
     //  it loads the new ticker at the current period.
     // ══════════════════════════════════════════════════════════════════════════
-    const $tickerInput  = document.getElementById('ticker-input');
-    const $tickerGoBtn = document.getElementById('ticker-go-btn');
+    const $tickerInput   = document.getElementById('ticker-input');
+    const $tickerGoBtn   = document.getElementById('ticker-go-btn');
+    const $tickerSortBtn = document.getElementById('ticker-sort-btn');
+    const $tickerSortMode = $tickerSortBtn.querySelector('.tsb-mode');
+
+    // Sync the sort-button glyph with `_sortMode`. "%" is the default mode
+    // (user-input order, clicking swaps to percentage sort); "T" signals the
+    // opposite — clicking swaps back to the ticker/user-input order.
+    function syncSortButton() {
+      $tickerSortMode.textContent = (_sortMode === 'percent') ? 'T' : '%';
+      $tickerSortBtn.title = (_sortMode === 'percent')
+        ? 'Sorted by entry-price percentage — click to restore user order'
+        : 'Sorted by user input — click to sort by entry-price percentage';
+    }
+    syncSortButton();
+
+    $tickerSortBtn.addEventListener('click', () => {
+      _sortMode = (_sortMode === 'percent') ? 'default' : 'percent';
+      try { localStorage.setItem(LS_SORT_MODE_KEY, _sortMode); } catch (_) {}
+      syncSortButton();
+      // Force a full rebuild on the next updatePriceOverlay tick. The render
+      // loop gates updatePriceOverlay behind _cameraDirty, so flip that too
+      // to actually fire an overlay refresh after the toggle.
+      _lastTickerListGen = -1;
+      _lastSortSig       = '';
+      _cameraDirty       = true;
+    });
 
     // Set by updateBillboardProjection — reused by refreshTickerInput
     // to avoid iterating billboards twice.
