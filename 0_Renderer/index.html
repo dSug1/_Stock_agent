@@ -1987,7 +1987,7 @@
             let info;
             try { info = _priceInfoMap.get(bb.element.contentWindow); } catch (_) {}
             const c = info && Number.isFinite(info.priceNum) ? info.priceNum : null;
-            const pct = (t != null && c != null && c > 0) ? ((t - c) / c) : null;
+            const pct = (t != null && c != null && c > 0) ? ((c - t) / c) : null;
             // Bucket at 0.01% so tiny fluctuations don't thrash the DOM.
             const key = pct == null ? 'x' : Math.round(pct * 10000);
             parts.push(bb.ticker + ':' + key);
@@ -2044,8 +2044,8 @@
 
       // Percent-sort overlay: tickers without a parsed entry price keep their
       // default order at the top; tickers with an entry price follow, sorted
-      // ascending by (entry − current)/current so the most negative %Δ comes
-      // first and the most positive %Δ last.
+      // ascending by the displayed %Δ = (current − entry)/current so the most
+      // negative %Δ comes first and the most positive %Δ last.
       if (_sortMode === 'percent') {
         const keyed = withAngle.map((it, i) => {
           const bb = it.b;
@@ -2053,7 +2053,7 @@
           let info;
           try { info = _priceInfoMap.get(bb.element.contentWindow); } catch (_) {}
           const c  = info && Number.isFinite(info.priceNum) ? info.priceNum : null;
-          const pct = (t != null && c != null && c > 0) ? ((t - c) / c) : null;
+          const pct = (t != null && c != null && c > 0) ? ((c - t) / c) : null;
           return { it, pct, baseIdx: i };
         });
         keyed.sort((a, b) => {
