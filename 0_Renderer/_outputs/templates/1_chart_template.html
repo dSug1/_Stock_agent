@@ -73,6 +73,22 @@
     #company-label  { font-size: 24px; color: var(--txt-dim); max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #price-label    { font-size: 40px; font-weight: 700; }
     #change-label   { font-size: 26px; font-weight: 600; }
+    /* Target labels live inside #price-panel but each breaks onto its own
+       line below the ticker row via flex-basis:100%. Their `order` values
+       place the primary target on line 2 and the secondary target on line 3;
+       order:0 on the status badge keeps it on line 1. */
+    #target-label,
+    #target-label-2 {
+      font-size: 22px;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-basis: 100%;
+    }
+    #target-label   { order: 10; }
+    #target-label-2 { order: 11; }
+    #target-label.above,   #target-label-2.above { color: #ff8c1a; }   /* current > target → orange */
+    #target-label.below,   #target-label-2.below { color: #58a6ff; }   /* current < target → blue   */
+    #target-label:empty,   #target-label-2:empty { display: none; }
 
     /* ── Market status badge ──────────────────────────────────────────────── */
     #status-badge {
@@ -226,6 +242,8 @@
       <span id="company-label"></span>
       <span id="price-label">—</span>
       <span id="change-label"></span>
+      <span id="target-label"></span>
+      <span id="target-label-2"></span>
       <span id="status-badge" class="closed">CLOSED</span>
     </div>
   </div>
@@ -398,6 +416,31 @@ const $tickerLabel  = document.getElementById("ticker-label");
 const $companyLabel = document.getElementById("company-label");
 const $priceLabel   = document.getElementById("price-label");
 const $changeLabel  = document.getElementById("change-label");
+const $targetLabel   = document.getElementById("target-label");
+const $targetLabel2  = document.getElementById("target-label-2");
+
+// Target entry prices for this ticker (set via sv-target postMessage from parent).
+// null → no target; >0 float → target. Primary and secondary share the same
+// formula — (current − target) / current — and colour rules.
+let _targetPrice    = null;
+let _targetPrice2   = null;
+let _lastClosePrice = null;  // numeric last close, kept fresh by renderTargetLabel
+function _renderOneTarget(el, t) {
+  const c = _lastClosePrice;
+  if (t == null || !Number.isFinite(c) || c <= 0) {
+    el.textContent = "";
+    el.className   = "";
+    return;
+  }
+  const pct  = ((c - t) / c) * 100;
+  const sign = pct >= 0 ? "+" : "";
+  el.textContent = `Target ${t.toFixed(2)} (${sign}${pct.toFixed(2)}%)`;
+  el.className   = pct >= 0 ? "above" : "below";
+}
+function renderTargetLabel() {
+  _renderOneTarget($targetLabel,  _targetPrice);
+  _renderOneTarget($targetLabel2, _targetPrice2);
+}
 const $statusBadge  = document.getElementById("status-badge");
 const $liveDot      = document.getElementById("live-dot");
 const $liveLabel    = document.getElementById("live-label");
@@ -868,6 +911,8 @@ function renderChart(data) {
     $priceLabel.style.color   = color;
     $changeLabel.textContent  = `${chg >= 0 ? "+" : ""}${chg.toFixed(2)} (${chgPct}%)`;
     $changeLabel.style.color  = color;
+    _lastClosePrice = last.c;
+    renderTargetLabel();
     // Tint line/area series to match price direction
     const rgba = (hex, a) => {
       const n = parseInt(hex.slice(1), 16);
@@ -904,6 +949,7 @@ function renderChart(data) {
         ticker: meta.ticker || '',
         company: meta.short_name || '',
         price: last.c.toFixed(2),
+        priceNum: last.c,
         change: `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${chgPct}%)`,
         positive: chg >= 0,
         status: market_open ? 'open' : 'closed',
@@ -995,6 +1041,15 @@ window.addEventListener('message', (ev) => {
   if (d && d.type === 'sv-mode') applyMode(d.light);
   if (d && d.type === 'sv-detail') applyDetail(d.show);
   if (d && d.type === 'sv-charttype') applyChartType(d.chartType);
+  if (d && d.type === 'sv-target') {
+    // Parent pushes new target entry prices (null clears each). Store and
+    // re-render both labels — the last close price is cached from the most
+    // recent chart render, so we don't have to wait for the next poll.
+    const parse = v => (typeof v === 'number' && Number.isFinite(v) && v > 0) ? v : null;
+    _targetPrice  = parse(d.target);
+    _targetPrice2 = parse(d.target2);
+    renderTargetLabel();
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

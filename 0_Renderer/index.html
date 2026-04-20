@@ -375,6 +375,61 @@
       font-style: italic;
     }
 
+    /* ── Per-ticker "Entry target" editor (state 2 chat body) ──
+       A vertical list of text inputs, each with its own +/− button. The last
+       row's button is "+" (adds a new row); other rows' buttons are "−"
+       (remove that row). Values persist per ticker in localStorage. #chat-body
+       already has overflow-y: auto, so a native scrollbar appears when the
+       list outgrows the panel. */
+    #chat-body .cb-targets {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    #chat-body .cb-target-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #chat-body .cb-target-input {
+      flex: 1;
+      min-width: 0;
+      box-sizing: border-box;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--fg);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+    #chat-body .cb-target-input:focus {
+      border-color: var(--accent);
+    }
+    #chat-body .cb-target-btn {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--fg);
+      border-radius: 50%;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    #chat-body .cb-target-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
     /* Blank-slot placeholder shown when there aren't enough tickers.
        Sized dynamically by JS to match IFRAME_WIDTH_PX / IFRAME_HEIGHT_PX.
        Non-interactive on purpose — scroll/click over it should reach
@@ -527,6 +582,14 @@
       font-size: 13px;
       font-weight: 600;
     }
+    #price-overlay .po-target {
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    #price-overlay .po-target:empty { display: none; }
+    #price-overlay .po-target.above { color: #ff8c1a; }
+    #price-overlay .po-target.below { color: #58a6ff; }
     #price-overlay .po-status {
       font-size: 11px;
       padding: 2px 8px;
@@ -672,11 +735,13 @@
     }
     .tl-row {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: calc(8px * var(--ticker-row-scale, 1));
-      height: calc(22px * var(--ticker-row-scale, 1));
-      padding: 0;
-      line-height: 1;
+      column-gap: calc(8px * var(--ticker-row-scale, 1));
+      row-gap: 2px;
+      min-height: calc(22px * var(--ticker-row-scale, 1));
+      padding: 2px 0;
+      line-height: 1.1;
       white-space: nowrap;
       cursor: pointer;
       position: relative;  /* for absolute-positioned .tl-plus */
@@ -706,6 +771,20 @@
       font-size: calc(11px * var(--ticker-row-scale, 1));
       font-weight: 600;
     }
+    /* Entry-target display for ticker-list rows — value + %Δ vs current price.
+       Orange when target > current (price has to rise to hit target), blue
+       when target < current. Hidden entirely when empty so the row doesn't
+       reserve space for nothing. */
+    .tl-target {
+      font-size: calc(11px * var(--ticker-row-scale, 1));
+      font-weight: 600;
+      white-space: nowrap;
+      order: 10;            /* push below siblings even though DOM order differs */
+      flex-basis: 100%;     /* occupy its own line so it wraps under the row */
+    }
+    .tl-target:empty { display: none; }
+    .tl-target.above { color: #ff8c1a; }
+    .tl-target.below { color: #58a6ff; }
     .tl-sep {
       border: none;
       border-top: 1px solid var(--fg);
@@ -804,6 +883,15 @@
       border-color: var(--accent);
     }
 
+    /* In state-2 (chat fully expanded), the ticker list is read-only: hide
+       the "+" button and any open marker input row so the panel reads as a
+       clean list of tickers + detail view. Markers on the 3D billboards are
+       unaffected — the stored text still renders in the scene. */
+    body.chat-expanded .tl-plus,
+    body.chat-expanded .tl-marker-input-row {
+      display: none !important;
+    }
+
     /* ── Marker input row (inserted above the ticker row when "+" active) ── */
     .tl-marker-input-row {
       display: flex;
@@ -887,11 +975,13 @@
         <span class="po-company"></span>
         <span class="po-price"></span>
         <span class="po-change"></span>
+        <span class="po-target"></span>
         <span class="po-status closed"></span>
       </div>
       <div class="po-row2">
         <span class="po-price"></span>
         <span class="po-change"></span>
+        <span class="po-target"></span>
         <span class="po-status closed"></span>
       </div>
       <hr class="po-separator">
@@ -1768,6 +1858,7 @@
     const $poCompany    = $priceOverlay.querySelector('.po-company');
     const $poPrices     = $priceOverlay.querySelectorAll('.po-price');
     const $poChanges    = $priceOverlay.querySelectorAll('.po-change');
+    const $poTargets    = $priceOverlay.querySelectorAll('.po-target');
     const $poStatuses   = $priceOverlay.querySelectorAll('.po-status');
 
     // ── Ticker list (multi-row) state ──
@@ -1792,6 +1883,13 @@
               try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, '*'); } catch (_) {}
             }
             try { ev.source.postMessage({ type: 'sv-charttype', chartType: _chartType }, '*'); } catch (_) {}
+            // Push the current target for this ticker so the iframe renders
+            // it as soon as the first chart draw completes.
+            try {
+              const t  = getTargetPrice(bi.ticker);
+              const t2 = getTargetPrice2(bi.ticker);
+              ev.source.postMessage({ type: 'sv-target', target: t, target2: t2 }, '*');
+            } catch (_) {}
             break;
           }
         }
@@ -1816,6 +1914,10 @@
           $poPrices.forEach(el  => { el.textContent = info.price;      el.style.color = color; });
           $poChanges.forEach(el => { el.textContent = info.change;     el.style.color = color; });
           $poStatuses.forEach(el => { el.textContent = info.statusText; el.className = 'po-status ' + info.status; });
+          // Target price + %Δ. Missing / non-numeric target clears the span.
+          const tp = getTargetPrice(info.ticker);
+          const tl = formatTargetLabel(tp, info.priceNum);
+          $poTargets.forEach(el => { el.textContent = tl.text; el.className = 'po-target ' + tl.cls; });
           $overlayWrapper.classList.add('visible');
           syncGiraffeSize();
         }
@@ -1905,6 +2007,7 @@
           const tCompany = document.createElement('span'); tCompany.className = 'tl-company';
           const tPrice   = document.createElement('span'); tPrice.className   = 'tl-price';
           const tChange  = document.createElement('span'); tChange.className  = 'tl-change';
+          const tTarget  = document.createElement('span'); tTarget.className  = 'tl-target';
           const giraffeBtn = document.createElement('button');
           giraffeBtn.type = 'button';
           giraffeBtn.className = 'tl-giraffe-btn';
@@ -1913,7 +2016,7 @@
           giraffeImg.src = '/utilities/renderer/logo.png';
           giraffeImg.alt = '';
           giraffeBtn.appendChild(giraffeImg);
-          rowEl.append(plusBtn, tTicker, tCompany, tPrice, tChange, giraffeBtn);
+          rowEl.append(plusBtn, tTicker, tCompany, tPrice, tChange, tTarget, giraffeBtn);
           const sepEl = document.createElement('hr');
           sepEl.className = 'tl-sep';
           const clickedBb = bb;
@@ -1940,10 +2043,10 @@
           });
           entry = {
             rowEl, sepEl,
-            ticker: tTicker, company: tCompany, price: tPrice, change: tChange,
+            ticker: tTicker, company: tCompany, price: tPrice, change: tChange, target: tTarget,
             giraffe: giraffeBtn, plus: plusBtn,
             inputRowEl: null, inputEl: null,
-            _lastTicker: '', _lastPrice: '', _lastChange: '',
+            _lastTicker: '', _lastPrice: '', _lastChange: '', _lastTarget: '', _lastTargetCls: '',
           };
           _tickerRowMap.set(bb, entry);
         }
@@ -2044,6 +2147,19 @@
         }
         entry.price.style.color  = color;
         entry.change.style.color = color;
+
+        const targetPrice = getTargetPrice(ticker);
+        const priceNum    = info ? info.priceNum : null;
+        const tl          = formatTargetLabel(targetPrice, priceNum);
+        if (entry._lastTarget !== tl.text) {
+          entry.target.textContent = tl.text;
+          entry._lastTarget = tl.text;
+        }
+        const newCls = 'tl-target ' + tl.cls;
+        if (entry._lastTargetCls !== newCls) {
+          entry.target.className = newCls;
+          entry._lastTargetCls = newCls;
+        }
       }
     }
 
@@ -2092,6 +2208,152 @@
       input.select();
     }
 
+    // ── Target entry price: first row of sv.entryTargets.<TICKER>, if it
+    // parses as a positive float. Any non-numeric first-row text is a plain
+    // note (just displayed in the detail editor, no price overlay).
+    function getTargetPrice(ticker) {
+      if (!ticker) return null;
+      const arr = getEntryTargets(ticker);
+      const raw = String(arr[0] ?? '').trim().replace(',', '.');
+      if (!raw) return null;
+      const v = parseFloat(raw);
+      return (Number.isFinite(v) && v > 0) ? v : null;
+    }
+    // Second entry price: second row of sv.entryTargets.<TICKER>, same parse
+    // rules. Used only by the billboard chart to render a second target line
+    // beneath the first.
+    function getTargetPrice2(ticker) {
+      if (!ticker) return null;
+      const arr = getEntryTargets(ticker);
+      const raw = String(arr[1] ?? '').trim().replace(',', '.');
+      if (!raw) return null;
+      const v = parseFloat(raw);
+      return (Number.isFinite(v) && v > 0) ? v : null;
+    }
+    // Format the "Target X.XX (+Y.YY%)" label for a given target & current price.
+    // Percentage = (current − target) / current. Positive → current is above
+    // target (orange); negative → current is below target (blue). Returns empty
+    // text when either input is missing — callers should clear their display.
+    function formatTargetLabel(targetNum, currentNum) {
+      if (targetNum == null || !Number.isFinite(currentNum) || currentNum <= 0) {
+        return { text: '', cls: '' };
+      }
+      const pct  = ((currentNum - targetNum) / currentNum) * 100;
+      const sign = pct >= 0 ? '+' : '';
+      return {
+        text: `Target ${targetNum.toFixed(2)} (${sign}${pct.toFixed(2)}%)`,
+        cls:  pct >= 0 ? 'above' : 'below',
+      };
+    }
+    // Push the current stored target for `ticker` to every billboard iframe
+    // that's rendering that ticker. Called on input change and on iframe
+    // load-handshake (in the sv-price-info listener).
+    function broadcastTargetPrice(ticker) {
+      if (!ticker) return;
+      const target  = getTargetPrice(ticker);
+      const target2 = getTargetPrice2(ticker);
+      for (const b of billboards) {
+        if (!b.interactive || b.ticker !== ticker) continue;
+        try { b.element.contentWindow.postMessage({ type: 'sv-target', target, target2 }, '*'); } catch (_) {}
+      }
+    }
+
+    // Entry targets — per-ticker list of free-text values. Persisted to
+    // localStorage under sv.entryTargets.<TICKER> as a JSON array of strings.
+    // Empty/missing → a single empty row so the UI always has one input.
+    const LS_TARGETS_KEY_PFX = 'sv.entryTargets.';
+    function getEntryTargets(ticker) {
+      if (!ticker) return [''];
+      try {
+        const raw = localStorage.getItem(LS_TARGETS_KEY_PFX + ticker);
+        const arr = raw ? JSON.parse(raw) : null;
+        if (Array.isArray(arr) && arr.length > 0) return arr.map(v => String(v ?? ''));
+      } catch (_) {}
+      return [''];
+    }
+    function setEntryTargets(ticker, values) {
+      if (!ticker) return;
+      const key = LS_TARGETS_KEY_PFX + ticker;
+      try {
+        const arr = (Array.isArray(values) && values.length > 0) ? values : [''];
+        localStorage.setItem(key, JSON.stringify(arr));
+      } catch (_) {}
+    }
+    // Sync per-row UI: last row is "+", others are "−". First row keeps the
+    // "Entry target" placeholder; all following rows show "Enter text here".
+    // Re-applied after any add/remove so positions stay correct when the
+    // first row is deleted.
+    function refreshTargetButtons(container) {
+      const rows = container.querySelectorAll('.cb-target-row');
+      rows.forEach((row, i) => {
+        const btn = row.querySelector('.cb-target-btn');
+        const isLast = i === rows.length - 1;
+        btn.textContent = isLast ? '+' : '\u2212';
+        btn.title = isLast ? 'Add another entry target' : 'Remove this entry target';
+        const input = row.querySelector('.cb-target-input');
+        input.placeholder =
+          i === 0 ? 'Enter entry target or text here' :
+          i === 1 ? 'Enter second entry price or text here' :
+                    'Enter text here';
+      });
+    }
+    function collectTargetValues(container) {
+      return Array.from(container.querySelectorAll('.cb-target-input')).map(el => el.value);
+    }
+    function buildTargetRow(container, ticker, initialValue) {
+      const row = document.createElement('div');
+      row.className = 'cb-target-row';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'cb-target-input';
+      input.placeholder = 'Entry target';
+      input.value = initialValue || '';
+      input.addEventListener('input', () => {
+        setEntryTargets(ticker, collectTargetValues(container));
+        // First row is the primary target, second row is the secondary target.
+        // Either changing means the iframe(s) need the updated values pushed.
+        const rows = container.querySelectorAll('.cb-target-input');
+        if (rows[0] === input || rows[1] === input) broadcastTargetPrice(ticker);
+      });
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cb-target-btn';
+      btn.textContent = '+';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rows = container.querySelectorAll('.cb-target-row');
+        const isLast = rows[rows.length - 1] === row;
+        if (isLast) {
+          // "+" → append a new empty row, making THIS row no longer last.
+          const newRow = buildTargetRow(container, ticker, '');
+          container.appendChild(newRow);
+          refreshTargetButtons(container);
+          setEntryTargets(ticker, collectTargetValues(container));
+          newRow.querySelector('input').focus();
+        } else {
+          // "−" → remove this row. Guard: always keep at least one row.
+          if (rows.length > 1) {
+            const wasFirst  = rows[0] === row;
+            const wasSecond = rows[1] === row;
+            row.remove();
+            refreshTargetButtons(container);
+            setEntryTargets(ticker, collectTargetValues(container));
+            // If either primary or secondary target row was removed, the
+            // iframe's rendered targets need refreshing.
+            if (wasFirst || wasSecond) broadcastTargetPrice(ticker);
+          }
+        }
+      });
+      row.append(input, btn);
+      return row;
+    }
+    function renderEntryTargets(container, ticker) {
+      container.replaceChildren();
+      const values = getEntryTargets(ticker);
+      for (const v of values) container.appendChild(buildTargetRow(container, ticker, v));
+      refreshTargetButtons(container);
+    }
+
     /**
      * Populate the #chat-body detail panel (state 2 only) with data for the
      * currently-closest billboard. The closest row is also the only ticker
@@ -2120,10 +2382,10 @@
       const c = document.createElement('div');
       c.className = 'cb-company';
       c.textContent = company;
-      const p = document.createElement('div');
-      p.className = 'cb-placeholder';
-      p.textContent = 'Ticker-specific data & chat will appear here.';
-      $chatBody.append(h, c, p);
+      const targets = document.createElement('div');
+      targets.className = 'cb-targets';
+      $chatBody.append(h, c, targets);
+      renderEntryTargets(targets, ticker);
     }
 
     // ══════════════════════════════════════════════════════════════════════════

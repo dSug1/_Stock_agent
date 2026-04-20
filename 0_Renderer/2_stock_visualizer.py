@@ -766,122 +766,26 @@ def _open_browser(url: str) -> None:
     webbrowser.open(url)
 
 
-# Hardcoded tickers and period used when the user picks Debug mode at startup.
-DEBUG_TICKERS = ["TCRX", "BCYC", "TTE", "AAPL", "GOOGL", "MCD"]
-DEBUG_PERIOD  = "1d"
-
-
-def _prefetch(tickers: list[str], period: str) -> None:
-    """Resolve + pre-fetch data for each ticker, printing progress."""
-    for t in tickers:
-        print(f"  Pre-fetching {period} data for {t} …", end="", flush=True)
-        try:
-            get_chart_data(t, period)
-            print(" done (cached).")
-        except Exception as exc:
-            print(f" WARNING: {exc}")
-
-
-def _prompt_mode() -> str:
-    """
-    Ask the user whether to run in Debug or Production mode.
-    Returns 'debug' or 'production'.  Defaults to 'production' on blank input.
-
-    Production mode is non-interactive: no ticker / period prompts. The browser
-    launches with no URL query params, and index.html restores the previous
-    session from its own localStorage cache (tickers, marker texts, ring order,
-    selected time window). On the very first launch the cache is empty and the
-    HTML falls back to 6 blank billboards @ 1d. Financial data is refreshed
-    automatically by /api/data_batch when the page loads.
-    """
-    print()
-    print("╔══════════════════════════════════════════════════════╗")
-    print("║      Stock Visualizer — 3D Scene  v1.3               ║")
-    print("╠══════════════════════════════════════════════════════╣")
-    print("║  Run mode:                                           ║")
-    print("║    [1] Production  (restore last session, no prompt) ║")
-    print("║    [2] Debug       (hardcoded TCRX,BCYC,TTE,AAPL,    ║")
-    print("║                     GOOGL,MCD  @ 1d)                 ║")
-    print("╚══════════════════════════════════════════════════════╝")
-    raw = input("  Mode [1/2] (↵=1): ").strip()
-    return "debug" if raw == "2" else "production"
-
-
-def _prompt_and_prefetch() -> tuple[list[str], str]:
-    """
-    Production-mode interactive prompt.
-
-    Returns (tickers, period):
-      tickers — up to 6 resolved symbols that fill the ring billboards
-                in index.html (the central object is a placeholder,
-                not a ticker chart).
-      period  — one time window applied to every chart
-
-    Both values are passed to the browser as URL query params so the
-    3D scene (index.html) and each embedded chart iframe start with
-    the correct data.
-    """
-    print()
-    print("  Enter up to 6 tickers / company names, comma-separated.")
-    print("  Leave blank for an all-empty scene.")
-    print("  e.g.  AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA")
-    print()
-
-    raw_tickers = input("  Tickers (comma-separated): ").strip()
-    raw_period  = input("  Period [1d 5d 1mo 3mo 6mo 1y 2y 5y max] (↵=1d): ").strip()
-
-    period = raw_period if raw_period in VALID_PERIODS else "1d"
-
-    tickers: list[str] = []
-    if raw_tickers:
-        print()
-        for token in raw_tickers.split(","):
-            token = token.strip()
-            if not token:
-                continue
-            print(f"  Resolving '{token}' …", end="", flush=True)
-            resolved = resolve_ticker(token)
-            print(f" → {resolved}")
-            if resolved and resolved not in tickers:
-                tickers.append(resolved)
-            if len(tickers) >= 6:
-                break
-
-        print()
-        _prefetch(tickers, period)
-
-    return tickers, period
-
-
-def _debug_prefetch() -> tuple[list[str], str]:
-    """Debug mode: skip prompts, use hardcoded tickers + period."""
-    print()
-    print(f"  [debug] tickers={DEBUG_TICKERS}  period={DEBUG_PERIOD}")
-    print()
-    _prefetch(DEBUG_TICKERS, DEBUG_PERIOD)
-    return list(DEBUG_TICKERS), DEBUG_PERIOD
-
-
 if __name__ == "__main__":
     _init_db()
 
     # Start internet clock calibration immediately (blocking first sync so
-    # is_market_open() is accurate before we pre-fetch any data).
+    # is_market_open() is accurate before serving any data).
     print("  [clock] calibrating against internet time …", end="", flush=True)
     _sync_clock_once()
     threading.Thread(target=_clock_sync_loop, daemon=True).start()
 
-    mode = _prompt_mode()
-    if mode == "debug":
-        tickers, period = _debug_prefetch()
-        url = f"http://localhost:{PORT}/?tickers={','.join(tickers)}&period={period}"
-    else:
-        # Production: no prompts. Browser opens with no query string, and the
-        # HTML restores tickers / period / marker text / ring order from its
-        # own localStorage cache. First-ever launch → 6 blank billboards @ 1d.
-        print()
-        print("  [production] launching browser — session will be restored from cache.")
-        url = f"http://localhost:{PORT}/"
+    # Non-interactive launch. The browser opens with no URL query params, and
+    # index.html restores tickers / selected period / marker texts / ring order
+    # from its own localStorage cache. On the very first launch the cache is
+    # empty and the HTML falls back to 6 blank billboards @ 1d. Financial data
+    # is refreshed automatically by /api/data_batch when the page loads.
+    print()
+    print("╔══════════════════════════════════════════════════════╗")
+    print("║      Stock Visualizer — 3D Scene  v1.3               ║")
+    print("╚══════════════════════════════════════════════════════╝")
+    print("  Launching browser — session will be restored from cache.")
+    url = f"http://localhost:{PORT}/"
 
     print()
     print(f"  Starting server on http://localhost:{PORT}")
