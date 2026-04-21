@@ -838,12 +838,34 @@ async function loadChart() {
 }
 
 function renderChart(data) {
-  const { meta, records, interval, fetched_at, market_open, exchange_schedule } = data;
+  const { meta, interval, fetched_at, market_open, exchange_schedule } = data;
+  let records = data.records;
 
   // Keep exchange schedule in sync — used by isMarketOpenNow() between polls
   if (exchange_schedule) {
     state.exchange = exchange_schedule;
     updateClockLabel();
+  }
+
+  // For 1d: anchor on the LAST bar's session, not the first. The server-side
+  // cache returns up to 2 days of 1-minute bars, so records[0] can still be
+  // a stale pre-session bar from yesterday. Anchoring on the last bar guarantees
+  // we lock onto the most recent session and lets us recover yesterday's true
+  // close (the last pre-session bar) as the % baseline.
+  let sessionOpenEpoch  = null;
+  let sessionCloseEpoch = null;
+  let prevClose1d       = null;
+  if (state.period === "1d" && state.exchange && records.length > 0) {
+    const tz = state.exchange.tz;
+    const lastBar = records[records.length - 1];
+    const { y, mo, d } = _dateInTz(lastBar.t, tz);
+    sessionOpenEpoch  = _tzDateTimeToEpoch(y, mo, d, state.exchange.open[0],  state.exchange.open[1],  tz);
+    sessionCloseEpoch = _tzDateTimeToEpoch(y, mo, d, state.exchange.close[0], state.exchange.close[1], tz);
+    for (let i = records.length - 1; i >= 0; i--) {
+      if (records[i].t < sessionOpenEpoch) { prevClose1d = records[i].c; break; }
+    }
+    const firstTodayIdx = records.findIndex(r => r.t >= sessionOpenEpoch);
+    if (firstTodayIdx > 0) records = records.slice(firstTodayIdx);
   }
 
   // ── Price series ─────────────────────────────────────────────────────────
@@ -867,13 +889,7 @@ function renderChart(data) {
   // the series itself to reserve the space — then fitContent naturally spans
   // open→close, with the price curve reaching mid-chart mid-session and the
   // right edge at close.
-  let sessionOpenEpoch  = null;
-  let sessionCloseEpoch = null;
-  if (state.period === "1d" && state.exchange && records.length > 0) {
-    const tz = state.exchange.tz;
-    const { y, mo, d } = _dateInTz(records[0].t, tz);
-    sessionOpenEpoch  = _tzDateTimeToEpoch(y, mo, d, state.exchange.open[0],  state.exchange.open[1],  tz);
-    sessionCloseEpoch = _tzDateTimeToEpoch(y, mo, d, state.exchange.close[0], state.exchange.close[1], tz);
+  if (state.period === "1d" && sessionOpenEpoch != null && records.length > 0) {
     const lastT = records[records.length - 1].t;
     const step  = (records.length >= 2) ? Math.max(1, records[1].t - records[0].t) : 60;
     for (let t = lastT + step; t <= sessionCloseEpoch; t += step) {
@@ -901,8 +917,9 @@ function renderChart(data) {
   if (records.length >= 2) {
     const last  = records[records.length - 1];
     const first = records[0];
-    const chg   = last.c - first.o;
-    const chgPct= ((chg / first.o) * 100).toFixed(2);
+    const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
+    const chg   = last.c - ref;
+    const chgPct= ((chg / ref) * 100).toFixed(2);
     const color = chg >= 0 ? "#3fb950" : "#f85149";
 
     $tickerLabel.textContent  = meta.ticker || "—";
@@ -941,8 +958,9 @@ function renderChart(data) {
   if (window.parent !== window && records.length >= 2) {
     const last  = records[records.length - 1];
     const first = records[0];
-    const chg   = last.c - first.o;
-    const chgPct= ((chg / first.o) * 100).toFixed(2);
+    const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
+    const chg   = last.c - ref;
+    const chgPct= ((chg / ref) * 100).toFixed(2);
     try {
       window.parent.postMessage({
         type: 'sv-price-info',
