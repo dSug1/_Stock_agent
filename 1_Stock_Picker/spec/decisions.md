@@ -150,9 +150,12 @@ relevant layer spec.
   bump at Step 8.1.
 
 ### Orchestrator
-- **Entry point:** [run_1_Stock_Picker.bat](../../run_1_Stock_Picker.bat)
-  at repo root, scheduled daily at 18:00 via Windows Task Scheduler.
-  Renamed from `run_stockpicker.bat` by the user.
+- **Entry point:** [run_1_Stock_Picker.bat](../run_1_Stock_Picker.bat)
+  in `1_Stock_Picker/`, scheduled daily at 18:00 via Windows Task
+  Scheduler. Renamed from `run_stockpicker.bat` and moved from the
+  repo root into `1_Stock_Picker/` so the picker project is
+  self-contained; the shared venv at `../.venv/` is still activated
+  one level up from the .bat.
 - **Orchestrator:** [daily_orchestrator.py](../scripts/daily_orchestrator.py)
   at `1_Stock_Picker/scripts/`.
 - **PYTHONPATH=src** (not `.`), consistent with

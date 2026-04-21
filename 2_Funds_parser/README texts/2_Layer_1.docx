@@ -1,0 +1,23 @@
+Code
+
+2_Funds_parser/src/database/schema.sql — added holdings, filings_log, cusip_ticker_map with UNIQUE dedup keys.
+2_Funds_parser/src/database/db.py — added MARKET_VALUE_RAW_USD_CUTOFF = "2023-01-03".
+2_Funds_parser/src/layer_1/cusip_resolver.py — OpenFIGI resolver, ported.
+2_Funds_parser/src/layer_1/edgar_13f.py — fetch/parse/ingest, ingest_all_funds orchestrator, DEFAULT_FROM_DATE = "2025-01-01".
+2_Funds_parser/scripts/2_ingest_13f.py — CLI driver with --from-date / --to-date / --verbose.
+2_Funds_parser/scripts/2_import_from_stockpicker.py — one-shot pre-seed, idempotent via INSERT OR IGNORE.
+Spec
+
+2_Funds_parser/spec/2_layer_1.md — data flow, schema rationale, start-date choice, differences from 1_Stock_Picker, known failure modes.
+
+Report generator — scripts/2_build_report.py
+
+Writes Outputs/2_funds_report.html with 22 tabs (flex-wrap tab bar, pure JS switching, no framework).
+Each populated tab: latest filing date, period of report, accession, EDGAR link, positions count, total reported value, sorted positions table (Company, Ticker, CUSIP, Shares, Market value USD).
+Each empty tab (10 of 22 currently): placeholder "Fields will populate after the next successful ingest."
+Cache: sidecar Outputs/2_funds_report.cache.json with {fund_id → (latest_filing_date, n_filings)}. Second invocation prints "up to date" and doesn't rewrite. --force to rebuild anyway.
+Schema addition — holdings.name_of_issuer column added via additive migration helper in db.py (ALTER TABLE ... ADD COLUMN). Pre-seeded rows have NULL there (shown blank as "Company"); fresh EDGAR fetches populate it.
+
+Specs updated — 2_layer_1.md gains a Report + .bat section; 2_layer_0.md file-layout reflects the new structure.
+
+Current report state: 22 funds · 12 populated · 855 positions rendered. Next time you run the .bat, ingest will fetch the 10 missing funds from EDGAR and the report will automatically refresh those tabs.

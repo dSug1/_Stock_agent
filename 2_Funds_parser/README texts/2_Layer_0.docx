@@ -1,0 +1,33 @@
+Database created and seeded
+2_Funds_parser/2_fundparser.db now contains one table, funds, with 22 rows — every selected fund from column A of your Excel, paired with its legal name and 10-digit CIK.
+
+Files produced
+src/database/schema.sql — funds(id, cik UNIQUE, name, legal_name, created_at, updated_at) + idx_funds_name.
+src/database/db.py — get_connection() resolves 2_fundparser.db at the project root and applies schema.sql idempotently on every connect; also exports now_iso().
+src/database/init.py — empty.
+scripts/2_seed_funds.py — reads Input/list_of_funds.xlsx sheet "Confirmed Funds", keeps rows with non-empty column A, upserts by CIK. Re-runnable; refreshes name/legal_name on conflict.
+spec/2_layer_0.md — the Layer 0 spec (fund registry only; no tiers/multipliers/policy columns — deliberate simplification vs 1_Stock_Picker).
+Seeded rows (22)
+#	CIK	Name	Legal Name
+1	0001263508	Baker Brothers Advisors	BAKER BROS. ADVISORS LP
+2	0001009258	Deerfield Management	DEERFIELD MANAGEMENT CO /NY
+3	0001055951	OrbiMed Advisors	ORBIMED ADVISORS LLC
+4	0001056807	BVF Partners (Biotechnology Value Fund)	BVF Inc.
+5	0001224962	Perceptive Advisors	PERCEPTIVE ADVISORS LLC
+6	0001346824	RA Capital Management	RA CAPITAL MANAGEMENT, LLC
+7	0001493215	RTW Investments	RTW INVESTMENTS, LP
+8	0001425738	Redmile Group	Redmile Group, LLC
+9	0001583977	Cormorant Asset Management	Cormorant Asset Management, LP
+10	0001587114	EcoR1 Capital	EcoR1 Capital, LLC
+11	0001482416	SIO Capital Management	Sio Capital Management, LLC
+12	0001633313	Avoro Capital Advisors	Avoro Capital Advisors LLC
+13	0001442756	PFM Health Sciences	PFM Health Sciences, LP
+14	0001600135	Third Rock Ventures	Third Rock Ventures, LLC
+15	0001274403	ARCH Venture Partners	ARCH VENTURE CORP
+16	0001924953	Atlas Venture	Atlas Venture Life Sciences Advisors, LLC
+17	0001799883	5AM Ventures	5AM Venture Management, LLC
+18	0000908551	Versant Ventures	HERSHEY TRUST CO
+19	0000812295	Janus Henderson Investors (Biotech Fund)	Janus Henderson Investors US LLC
+20	0001465837	Boxer Capital	Boxer Capital, LLC
+21	0001631134	Sofinnova Investments	Sofinnova Partners SAS
+22	0001681662	Athos KG (Strüngmann Family Office)	Athos Capital Ltd
