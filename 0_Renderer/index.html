@@ -3329,6 +3329,9 @@
       // comparisons that compare positions too — force a refresh anyway.
       _lastClosestBillboard = null;
 
+      _lastTickerListGen = -1;
+      _cameraDirty       = true;
+
       persistSession();
     }
 
