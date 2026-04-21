@@ -14,9 +14,11 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Callable, Optional
 
@@ -25,7 +27,10 @@ from database.db import MARKET_VALUE_RAW_USD_CUTOFF
 log = logging.getLogger(__name__)
 
 EDGAR_USER_AGENT = "StockPicker contact@stockpicker.local"
-EDGAR_RATE_LIMIT_SLEEP = 0.11
+# SEC fair-use is 10 req/sec per IP. We target 9 to leave a margin
+# for clock jitter and any concurrent sibling scripts in this repo.
+EDGAR_RATE_PER_SEC = 9.0
+EDGAR_MAX_WORKERS = 5
 EDGAR_SUBMISSIONS_URL = (
     "https://data.sec.gov/submissions/CIK{cik}.json"
 )
@@ -37,14 +42,42 @@ DEFAULT_FROM_DATE = "2025-01-01"
 HttpGet = Callable[[str], bytes]
 
 
+class _RateLimiter:
+    """Process-global token bucket for SEC EDGAR requests.
+
+    Gates every worker thread through a single lock so the aggregate
+    request rate does not exceed `rate_per_sec`, regardless of how
+    many threads are calling concurrently.
+    """
+
+    def __init__(self, rate_per_sec: float) -> None:
+        self._interval = 1.0 / rate_per_sec
+        self._next = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait = self._next - now
+            if wait <= 0:
+                self._next = now + self._interval
+                wait = 0.0
+            else:
+                self._next += self._interval
+        if wait > 0:
+            time.sleep(wait)
+
+
+_EDGAR_LIMITER = _RateLimiter(EDGAR_RATE_PER_SEC)
+
+
 def _default_http_get(url: str) -> bytes:
+    _EDGAR_LIMITER.acquire()
     req = urllib.request.Request(
         url, headers={"User-Agent": EDGAR_USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read()
-    time.sleep(EDGAR_RATE_LIMIT_SLEEP)
-    return body
+        return resp.read()
 
 
 def _pad_cik(cik: str) -> str:
@@ -203,6 +236,40 @@ def parse_13f_xml(xml_content: str) -> list[dict]:
     return holdings
 
 
+def _fetch_and_parse_filing(
+    filing: dict, http_get: HttpGet,
+) -> dict:
+    """Fetch the info-table XML for one filing and parse it.
+
+    Returns a dict with keys: filing, doc_url, holdings, parse_status,
+    error. Designed to be called from a thread pool — all network I/O
+    happens here, the caller writes the DB serially.
+    """
+    try:
+        doc_url = find_information_table_url(filing, http_get=http_get)
+        if doc_url is None:
+            return {
+                "filing": filing, "doc_url": None, "holdings": [],
+                "parse_status": "no_info_table", "error": None,
+            }
+        xml_content = download_13f_document(doc_url, http_get=http_get)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "filing": filing, "doc_url": None, "holdings": [],
+            "parse_status": "download_error", "error": exc,
+        }
+    try:
+        holdings = parse_13f_xml(xml_content)
+        parse_status = "success" if holdings else "empty"
+    except Exception as exc:  # noqa: BLE001
+        holdings = []
+        parse_status = "parse_error"
+    return {
+        "filing": filing, "doc_url": doc_url, "holdings": holdings,
+        "parse_status": parse_status, "error": None,
+    }
+
+
 def backfill_missing_issuer_names(
     conn: sqlite3.Connection,
     *,
@@ -236,40 +303,49 @@ def backfill_missing_issuer_names(
     if not rows:
         return stats
 
-    log.info("backfill: %d filings with missing name_of_issuer", len(rows))
-    for row in rows:
+    log.info(
+        "name_of_issuer backfill: %d filings to rescan (%d workers)",
+        len(rows), EDGAR_MAX_WORKERS,
+    )
+
+    def _fetch(row) -> tuple:
         try:
             xml_content = download_13f_document(
                 row["document_url"], http_get=http_get,
             )
-            parsed = parse_13f_xml(xml_content)
+            return (row, parse_13f_xml(xml_content), None)
         except Exception as exc:  # noqa: BLE001
-            stats["errors"] += 1
-            log.warning(
-                "backfill download failed %s %s: %s",
-                row["fund_name"], row["filing_date"], exc,
-            )
-            continue
+            return (row, None, exc)
 
-        ts = now_iso()
-        before = conn.total_changes
-        for h in parsed:
-            name = h.get("name_of_issuer")
-            cusip = h.get("cusip")
-            if not name or not cusip:
+    # Parallel fetches gated by the global SEC rate limiter. DB writes
+    # stay on this thread because SQLite has a single writer.
+    with ThreadPoolExecutor(max_workers=EDGAR_MAX_WORKERS) as pool:
+        futures = [pool.submit(_fetch, r) for r in rows]
+        for future in as_completed(futures):
+            row, parsed, err = future.result()
+            if err is not None:
+                stats["errors"] += 1
+                log.warning(
+                    "backfill download failed %s %s: %s",
+                    row["fund_name"], row["filing_date"], err,
+                )
                 continue
-            conn.execute(
-                "UPDATE holdings SET name_of_issuer = ?, updated_at = ? "
-                "WHERE fund_id = ? AND filing_date = ? AND cusip = ? "
-                "  AND name_of_issuer IS NULL",
-                (name, ts, row["fund_id"], row["filing_date"], cusip),
-            )
-        conn.commit()
-        stats["rows_updated"] += conn.total_changes - before
-        log.info(
-            "backfilled %s %s",
-            row["fund_name"], row["filing_date"],
-        )
+            ts = now_iso()
+            before = conn.total_changes
+            for h in parsed:
+                name = h.get("name_of_issuer")
+                cusip = h.get("cusip")
+                if not name or not cusip:
+                    continue
+                conn.execute(
+                    "UPDATE holdings SET name_of_issuer = ?, "
+                    "       updated_at = ? "
+                    "WHERE fund_id = ? AND filing_date = ? AND cusip = ? "
+                    "  AND name_of_issuer IS NULL",
+                    (name, ts, row["fund_id"], row["filing_date"], cusip),
+                )
+            conn.commit()
+            stats["rows_updated"] += conn.total_changes - before
 
     return stats
 
@@ -419,10 +495,9 @@ def ingest_all_funds(
             )
             continue
 
+        pending = []
         for filing in filings:
-            filing_date = filing["filing_date"]
             accession = filing["accession_number"]
-
             existing = conn.execute(
                 "SELECT 1 FROM filings_log "
                 "WHERE fund_id = ? AND accession_number = ? LIMIT 1",
@@ -431,40 +506,48 @@ def ingest_all_funds(
             if existing is not None:
                 stats["filings_skipped"] += 1
                 continue
+            pending.append(filing)
 
-            doc_url: Optional[str] = None
-            try:
-                doc_url = find_information_table_url(
-                    filing, http_get=http_get,
-                )
-                if doc_url is None:
-                    stats["filings_error"] += 1
-                    log.warning(
-                        "no info table for %s %s",
-                        fund_name, filing_date,
-                    )
-                    continue
-                xml_content = download_13f_document(
-                    doc_url, http_get=http_get,
-                )
-            except Exception as exc:  # noqa: BLE001
+        # Parallel EDGAR fetches (index.json + info-table XML) for this
+        # fund's pending filings. Workers share the global rate limiter
+        # so the aggregate request rate stays below SEC's ceiling.
+        fetch_results: list[dict] = []
+        if pending:
+            with ThreadPoolExecutor(max_workers=EDGAR_MAX_WORKERS) as pool:
+                futures = [
+                    pool.submit(_fetch_and_parse_filing, f, http_get)
+                    for f in pending
+                ]
+                for future in as_completed(futures):
+                    fetch_results.append(future.result())
+
+        for result in fetch_results:
+            filing = result["filing"]
+            filing_date = filing["filing_date"]
+            accession = filing["accession_number"]
+            doc_url = result.get("doc_url")
+
+            if result["error"] is not None:
                 stats["filings_error"] += 1
                 log.warning(
                     "download failed %s %s: %s",
-                    fund_name, filing_date, exc,
+                    fund_name, filing_date, result["error"],
+                )
+                continue
+            if doc_url is None:
+                stats["filings_error"] += 1
+                log.warning(
+                    "no info table for %s %s",
+                    fund_name, filing_date,
                 )
                 continue
 
-            parse_status: str
-            try:
-                holdings = parse_13f_xml(xml_content)
-                parse_status = "success" if holdings else "empty"
-            except Exception as exc:  # noqa: BLE001
-                holdings = []
-                parse_status = "parse_error"
+            holdings = result["holdings"]
+            parse_status = result["parse_status"]
+            if parse_status == "parse_error":
                 log.warning(
-                    "parse failed %s %s: %s",
-                    fund_name, filing_date, exc,
+                    "parse failed %s %s",
+                    fund_name, filing_date,
                 )
 
             ts = now_iso()
