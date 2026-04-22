@@ -1,0 +1,35 @@
+# 2_Funds_parser — pipeline configuration.
+# Owned by Module 1. All paths resolve relative to 2_Funds_parser/.
+
+pipeline:
+  mode: debug                    # "debug" | "production"
+  quarter: auto-latest           # "auto-latest" | "YYYYQn" (e.g. "2026Q1")
+
+paths:
+  fundparser_db: 2_fundparser.db
+  prices_db: prices.db                           # created by Module 4b
+  outcomes_db: outcomes.db                       # created by Module 7
+  reports_dir: Outputs                           # human-browsable HTML/Excel
+  intermediate_outputs_dir: _intermediate_outputs  # Parquet plumbing
+  outputs_dir: _outputs                          # pipeline-final machine artifacts
+  logs_dir: logs
+  fund_list_source: Input/list_of_funds.xlsx
+
+db_schema:
+  funds_table: funds
+  filings_table: filings_log
+  holdings_table: holdings
+  cusip_map_table: cusip_ticker_map
+
+cache:
+  ttl_days: 30
+  clear_on_debug_start: true
+
+logging:
+  level: INFO                    # forced to DEBUG when pipeline.mode == debug
+  file_rotation_days: 14
+  console: true
+
+debug:
+  row_limit: 50
+  prompt_before_api_calls: true

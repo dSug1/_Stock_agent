@@ -1,0 +1,2 @@
+2026-04-22 19:18:52,472 INFO [verify_module_1] Module 1 loaded.
+2026-04-22 19:18:52,473 DEBUG [verify_module_1] Debug line (visible only if mode=debug).

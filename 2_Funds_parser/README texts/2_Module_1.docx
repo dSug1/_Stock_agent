@@ -1,0 +1,18 @@
+What Module 1 does, in layman terms
+Think of Module 1 as the setup crew that arrives at the site before anyone else. It doesn't touch any stock data — its entire job is to make sure every other module (3 through 7) starts from a clean, consistent, validated footing.
+
+It has six jobs:
+
+Reads the recipe card (config/pipeline.yaml). This is where you tell the pipeline things like "run in debug mode", "analyze quarter 2026Q1", "put reports in the Outputs/ folder". One file, one place, human-editable.
+
+Checks the recipe card makes sense. If you typo'd debugg instead of debug, or wrote 2026Q5 (quarters only go 1-4), Module 1 catches it on startup and tells you exactly which line of which file is wrong — instead of letting the mistake cause a weird crash three modules later.
+
+Opens the safe. The .env file at repo root holds secret keys (Anthropic API key, etc.). Module 1 is the only thing that touches it, reads it into memory, and hands the keys to whoever needs them later.
+
+Sets up the shared notepad. Every module writes progress/errors to a log file (logs/pipeline_...log). Module 1 configures one consistent format so a glance at the log tells you which module wrote what and when.
+
+Figures out which quarter we're analyzing. You can hard-code 2026Q1, or you can write auto-latest and Module 1 peeks into the database to find the most recent quarter of filings. Converts dates like 2026-03-31 into the YYYYQn short form everyone else uses.
+
+Hands out the map. Where's the database? 2_fundparser.db. Where do reports go? Outputs/. Where does the pipeline dump intermediate Parquet files? _intermediate_outputs/. Module 1 resolves every path to an absolute location, so a module can run from anywhere without worrying about current directory.
+
+Without Module 1, every other module would reinvent all six of these, inconsistently
