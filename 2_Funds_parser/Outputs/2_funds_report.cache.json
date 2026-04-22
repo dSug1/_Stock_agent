@@ -29,12 +29,6 @@
     "n_filings": 25,
     "name": "PFM Health Sciences"
   },
-  "14": {
-    "latest_filing_date": null,
-    "latest_holding_updated_at": null,
-    "n_filings": 0,
-    "name": "Third Rock Ventures"
-  },
   "15": {
     "latest_filing_date": "2026-02-17",
     "latest_holding_updated_at": "2026-04-21T19:24:51+00:00",
@@ -50,19 +44,19 @@
   "17": {
     "latest_filing_date": "2026-02-17",
     "latest_holding_updated_at": "2026-04-21T19:43:28+00:00",
-    "n_filings": 12,
+    "n_filings": 25,
     "name": "5AM Ventures"
   },
   "18": {
     "latest_filing_date": "2026-02-10",
     "latest_holding_updated_at": "2026-04-21T19:43:39+00:00",
-    "n_filings": 5,
+    "n_filings": 25,
     "name": "Versant Ventures"
   },
   "19": {
-    "latest_filing_date": null,
-    "latest_holding_updated_at": null,
-    "n_filings": 0,
+    "latest_filing_date": "2026-02-17",
+    "latest_holding_updated_at": "2026-04-22T14:56:12+00:00",
+    "n_filings": 18,
     "name": "Janus Henderson Investors (Biotech Fund)"
   },
   "2": {
@@ -74,7 +68,7 @@
   "20": {
     "latest_filing_date": "2025-02-14",
     "latest_holding_updated_at": "2026-04-21T19:43:47+00:00",
-    "n_filings": 1,
+    "n_filings": 21,
     "name": "Boxer Capital"
   },
   "21": {
@@ -85,8 +79,8 @@
   },
   "22": {
     "latest_filing_date": "2026-02-12",
-    "latest_holding_updated_at": "2026-04-21T19:43:49+00:00",
-    "n_filings": 5,
+    "latest_holding_updated_at": "2026-04-21T19:46:56+00:00",
+    "n_filings": 25,
     "name": "Athos KG (Str\u00fcngmann Family Office)"
   },
   "3": {
