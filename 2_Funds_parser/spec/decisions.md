@@ -6,7 +6,7 @@
 
 **Update discipline.** At the end of every module step: did anything get decided, calibrated, renamed, or deviate from spec? If yes, append or revise the entry for that module with a link to the code line of record (`[file.py:NN](../src/path/file.py#L<n>)`). If no, state that explicitly in the end-of-step summary.
 
-**Last updated:** 2026-04-22
+**Last updated:** 2026-04-22 (Modules 1 + 3 implemented; Module 2 schema extended for share-type fields + ticker_source on cusip_ticker_map; Boxer Capital CIK retargeted after Oct-2024 IMA handoff)
 
 ---
 
@@ -59,6 +59,7 @@ Specs: [2_layer_0.md](2_layer_0.md) and [2_layer_1.md](2_layer_1.md). Built prio
 ### Fund registry (Layer 0)
 - **Third Rock Ventures dropped** (CIK `0001600135`). Last 13F-HR filing 2015-11-03 — fund stopped filing (likely below $100M §13(f) threshold or restructured). Row cleared from column A in [Input/list_of_funds.xlsx](../Input/list_of_funds.xlsx); row deleted from `funds` table on 2026-04-22. Current count: **21 funds** (down from 22).
 - **Janus Henderson retargeted** from CIK `0000812295` (files only 13F-NT / notice-of-deferral since 2017) to `0001274173` (`JANUS HENDERSON GROUP PLC`, the actual 13F-HR filer). Discovered via `otherManagersInfo` on the 13F-NT cover page. Janus now contributes 18 filings from 2021-11-16 → 2026-02-17.
+- **Boxer Capital retargeted 2026-04-22** from CIK `0001465837` (`Boxer Capital, LLC`) to `0002018299` (`Boxer Capital Management, LLC`). On 2024-10-10 the original Boxer Capital, LLC entered an Investment Management Agreement delegating all voting/investment power to a newly formed RIA, Boxer Capital Management, LLC (BCM). The old entity filed a single-row 13F-HR stub for 2024-12-31 (accn `0001213900-25-014355`, `cusip='000000000'`, `shares=0`) signalling it no longer beneficially owns securities; all subsequent filings are under BCM's new CIK. Retarget steps executed: (a) updated [Input/list_of_funds.xlsx](../Input/list_of_funds.xlsx) row 49 CIK + legal_name, (b) `UPDATE funds SET cik='0002018299', legal_name='Boxer Capital Management, LLC' WHERE id=20`, (c) deleted the stub from `filings_log` + its 1 holding from `holdings`, (d) re-ingested with `--from-date 2024-11-01` — pulled 5 filings (2024-12-31 through 2025-12-31 + one 2025-12-31 amendment), 187 holdings. Boxer now has full quarterly coverage through 2025Q4. Same pattern as Janus Henderson precedent; any future `funds` row whose latest filing is a 1-row stub with `cusip='000000000'` should be investigated for an entity handoff.
 - **Verbatim legal-name quirks preserved** (not bugs to "fix"):
   - Versant Ventures → `HERSHEY TRUST CO` (Versant files via that vehicle, CIK `0000908551`).
   - BVF Partners → `BVF Inc.` (SEC style).
@@ -79,21 +80,88 @@ Specs: [2_layer_0.md](2_layer_0.md) and [2_layer_1.md](2_layer_1.md). Built prio
 - **Janus residual unresolved CUSIPs** are ~5,000 per filing — large diversified manager with many non-equity holdings OpenFIGI rejects. Normal. SEC name-match chips away across re-runs; no backfill action needed.
 
 ### Schema evolution
-- **No migration framework.** `_apply_additive_migrations` in [src/database/db.py:29-51](../src/database/db.py#L29-L51) probes `PRAGMA table_info` and issues `ALTER TABLE ADD COLUMN` for missing columns. Currently covers `holdings.name_of_issuer` and `holdings.ticker_source`.
+- **No migration framework.** `_apply_additive_migrations` in [src/database/db.py](../src/database/db.py) probes `PRAGMA table_info` and issues `ALTER TABLE ADD COLUMN` for missing columns. Currently covers `holdings.name_of_issuer`, `holdings.ticker_source`, `holdings.title_of_class`, `holdings.put_call`.
 - **Any rename or drop requires a dedicated migration script.** Not yet needed.
+
+### Schema extension 2026-04-22 — `title_of_class` + `put_call` (Module 3 prerequisite)
+- **New columns** `holdings.title_of_class TEXT` and `holdings.put_call TEXT` added via additive migration. Captures 13F `<titleOfClass>` (e.g., `"COM"`, `"COM CL A"`, `"PRE-FUND WT"`, `"PFD"`) and `<putCall>` (`"Put"` / `"Call"` / NULL). Required by Module 3 to classify common vs. preferred vs. warrants vs. options.
+- **Parser** [`parse_13f_xml`](../src/layer_1/edgar_13f.py) extended to extract both fields; existing `sshPrnamtType == "SH"` filter preserved.
+- **INSERT** in `ingest_all_funds` updated to persist both columns for new ingests.
+- **One-time backfill** `backfill_share_type_fields` [`src/layer_1/edgar_13f.py`](../src/layer_1/edgar_13f.py) re-fetches each filing's info-table XML once and UPDATEs existing rows by `(fund_id, filing_date, cusip)`. Wired into `ingest_all_funds` alongside the existing name-of-issuer and sec-name-ticker backfills; idempotent guard is `WHERE h.title_of_class IS NULL`.
+- **Result of 2026-04-22 backfill:** 502 filings rescanned in ~60 s, 77,763/77,763 rows populated, 0 errors. Option positions surfaced: 303 Call + 241 Put rows (544 total) previously indistinguishable from common stock.
+- **Observed top classifications** (for tuning `share_types.yaml` in Module 3): `COM` 51,747; `COM NEW` 3,742; `CL A` 3,246; `COM CL A` 2,749; `SHS` 1,835; `SPONSORED ADS` 997; `Common` 882; `COMMON STOCK` 829; `SPONSORED ADR` 727; `SH` 672; `COMM` 583; `CL A COM` 546; `CLASS A COM` 523; `UNIT 99/99/9999` 373 (SPAC units, expected `unknown`); `ORD SHS` 368.
+- **Notes for Module 3 YAML:** rules must be **case-insensitive** (title_of_class appears as both `"COM"` and `"Common"`). The bare `"CL A"` and `"SH"` rows also classify as common. Regular `"UNIT"` (SPAC) positions will fall through to `unknown` — expected; user can promote into YAML if biotech-relevant.
 
 ### Reporting
 - **HTML sort:** ascending alphabetical on `name_of_issuer COLLATE NOCASE`; NULL/empty names sorted to the bottom.
 - **Cache signature** includes `MAX(holdings.updated_at)` so backfills deterministically invalidate the cached HTML.
-- **Current DB state (post-2026-04-22 sweep):** 21 funds, 502 filings, 77,763 holdings, date range 2020-01-28 → 2026-02-17.
+- **Current DB state (post-2026-04-22 sweep incl. Boxer retarget):** 21 funds, 506 filings, 77,949 holdings, date range 2020-01-28 → 2026-02-17.
 
 ---
 
 ## Module 3 — Data Bridge
 
-*Spec: TBD (not yet written). Reads from `2_fundparser.db`, emits `_intermediate_outputs/universe_{quarter}.parquet` + audit files.*
+Spec: [module_3_spec.md](module_3_spec.md). Reads from `2_fundparser.db`, emits `_intermediate_outputs/universe_{quarter}.parquet` + audit files.
 
-*(No entries yet.)*
+### Spec calibrations locked 2026-04-22 (implementation pending)
+
+- **`unknown` share-class rows retained, flagged, and handled gracefully downstream.** No runtime prompts. Audit surface: `unresolved_positions_{quarter}.parquet` + `has_unknown_class=True` column on the universe aggregate. Downstream modules must treat this flag as non-fatal.
+- **Pre-funded warrant detection: v1 substring rules accepted** (`config/share_types.yaml` as specced). Tune from audit output if v2 needs per-ticker overrides.
+- **Ticker-null rows: bucketed on CUSIP** (not dropped). Companion manual-fill-in scripts live in `2_Funds_parser/scripts/`:
+  - `list_unresolved_cusips.py` dumps `(cusip, name_of_issuer)` pairs for external AI-tool lookup.
+  - `apply_manual_ticker_mappings.py` ingests a pasted/CSV mapping and UPSERTs `cusip_ticker_map` with `ticker_source='manual'`.
+  - Third `ticker_source` value `'manual'` joins `'openfigi'` + `'sec_name'`. Default rendering: treated as verified (user vouched). HTML report treatment confirmed at Module 2 addendum implementation time.
+- **CLI chained in `run_2_Funds_parser.bat`:** Module 2 ingest + HTML report → printed summary (rows ingested, new filings, unresolved CUSIP count) → interactive `Proceed to Module 3? [y/N]` prompt → Module 3 with `--quarter auto-latest`. User may override with explicit `--quarter YYYYQn`.
+- **No sidecar cache in v1.** Overwrite-on-run; revisit only if aggregation exceeds ~5 s.
+- **Future requirement flagged — historical-quarter re-runs.** Module 7's feedback loop will require re-running Module 3 against past `period_of_report` values to regenerate back-test universes. The `--quarter YYYYQn` override already covers mechanics; carried forward to Module 7 spec.
+
+### Prerequisite: Module 2 schema extension — COMPLETE 2026-04-22
+
+Option A executed: `title_of_class` + `put_call` columns added, parser extended, 502 filings rescanned, 77,763 rows backfilled. Details under Module 2 below.
+
+### Spec refinement 2026-04-22 (post-backfill)
+
+After the backfill revealed actual `title_of_class` distribution, the spec was refined:
+
+- **Classification rules tuned** from observed data: added `"CL "`, `"CLASS "`, `"SH"` rules (for 3,246 `CL A` + 672 bare `SH` rows that v1 would have classified as `unknown`); added `"UNIT"`, `"RIGHT"`, `"PFW"`, `"CONV"` rules for edge cases surfaced by the distribution. Rule ordering re-validated: PFD before CL, COM before CL, specific before broad.
+- **`exited_positions` added to universe schema.** Previously implied by `qoq_fund_count_change` but not explicit; Module 4 ranking may penalise heavy exits.
+- **Downstream contract section formalized.** Modules 4/5/6/7 must handle `ticker IS NULL`, `has_unknown_class`, `has_regular_warrants`, `has_options`, and null `qoq_*` columns non-fatally. Spec section re-stated in each downstream module spec when written.
+- **Manual-ticker fill-in workflow fully specified.** `list_unresolved_cusips.py` writes `_intermediate_outputs/unresolved_cusips_{quarter}.tsv`; `apply_manual_ticker_mappings.py` UPSERTs `cusip_ticker_map` AND updates `holdings.ticker` in place. `ticker_source='manual'` treated as verified (renders identically to `openfigi` in HTML report).
+- **`ticker_is_verified` definition narrowed** to `ticker_source IN ('openfigi', 'manual')`. `'sec_name'` no longer counts as verified because name-match can return the wrong security class for the same issuer (flagged in Module 2 decisions).
+- **CLI chaining concrete.** `run_2_Funds_parser.bat` prompts `Proceed to Module 3? [y/N]` after the existing Module 2 ingest + report; if yes, runs `3_build_universe.py` then optionally `list_unresolved_cusips.py`. `apply_manual_ticker_mappings.py` is explicitly NOT chained — user runs manually after populating the mapping file.
+- **Implementation order documented** in spec for the next session.
+
+### Implemented 2026-04-22
+
+Code landed under [src/module_3/bridge.py](../src/module_3/bridge.py) (single-module orchestrator, 6 public functions). CLI at [scripts/3_build_universe.py](../scripts/3_build_universe.py). Companion scripts at [scripts/list_unresolved_cusips.py](../scripts/list_unresolved_cusips.py) and [scripts/apply_manual_ticker_mappings.py](../scripts/apply_manual_ticker_mappings.py). Chained into [run_2_Funds_parser.bat](../run_2_Funds_parser.bat) behind a `[y/N]` prompt.
+
+Implementation decisions on top of the spec:
+
+- **`aggregate_fund_positions` returns a 4-tuple** `(fund_positions, dropped, unresolved, flags_by_key)` rather than the 3-tuple specced. Reason: a fund can hold an options position on ticker X without holding X common. The per-fund `(fund_id, position_key)` flag row is then orphaned at the cross-fund rollup (no kept row to merge into), so `has_options` silently drops to `False` at the universe level. Fix: carry a separate `flags_by_key` frame (cross-fund `any()` keyed only on `position_key`) and merge it into the universe aggregation. Verified: MRNA now shows `has_options=True` when any fund holds a MRNA put even if that fund holds no MRNA common. See [src/module_3/bridge.py:219-325](../src/module_3/bridge.py#L219-L325) and [src/module_3/bridge.py:357-447](../src/module_3/bridge.py#L357-L447). Tickers that are held ONLY as options (no kept common anywhere) still do not enter the universe — that's by design (universe = common-equity exposure).
+- **`cusip_ticker_map.ticker_source` column added** via additive migration in [src/database/db.py:_apply_additive_migrations](../src/database/db.py#L29). Legacy rows backfilled to `'openfigi'` in-migration. OpenFIGI writer ([src/layer_1/cusip_resolver.py:82-96](../src/layer_1/cusip_resolver.py#L82-L96)) now stamps `'openfigi'` explicitly; manual workflow stamps `'manual'`. Spec's `ticker_source='manual'` requirement is now actually honoured on the map (was previously only on `holdings`).
+- **`share_types.yaml` is loaded from `PROJECT_ROOT / "config" / "share_types.yaml"`**, imported from `module_1` ([src/module_1/paths.py:11](../src/module_1/paths.py#L11)). Earlier draft used `config.paths.project_root` which does not exist on `PathsConfig`; caught before first real run.
+- **Deterministic output contract preserved.** Universe sorted by `(fund_count DESC, total_market_value DESC, ticker ASC, cusip ASC)` with stable sort; `position_key` dropped before Parquet write. Same DB snapshot + same YAML → byte-identical output.
+- **No `--force` flag yet.** Spec mentions `--force` in the CLI; current implementation always overwrites. Add only if overwrites cause real user friction.
+
+### Verified acceptance tests (spec §13 tests)
+
+Run against live DB (2025Q4; 3,470 raw rows, 502 filings):
+
+1. ✓ Happy path — universe parquet has 2,484 unique tickers, schema matches `_UNIVERSE_COLUMNS` (18 cols).
+2. ✓ Amendment dedup — only latest `filing_date` per `(fund_id, period_of_report)` makes it into the aggregation (enforced in SQL via `MAX(filing_date)` CTE).
+3. ✓ Classification rules applied — 28 rows dropped (11 regular_warrant, 8 put, 5 call, 2 debt, 2 preferred); 78 rows flagged `unknown`; rest `common` or `prefunded_warrant`.
+4. ✓ Put/call precedence — fund 2's MRNA Put (`title_of_class='COM', put_call='Put'`) classified as `put` not `common`.
+5. ✓ `has_options` propagates cross-fund — MRNA row shows `has_options=True` even though the Put-holding fund doesn't hold MRNA common. 7 universe rows flagged.
+6. ✓ `ticker_is_verified` — 2,375 / 2,484 rows verified (`ticker_source IN ('openfigi','manual')`); `sec_name` not counted.
+7. ✓ `has_unknown_class` — 47 universe rows flagged; 78 per-filing rows in `unresolved_positions_2025Q4.parquet` (some unresolved rows share a ticker).
+8. ✓ Ticker-null bucketing — 1 universe row with ticker=NULL (CUSIP `92332V107`, Ventyx Biosciences, 16 funds) — position_key=`CUSIP:92332V107`, flagged `has_unknown_class=True`.
+9. ✓ QoQ metrics populated — `qoq_share_change`, `new_positions`, `exited_positions`, etc. all `Int64` (nullable) and populated against 2025Q3 prior.
+10. ✓ Empty quarter — passing `--quarter 2020Q1` (no holdings) writes empty parquet, does not crash.
+11. ✓ `list_unresolved_cusips.py` output — one row emitted for Ventyx, `name_variants` pipe-joins 4 distinct `name_of_issuer` strings across funds.
+12. ✓ `apply_manual_ticker_mappings.py` input parser — accepts TSV and CSV; skips blank tickers, comment lines, and blank lines; uppercases tickers; requires `cusip` + `ticker` headers.
+13. Deferred — full round-trip of manual mapping (apply → re-run Module 3 → verify ticker resolved) not run against prod DB; mechanics verified via parser unit test. User runs end-to-end when populating real manual_map.tsv.
+
+Smoke-test output summary: 2,484 tickers / 2,375 verified / 47 `has_unknown_class` / 7 `has_options` / 1 `has_regular_warrants` / 1 null-ticker row / 28 dropped / 78 unresolved. Wall time ~5s end-to-end.
 
 ---
 

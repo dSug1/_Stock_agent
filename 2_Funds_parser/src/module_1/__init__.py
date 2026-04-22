@@ -9,7 +9,13 @@ Module 2 (13F ingest) predates Module 1 and is not retrofitted.
 from .config import ConfigError, PipelineConfig, load_config
 from .logging_setup import get_logger
 from .paths import PROJECT_ROOT, REPO_ROOT, ensure_dir, resolve
-from .quarter import date_to_quarter, is_valid_quarter, resolve_quarter
+from .quarter import (
+    date_to_quarter,
+    is_valid_quarter,
+    prior_quarter,
+    quarter_to_date_end,
+    resolve_quarter,
+)
 
 __all__ = [
     "ConfigError",
@@ -22,5 +28,7 @@ __all__ = [
     "resolve",
     "date_to_quarter",
     "is_valid_quarter",
+    "prior_quarter",
+    "quarter_to_date_end",
     "resolve_quarter",
 ]

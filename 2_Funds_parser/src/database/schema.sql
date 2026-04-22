@@ -22,10 +22,12 @@ CREATE TABLE IF NOT EXISTS holdings (
     period_of_report  TEXT NOT NULL,
     name_of_issuer    TEXT,
     ticker            TEXT,
-    ticker_source     TEXT,   -- 'openfigi' | 'sec_name' | NULL (unresolved)
+    ticker_source     TEXT,   -- 'openfigi' | 'sec_name' | 'manual' | NULL (unresolved)
     cusip             TEXT NOT NULL,
     shares            INTEGER,
     market_value      INTEGER,
+    title_of_class    TEXT,   -- 13F <titleOfClass>: 'COM', 'PFD', 'WT', 'PRE-FUND WT', etc.
+    put_call          TEXT,   -- 13F <putCall>: 'Put' | 'Call' | NULL (common case)
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     FOREIGN KEY (fund_id) REFERENCES funds(id),
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS cusip_ticker_map (
     ticker         TEXT,
     exchange       TEXT,
     security_type  TEXT,
+    ticker_source  TEXT,   -- 'openfigi' | 'manual' | NULL (NULL = legacy OpenFIGI insert)
     resolved_date  TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL

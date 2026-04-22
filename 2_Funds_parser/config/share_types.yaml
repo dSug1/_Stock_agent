@@ -1,0 +1,80 @@
+# Module 3 — share-type classification rules.
+#
+# Each row in the 13F holdings table has a free-text `title_of_class`
+# field (e.g., "COM", "PFD", "PRE-FUND WT"). Module 3 classifies it into
+# one of the following buckets:
+#
+#   common              - kept; share-equivalent equity position.
+#   prefunded_warrant   - kept; economically equivalent to common.
+#   regular_warrant     - dropped; requires cash exercise, overstates exposure.
+#   preferred           - dropped; not part of the common-equity universe.
+#   debt                - dropped; not equity.
+#   put / call          - dropped; driven by `put_call` column, not this list.
+#   unknown             - retained + emitted to unresolved_positions audit file.
+#
+# put_call is handled OUTSIDE this list. Any row where
+# put_call in ('Put','Call') is classified as put/call regardless of
+# title_of_class.
+#
+# MATCHING RULES:
+# - Case-insensitive substring match on title_of_class.
+# - First rule wins. Order matters (most specific first).
+# - A title that matches no rule classifies as `unknown`.
+#
+# Recurring `unknown` entries (from unresolved_positions_{quarter}.parquet)
+# should be triaged by the user and promoted into this file.
+
+classification_rules:
+  # --- Pre-funded warrants: most specific; must precede generic WT/WARRANT. ---
+  - match: "PRE-FUND"
+    classify_as: prefunded_warrant
+  - match: "PREFUND"
+    classify_as: prefunded_warrant
+  - match: "PFD WT"
+    classify_as: prefunded_warrant   # some filers use "PFD" as pre-funded abbrev in this context
+  - match: "PFW"
+    classify_as: prefunded_warrant   # rare abbreviation
+
+  # --- Regular warrants, rights, SPAC units: dropped. ---
+  - match: "WT"
+    classify_as: regular_warrant
+  - match: "WARRANT"
+    classify_as: regular_warrant
+  - match: "RIGHT"
+    classify_as: regular_warrant     # subscription rights; treat as warrant-equivalent drop
+  - match: "UNIT"
+    classify_as: regular_warrant     # SPAC units (share + warrant bundles)
+
+  # --- Preferred stock: dropped. ---
+  - match: "PFD"
+    classify_as: preferred
+  - match: "PREFERRED"
+    classify_as: preferred
+
+  # --- Debt instruments: dropped. ---
+  - match: "NOTE"
+    classify_as: debt
+  - match: "BOND"
+    classify_as: debt
+  - match: "DEBENTURE"
+    classify_as: debt
+  - match: "CONV"
+    classify_as: debt                # convertible notes; err on debt rather than common
+
+  # --- Common-equivalent share classes: kept. ---
+  - match: "COM"
+    classify_as: common              # "COM", "COMM", "COMMON", "COM NEW", "COM CL A", "CL A COM"
+  - match: "ORD"
+    classify_as: common              # ordinary shares (non-US issuers)
+  - match: "ADR"
+    classify_as: common              # American Depositary Receipt
+  - match: "ADS"
+    classify_as: common              # American Depositary Share
+  - match: "SHS"
+    classify_as: common              # "SHS", "ORD SHS"
+  - match: "CLASS "
+    classify_as: common              # "CLASS A", "CLASS B"
+  - match: "CL "
+    classify_as: common              # "CL A", "CL B" - broad; last among common rules
+  - match: "SH"
+    classify_as: common              # bare "SH" (ordinary-share abbrev) - broadest fallback

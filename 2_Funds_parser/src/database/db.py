@@ -48,6 +48,23 @@ def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
             "UPDATE holdings SET ticker_source = 'openfigi' "
             "WHERE ticker IS NOT NULL AND ticker_source IS NULL"
         )
+    if holdings_cols and "title_of_class" not in holdings_cols:
+        conn.execute("ALTER TABLE holdings ADD COLUMN title_of_class TEXT")
+    if holdings_cols and "put_call" not in holdings_cols:
+        conn.execute("ALTER TABLE holdings ADD COLUMN put_call TEXT")
+
+    cusip_map_cols = {
+        row[1] for row in conn.execute(
+            "PRAGMA table_info(cusip_ticker_map)"
+        ).fetchall()
+    }
+    if cusip_map_cols and "ticker_source" not in cusip_map_cols:
+        conn.execute("ALTER TABLE cusip_ticker_map ADD COLUMN ticker_source TEXT")
+        # Existing rows were all written by the OpenFIGI resolver.
+        conn.execute(
+            "UPDATE cusip_ticker_map SET ticker_source = 'openfigi' "
+            "WHERE ticker_source IS NULL"
+        )
     conn.commit()
 
 

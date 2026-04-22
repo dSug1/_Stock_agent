@@ -64,10 +64,14 @@ CREATE TABLE holdings (
     fund_id           INTEGER NOT NULL REFERENCES funds(id),
     filing_date       TEXT NOT NULL,
     period_of_report  TEXT NOT NULL,
+    name_of_issuer    TEXT,          -- added via additive migration
     ticker            TEXT,
+    ticker_source     TEXT,          -- 'openfigi' | 'sec_name' | 'manual' | NULL
     cusip             TEXT NOT NULL,
     shares            INTEGER,
     market_value      INTEGER,       -- raw USD after normalisation
+    title_of_class    TEXT,          -- 13F <titleOfClass>: 'COM', 'PFD', 'WT', etc.
+    put_call          TEXT,          -- 13F <putCall>: 'Put' | 'Call' | NULL
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     UNIQUE (fund_id, filing_date, cusip)
@@ -126,11 +130,26 @@ Public surface:
   `index.json` to find the info-table XML.
 - `download_13f_document(url)` / `parse_13f_xml(xml_content)` —
   fetch + parse helpers; `parse_13f_xml` returns `[]` on malformed
-  XML instead of raising.
+  XML instead of raising. Each parsed row carries
+  `{name_of_issuer, cusip, shares, market_value, title_of_class,
+  put_call}` — the last two fields are extracted from the 13F
+  `<titleOfClass>` and `<putCall>` elements (put_call is NULL for
+  common stock, `"Put"` or `"Call"` for option positions). The
+  existing `sshPrnamtType == "SH"` filter is preserved — principal-
+  amount (PRN) rows are still dropped.
+- `backfill_missing_issuer_names(conn)` — one-time backfill of the
+  `name_of_issuer` column for rows ingested before the column existed.
+- `backfill_share_type_fields(conn)` — one-time backfill of
+  `title_of_class` + `put_call` for rows ingested before those
+  columns existed. Re-fetches each filing's XML once and UPDATEs by
+  CUSIP; idempotent (no-op once `title_of_class` is populated).
+- `backfill_tickers_by_sec_name(conn)` — resolve unmatched CUSIPs
+  via SEC `company_tickers.json`, stamps `ticker_source='sec_name'`.
 - `ingest_all_funds(conn, from_date, to_date)` — orchestrator.
-  Iterates `funds` rows in order, deduplicates via `filings_log`,
-  resolves CUSIPs, writes `holdings` and `filings_log`. Returns a
-  per-fund summary dict.
+  Runs all three backfills in order, then iterates `funds` rows,
+  deduplicates via `filings_log`, resolves CUSIPs, writes `holdings`
+  and `filings_log`. Returns a per-fund summary dict plus
+  `_backfill` / `_share_type_backfill` / `_ticker_backfill` stats.
 
 Constants:
 - `EDGAR_USER_AGENT = "StockPicker contact@stockpicker.local"`

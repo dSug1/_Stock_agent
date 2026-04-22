@@ -16,9 +16,39 @@ if TYPE_CHECKING:
 
 _QUARTER_RE = re.compile(r"^(\d{4})Q([1-4])$")
 
+_QUARTER_END_MONTH_DAY = {
+    1: "03-31",
+    2: "06-30",
+    3: "09-30",
+    4: "12-31",
+}
+
 
 def is_valid_quarter(value: str) -> bool:
     return bool(_QUARTER_RE.match(value))
+
+
+def _parse_quarter(value: str) -> tuple[int, int]:
+    m = _QUARTER_RE.match(value)
+    if not m:
+        raise ValueError(f"quarter '{value}' is not in YYYYQn format")
+    return int(m.group(1)), int(m.group(2))
+
+
+def quarter_to_date_end(quarter: str) -> str:
+    """'2025Q4' -> '2025-12-31'. Returns ISO YYYY-MM-DD string matching
+    the 13F `period_of_report` convention.
+    """
+    year, q = _parse_quarter(quarter)
+    return f"{year}-{_QUARTER_END_MONTH_DAY[q]}"
+
+
+def prior_quarter(quarter: str) -> str:
+    """'2026Q1' -> '2025Q4'. Wraps Q1 -> Q4 of prior year."""
+    year, q = _parse_quarter(quarter)
+    if q == 1:
+        return f"{year - 1}Q4"
+    return f"{year}Q{q - 1}"
 
 
 def date_to_quarter(value: str | datetime | date) -> str:

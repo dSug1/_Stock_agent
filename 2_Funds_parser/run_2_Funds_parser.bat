@@ -49,4 +49,23 @@ if errorlevel 1 (
 
 echo [2_Funds_parser] done. Open Outputs\2_funds_report.html
 
+REM --- Module 3: build per-ticker universe (user-gated) -------
+echo.
+echo === Module 2 complete. ===
+echo.
+set /p RUN_M3="Proceed to Module 3 (build universe)? [y/N]: "
+if /i "%RUN_M3%"=="y" (
+    echo [2_Funds_parser] Module 3: building universe...
+    python scripts\3_build_universe.py -v
+    if errorlevel 1 (
+        echo [FATAL] Module 3 failed.
+        endlocal ^& exit /b 1
+    )
+    echo.
+    set /p RUN_LIST="Run list_unresolved_cusips.py to surface ticker gaps? [y/N]: "
+    if /i "%RUN_LIST%"=="y" (
+        python scripts\list_unresolved_cusips.py
+    )
+)
+
 endlocal & exit /b 0

@@ -82,6 +82,15 @@ def main() -> int:
             f"{backfill['errors']} errors."
         )
 
+    share_type_bf = summary.pop("_share_type_backfill", None)
+    if share_type_bf and share_type_bf["filings_scanned"]:
+        print(
+            f"Backfill (title_of_class + put_call): "
+            f"{share_type_bf['filings_scanned']} filings rescanned, "
+            f"{share_type_bf['rows_updated']} rows updated, "
+            f"{share_type_bf['errors']} errors."
+        )
+
     ticker_bf = summary.pop("_ticker_backfill", None)
     if ticker_bf and ticker_bf["distinct_names"]:
         print(

@@ -81,13 +81,14 @@ def _write_cache(
     ts = now_iso()
     conn.execute(
         "INSERT INTO cusip_ticker_map "
-        "(cusip, ticker, exchange, security_type, "
+        "(cusip, ticker, exchange, security_type, ticker_source, "
         " resolved_date, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "VALUES (?, ?, ?, ?, 'openfigi', ?, ?, ?) "
         "ON CONFLICT(cusip) DO UPDATE SET "
         " ticker = excluded.ticker, "
         " exchange = excluded.exchange, "
         " security_type = excluded.security_type, "
+        " ticker_source = excluded.ticker_source, "
         " resolved_date = excluded.resolved_date, "
         " updated_at = excluded.updated_at",
         (cusip, ticker, exchange, security_type, ts, ts, ts),

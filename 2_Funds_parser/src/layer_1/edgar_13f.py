@@ -212,6 +212,8 @@ def parse_13f_xml(xml_content: str) -> list[dict]:
             name = _local(child.tag)
             if name == "nameOfIssuer":
                 rec["name_of_issuer"] = (child.text or "").strip() or None
+            elif name == "titleOfClass":
+                rec["title_of_class"] = (child.text or "").strip() or None
             elif name == "cusip":
                 rec["cusip"] = (child.text or "").strip() or None
             elif name == "value":
@@ -223,6 +225,8 @@ def parse_13f_xml(xml_content: str) -> list[dict]:
                         rec["shares"] = _safe_int(sub.text)
                     elif sub_name == "sshPrnamtType":
                         shares_type = (sub.text or "").strip() or None
+            elif name == "putCall":
+                rec["put_call"] = (child.text or "").strip() or None
         if shares_type != "SH":
             continue
         if not rec.get("cusip"):
@@ -232,6 +236,8 @@ def parse_13f_xml(xml_content: str) -> list[dict]:
             "cusip": rec["cusip"],
             "shares": rec.get("shares"),
             "market_value": rec.get("market_value"),
+            "title_of_class": rec.get("title_of_class"),
+            "put_call": rec.get("put_call"),
         })
     return holdings
 
@@ -350,6 +356,96 @@ def backfill_missing_issuer_names(
     return stats
 
 
+def backfill_share_type_fields(
+    conn: sqlite3.Connection,
+    *,
+    http_get: Optional[HttpGet] = None,
+) -> dict:
+    """Fill in `holdings.title_of_class` and `holdings.put_call` for
+    filings ingested before those columns existed. Re-downloads each
+    affected filing's info-table XML once and UPDATEs rows by CUSIP.
+
+    Idempotent: once all rows for a filing have `title_of_class`
+    populated, the filing no longer matches the "IS NULL" guard and
+    is skipped on subsequent runs. Rows whose filings have no XML
+    available (document_url NULL) are left as-is and logged.
+
+    Note: `put_call` stays NULL for the overwhelming majority of
+    rows (common stock has no putCall element). We key the guard on
+    `title_of_class IS NULL` alone — if title_of_class is populated,
+    put_call has been considered for that row regardless of value.
+    """
+    from database.db import now_iso
+
+    http_get = http_get or _default_http_get
+
+    rows = conn.execute(
+        "SELECT DISTINCT fl.id AS filing_id, fl.fund_id, fl.filing_date, "
+        "       fl.document_url, f.name AS fund_name "
+        "FROM filings_log fl "
+        "JOIN funds f ON f.id = fl.fund_id "
+        "JOIN holdings h "
+        "  ON h.fund_id = fl.fund_id AND h.filing_date = fl.filing_date "
+        "WHERE h.title_of_class IS NULL "
+        "  AND fl.document_url IS NOT NULL "
+        "ORDER BY fl.fund_id, fl.filing_date"
+    ).fetchall()
+
+    stats = {"filings_scanned": len(rows), "rows_updated": 0, "errors": 0}
+    if not rows:
+        return stats
+
+    log.info(
+        "share-type backfill: %d filings to rescan (%d workers)",
+        len(rows), EDGAR_MAX_WORKERS,
+    )
+
+    def _fetch(row) -> tuple:
+        try:
+            xml_content = download_13f_document(
+                row["document_url"], http_get=http_get,
+            )
+            return (row, parse_13f_xml(xml_content), None)
+        except Exception as exc:  # noqa: BLE001
+            return (row, None, exc)
+
+    with ThreadPoolExecutor(max_workers=EDGAR_MAX_WORKERS) as pool:
+        futures = [pool.submit(_fetch, r) for r in rows]
+        for future in as_completed(futures):
+            row, parsed, err = future.result()
+            if err is not None:
+                stats["errors"] += 1
+                log.warning(
+                    "share-type backfill download failed %s %s: %s",
+                    row["fund_name"], row["filing_date"], err,
+                )
+                continue
+            ts = now_iso()
+            before = conn.total_changes
+            for h in parsed:
+                cusip = h.get("cusip")
+                if not cusip:
+                    continue
+                conn.execute(
+                    "UPDATE holdings SET title_of_class = ?, "
+                    "       put_call = ?, updated_at = ? "
+                    "WHERE fund_id = ? AND filing_date = ? AND cusip = ? "
+                    "  AND title_of_class IS NULL",
+                    (
+                        h.get("title_of_class"),
+                        h.get("put_call"),
+                        ts,
+                        row["fund_id"],
+                        row["filing_date"],
+                        cusip,
+                    ),
+                )
+            conn.commit()
+            stats["rows_updated"] += conn.total_changes - before
+
+    return stats
+
+
 def backfill_tickers_by_sec_name(
     conn: sqlite3.Connection,
     *,
@@ -450,6 +546,16 @@ def ingest_all_funds(
             backfill_stats["errors"],
         )
 
+    share_type_backfill = backfill_share_type_fields(conn, http_get=http_get)
+    if share_type_backfill["filings_scanned"]:
+        log.info(
+            "share-type backfill: %d filings scanned, %d rows updated, "
+            "%d errors",
+            share_type_backfill["filings_scanned"],
+            share_type_backfill["rows_updated"],
+            share_type_backfill["errors"],
+        )
+
     ticker_backfill = backfill_tickers_by_sec_name(conn, http_get=http_get)
     if ticker_backfill["distinct_names"]:
         log.info(
@@ -467,6 +573,7 @@ def ingest_all_funds(
 
     summary: dict = {
         "_backfill": backfill_stats,
+        "_share_type_backfill": share_type_backfill,
         "_ticker_backfill": ticker_backfill,
     }
 
@@ -564,8 +671,9 @@ def ingest_all_funds(
                     "INSERT OR IGNORE INTO holdings "
                     "(fund_id, filing_date, period_of_report, "
                     " name_of_issuer, ticker, ticker_source, cusip, "
-                    " shares, market_value, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " shares, market_value, title_of_class, put_call, "
+                    " created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         fund_id, filing_date,
                         filing["period_of_report"],
@@ -575,6 +683,8 @@ def ingest_all_funds(
                         _normalize_market_value(
                             filing_date, h.get("market_value")
                         ),
+                        h.get("title_of_class"),
+                        h.get("put_call"),
                         ts, ts,
                     ),
                 )
