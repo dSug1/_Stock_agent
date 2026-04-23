@@ -36,10 +36,10 @@ Eliminate tickers unfit for further analysis using snapshot data only. No price 
 # config/filters.yaml
 hard_filters:
   market_cap_min_usd: 50_000_000
-  market_cap_max_usd: 5_000_000_000
+  market_cap_max_usd: 3_700_000_000
   adv_30d_min_usd: 250_000
-  fund_count_min: 2
-  require_min_price_usd: 1.00
+  fund_count_min: 1
+  require_min_price_usd: 0.90
   require_min_history_weeks: 12
   sector_allowlist: null              # null = all; or ["Healthcare", "Biotechnology"]
   sector_blocklist: null              # null = none; or ["Financial Services"]
