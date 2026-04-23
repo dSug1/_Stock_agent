@@ -364,8 +364,11 @@ If no archetype qualifies: `archetype = "unclassified"`, `archetype_score = 0`, 
 #### Step 4 — Composite score
 
 ```
-composite_score = archetype_score × match_confidence
+alpha = ranking.confidence_floor_weight   # default 0.7
+composite_score = archetype_score × (alpha + (1 - alpha) × match_confidence)
 ```
+
+Score-floor weighting (locked 2026-04-23 after the pure-multiplication formula was rejected for letting `(score=10, conf=0.5)` tie `(score=5, conf=1.0)`). With `alpha = 0.7`, every ticker assigned to a +10 archetype outranks every ticker assigned to a +5 archetype regardless of confidence; confidence becomes the within-class tiebreaker. `alpha = 0` reproduces the legacy formula; `alpha = 1` ignores confidence (gate-only).
 
 Pure trajectory-based ranking (decisions_module_4.md D2). Fund accumulation, compression, distance-to-52w-low, etc. are preserved in the output for human inspection and Module 5's LLM context, but do not enter the score.
 
@@ -460,9 +463,10 @@ archetypes:
 # config/ranking.yaml
 ranking:
   min_confidence: 0.70
+  confidence_floor_weight: 0.7            # composite = score * (alpha + (1-alpha)*confidence)
   include_unclassified: true              # keep at bottom; if false, drop
   window_tolerance_trading_days: 3
-  require_min_history_weeks: 12           # tickers below this excluded from ranking
+  require_min_history_weeks: 52           # tickers below this excluded from ranking
   young_ticker_flat_fill: true            # false = exclude young tickers
   fetch_batch_size: 50
   output_top_n: null                      # null = all survivors; or integer to cap

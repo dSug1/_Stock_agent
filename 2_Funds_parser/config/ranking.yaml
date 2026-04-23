@@ -3,9 +3,13 @@
 
 ranking:
   min_confidence: 0.70                   # below this -> "unclassified"
+  confidence_floor_weight: 0.7           # composite = score * (alpha + (1-alpha) * confidence)
+                                         #   alpha=0   -> pure score*confidence (legacy)
+                                         #   alpha=1   -> pure score (confidence is just a gate)
+                                         #   alpha=0.7 -> mirrors min_confidence; score class dominates
   include_unclassified: true             # if false, drop unclassified rows
   window_tolerance_trading_days: 3       # ± tolerance for window date matching
-  require_min_history_weeks: 12          # tickers below this -> excluded audit file
+  require_min_history_weeks: 52          # tickers below this -> excluded audit file
   young_ticker_flat_fill: true           # missing windows -> R_Xw=1.0; false = exclude
   output_top_n: null                     # null = keep all; or integer cap
 

@@ -179,8 +179,18 @@ def rank_universe(
     rankable["archetype"] = arch_names
     rankable["archetype_score"] = arch_scores
     rankable["match_confidence"] = arch_confs
+    # Score-floor weighting: composite = score * (alpha + (1 - alpha) * confidence).
+    # alpha=0 reproduces the legacy pure-multiplication formula; alpha=1 ignores
+    # confidence (gate-only). Default 0.7 mirrors min_confidence so score class
+    # dominates and confidence becomes the within-class tiebreaker.
+    alpha = float(rcfg.get("confidence_floor_weight", 0.7))
+    if not 0.0 <= alpha <= 1.0:
+        raise ConfigError(
+            f"ranking.confidence_floor_weight must be in [0, 1], got {alpha}"
+        )
     rankable["composite_score"] = (
-        rankable["archetype_score"] * rankable["match_confidence"]
+        rankable["archetype_score"]
+        * (alpha + (1.0 - alpha) * rankable["match_confidence"])
     )
 
     if not bool(rcfg.get("include_unclassified", True)):
@@ -324,7 +334,16 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
             else:
                 cell = f"<td>{html.escape(str(v) if v is not None and not pd.isna(v) else '')}</td>"
             cells.append(cell)
-        rows_html.append(f"<tr style='background:{bg}'>" + "".join(cells) + "</tr>")
+        # data-* attributes feed the in-browser filter bar; raw numeric values
+        # so the JS doesn't have to parse formatted strings.
+        fc_val = r.get("fund_count")
+        mc_val = r.get("market_cap")
+        fc_attr = f" data-fund-count='{int(fc_val)}'" if pd.notna(fc_val) else ""
+        mc_attr = f" data-market-cap='{int(mc_val)}'" if pd.notna(mc_val) else ""
+        rows_html.append(
+            f"<tr style='background:{bg}'{fc_attr}{mc_attr}>"
+            + "".join(cells) + "</tr>"
+        )
 
     headers_html = "".join(f"<th>{html.escape(c)}</th>" for c in columns)
     legend_items = []
@@ -341,24 +360,88 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   body {{ font-family: system-ui, sans-serif; margin: 1.5rem; color: #222; }}
   h1 {{ margin-bottom: 0.2rem; }}
   .meta {{ color: #666; font-size: 0.85rem; margin-bottom: 1rem; }}
-  .legend {{ margin: 0.7rem 0 1.2rem 0; font-size: 0.85rem; }}
+  .legend {{ margin: 0.7rem 0 0.6rem 0; font-size: 0.85rem; }}
   .lg-item {{ display: inline-block; padding: 2px 8px; margin-right: 4px;
               border-radius: 4px; border: 1px solid #ccc; }}
+  .filters {{ display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center;
+              padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;
+              background: #f7f7f7; border: 1px solid #e0e0e0; border-radius: 6px;
+              font-size: 0.85rem; position: sticky; top: 0; z-index: 5; }}
+  .filters label {{ display: inline-flex; align-items: center; gap: 0.3rem; }}
+  .filters input {{ font: inherit; padding: 2px 6px;
+                    border: 1px solid #ccc; border-radius: 3px; }}
+  .filters button {{ font: inherit; padding: 2px 10px;
+                     border: 1px solid #ccc; border-radius: 3px;
+                     background: #fff; cursor: pointer; }}
+  .filters button:hover {{ background: #eef; }}
+  .filters #row-count {{ margin-left: auto; color: #555; font-variant-numeric: tabular-nums; }}
   table {{ border-collapse: collapse; width: 100%; font-size: 0.85rem; }}
   th, td {{ padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; text-align: left; }}
-  th {{ background: #f3f3f3; position: sticky; top: 0; }}
+  th {{ background: #f3f3f3; position: sticky; top: 3.4rem; }}
   td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   tr:hover {{ outline: 1px solid #07a; }}
 </style></head><body>
 <h1>Module 4b Ranking — {html.escape(quarter)}</h1>
 <div class='meta'>Generated {html.escape(now_iso)} UTC · {len(df):,} ranked candidates</div>
 <div class='legend'>{legend}</div>
+<div class='filters'>
+  <label>Min funds: <input type='number' id='f-min-fc' min='0' step='1' style='width:60px' placeholder='0'></label>
+  <label>Min cap $M: <input type='number' id='f-min-mc' min='0' step='10' style='width:90px' placeholder='0'></label>
+  <label>Max cap $M: <input type='number' id='f-max-mc' min='0' step='100' style='width:90px' placeholder='∞'></label>
+  <button id='f-reset' type='button'>Reset</button>
+  <span id='row-count'></span>
+</div>
 <table>
   <thead><tr>{headers_html}</tr></thead>
   <tbody>
 {"".join(rows_html)}
   </tbody>
 </table>
+<script>
+(function() {{
+  var minFc = document.getElementById('f-min-fc');
+  var minMc = document.getElementById('f-min-mc');
+  var maxMc = document.getElementById('f-max-mc');
+  var reset = document.getElementById('f-reset');
+  var counter = document.getElementById('row-count');
+  var rows = document.querySelectorAll('tbody tr');
+
+  function applyFilters() {{
+    var minFcVal = parseFloat(minFc.value);
+    var minMcVal = parseFloat(minMc.value);
+    var maxMcVal = parseFloat(maxMc.value);
+    if (isNaN(minFcVal)) minFcVal = 0;
+    var minMcRaw = isNaN(minMcVal) ? 0 : minMcVal * 1e6;
+    var maxMcRaw = isNaN(maxMcVal) ? Infinity : maxMcVal * 1e6;
+    var visible = 0;
+    for (var i = 0; i < rows.length; i++) {{
+      var tr = rows[i];
+      var fc = parseFloat(tr.dataset.fundCount);
+      var mc = parseFloat(tr.dataset.marketCap);
+      var fcOk = isNaN(fc) ? minFcVal === 0 : fc >= minFcVal;
+      var mcOk;
+      if (isNaN(mc)) {{
+        mcOk = (minMcRaw === 0 && maxMcRaw === Infinity);
+      }} else {{
+        mcOk = mc >= minMcRaw && mc <= maxMcRaw;
+      }}
+      var ok = fcOk && mcOk;
+      tr.style.display = ok ? '' : 'none';
+      if (ok) visible++;
+    }}
+    counter.textContent = visible.toLocaleString() + ' / ' + rows.length.toLocaleString() + ' visible';
+  }}
+
+  minFc.addEventListener('input', applyFilters);
+  minMc.addEventListener('input', applyFilters);
+  maxMc.addEventListener('input', applyFilters);
+  reset.addEventListener('click', function() {{
+    minFc.value = ''; minMc.value = ''; maxMc.value = '';
+    applyFilters();
+  }});
+  applyFilters();
+}})();
+</script>
 </body></html>
 """
     output_path.write_text(body, encoding="utf-8")
