@@ -14,12 +14,16 @@
 
 Spec: [module_1_spec.md](module_1_spec.md). Implemented 2026-04-22 under [src/module_1/](../src/module_1/). Smoke test: [scripts/verify_module_1.py](../scripts/verify_module_1.py).
 
-### Output folders — three distinct buckets
-- **`Outputs/`** — human-browsable HTML and Excel reports. Module 2's existing `2_funds_report.html` stays here; future modules' human-facing reports (Module 4's filter summary + ranking report, Module 6's final integrated report) also land here.
-- **`_intermediate_outputs/`** — Parquet files flowing between pipeline modules. Machine-only plumbing (Module 3's universe, Module 4's survivors, Module 5's context pack, etc.).
-- **`_outputs/`** — pipeline's final machine-readable artifacts that aren't intermediate plumbing (e.g., Module 6's `llm_scores_{quarter}.parquet`, Module 7's snapshot exports).
+### Output folders — three distinct buckets (pipeline-wide rule)
 
-**Follow-up:** [module_4_spec.md](module_4_spec.md) currently directs `filter_summary_{quarter}.html` and `ranking_report_{quarter}.{html,xlsx}` to `_outputs/`. Per this decision they belong in `Outputs/`. Patch Module 4 spec at Module 4 implementation time.
+**The user-facing test is the deciding factor.** If the user wants to open the file themselves (browse a report, inspect a chart, share with a colleague), it goes to `Outputs/`. If only the pipeline reads it, it goes to `_outputs/` or `_intermediate_outputs/`.
+
+- **`Outputs/`** — files the user wants to open themselves. HTML reports, XLSX, dashboards. Examples: Module 2's `2_funds_report.html`, Module 4's `filter_summary_{quarter}.html` and `ranking_report_{quarter}.{html,xlsx}`, Module 6's final integrated report.
+- **`_intermediate_outputs/`** — Parquet files flowing between pipeline modules. Machine-only plumbing the user does not open. Examples: Module 3's `universe_{quarter}.parquet`, Module 4a's `survivors_{quarter}.parquet`, Module 5's context pack.
+- **`_outputs/`** — pipeline's final machine-readable artifacts that aren't intermediate plumbing (e.g., Module 6's `llm_scores_{quarter}.parquet`, Module 7's snapshot exports). Same rule: user does not open these directly.
+- **`data/`** — durable cross-run caches not specific to one run (e.g., `data/prices.db` for Module 4's snapshot + price history). User does not open; pipeline-managed.
+
+This rule applies to every module from now on. Spec drafts that violate it are corrected at implementation time.
 
 ### Environment file handling
 - **Module 1 loads `.env` automatically.** `load_config()` calls `dotenv.load_dotenv()` on the repo-root `.env` — callers do not pre-load and do not need to know the path.
@@ -169,7 +173,26 @@ Smoke-test output summary: 2,484 tickers / 2,375 verified / 47 `has_unknown_clas
 
 Spec: [module_4_spec.md](module_4_spec.md). Design rationale (D1–D18): [decisions_module_4.md](decisions_module_4.md).
 
-*(No implementation entries yet.)*
+### Spec revision 2026-04-23 (pre-implementation)
+
+The original Module 4 spec referenced two non-existent input files (`enriched_snapshot.parquet` "from Module 3", `fund_positions_aggregated.parquet` "from Module 2"). Module 3 emits a single `universe_{quarter}.parquet` with 18 columns and zero market-data fields; Module 2 writes only to SQLite. The spec was rewritten cover-to-cover to fix this and adjacent issues. Locked decisions for the build:
+
+- **Module 4a now does its own snapshot enrichment** (option (a) of the three considered). Per-ticker `market_cap`, `sector`, `industry`, `exchange`, `adv_30d`, `last_close` are fetched from Yahoo Finance into a durable `ticker_snapshot` table in `data/prices.db`. Snapshot rows have a 7-day TTL; filter-threshold changes never trigger a refetch. This satisfies the user's requirement that raising `fund_count_min` from 1 → 2 (or any other threshold tweak) reads from cache only, no network.
+- **Filter priority reordered: cheap fund-side first, expensive snapshot-side second.** Fund-side filters (already in the universe parquet) slash the universe before any yfinance call. Per D6's rationale ("survivor count typically 10-20% of starting universe"), this minimises external calls.
+- **New filter `exclude_lonely_seller`**: drops rows where `fund_count == 1 AND decreased_positions >= 1` ("the only holder is selling"). User explicitly requested this. Default `true`.
+- **`exclude_pink_sheet` dropped** from the spec — the universe carries no exchange/OTC field, and adding a separate fetch path just for this gate isn't worth it. Pink-sheet exposure is implicitly handled by `market_cap_min_usd` and `adv_30d_min_usd`.
+- **`require_min_history_weeks` moved to 4b** — the value is unknowable until price history is fetched, so 4a (which is supposed to be cheap-snapshot-only) can't enforce it. Default 12 weeks.
+- **Output paths corrected** to obey the pipeline-wide rule (`Outputs/` for user-consultable; `_intermediate_outputs/` for pipeline plumbing). HTML and XLSX reports go to `Outputs/`; Parquet artifacts go to `_intermediate_outputs/`.
+- **`prices.db` lives at `2_Funds_parser/data/prices.db`** (new top-level dir, sibling of `Input/`). Already covered by the repo `*.db` gitignore. Separate file from `0_Renderer/_outputs/cache/prices.db` — no shared data between pipelines.
+- **File/CLI naming aligned with the established pattern.** Code under `src/module_4/` (`hard_filters.py`, `prices.py`, `ratios.py`, `archetypes.py`, `ranking.py`); CLIs `scripts/4_run_hard_filters.py` and `scripts/4_rank.py`. Earlier spec used flat `module_4a_hard_filters.py` names that didn't match Modules 1 and 3.
+- **`auto_adjust=False, actions=False` for the bars fetch** so both `Close` and `adjusted_close` are stored separately. Spec D8 (always use adjusted close for ratio math) is satisfied; raw close is kept for reference. 0_Renderer's `auto_adjust=True` pattern is intentionally not reused for this reason.
+- **Quarter column propagated** through every Module 4 output (survivors, rejections, ranked_candidates) for audit consistency with Module 3.
+- **Calibration tooling deferred to v2.** `calibration.yaml`, `module_4_tools/calibrate.py` etc. are documented in the spec's "Open items deferred to v2" section but are not part of MVP acceptance.
+- **YAML numeric literals use plain integers** (`50000000`) rather than underscores (`50_000_000`) — unambiguous across YAML loaders.
+- **Code reuse from `0_Renderer/2_stock_visualizer.py`**: SQLite WAL setup, `_db()` context manager, batched `yf.download(tickers=" ".join(...), group_by="ticker", threads=True)` with per-ticker fallback, `_age_seconds` TTL helpers, SWR pattern. Copied (not imported) into `src/module_4/prices.py` so the two pipelines remain decoupled. Adaptations: ISO-date keys instead of unix-second `t`, `(ticker, date)` PK instead of `(ticker, interval, t)`, `auto_adjust=False`, no internet-clock calibration (4b is daily, not intraday).
+- **Yahoo Finance throughput plan locked.** Full detail in [module_4_spec.md § Yahoo Finance throughput](module_4_spec.md). Highlights: shared `curl_cffi.requests.Session(impersonate="chrome")` (yfinance 1.3.0 + curl_cffi 0.15.0 already in venv) is the single biggest speedup vs default `requests`; bars batched at 100–200 tickers per `yf.download(threads=True)`; `.info` parallelised with `ThreadPoolExecutor(max_workers=8)` under a process-global token-bucket at 5 req/s (ported from the proven `_EDGAR_LIMITER` pattern in [src/layer_1/edgar_13f.py](../src/layer_1/edgar_13f.py)); exponential-backoff retry 1s→2s→4s, max 2 retries; SQLite cache is the long-term dominant optimisation. Deliberately NOT done: `requests_cache`, async, `yf.Tickers(plural)`, proxy rotation. All knobs (rate, workers, batch sizes, TTL) exposed in `config/filters.yaml` + `config/ranking.yaml`.
+
+*(No implementation entries yet — code lands next session.)*
 
 ---
 
