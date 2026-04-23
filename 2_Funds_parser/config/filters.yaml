@@ -1,0 +1,41 @@
+# Module 4a — hard filters + snapshot fetch knobs.
+# Tune freely; threshold changes do NOT trigger a yfinance re-fetch
+# (snapshot rows live in data/prices.db with a 7-day TTL).
+
+hard_filters:
+  # Cheap fund-side filters (data already in universe parquet) — Phase 1.
+  exclude_has_unknown_class: false       # if true, drop rows with has_unknown_class=True
+  exclude_lonely_seller: true            # drop fund_count==1 AND decreased_positions>=1
+  fund_count_min: 1                      # raise to 2+ to require multi-fund conviction
+  require_ticker_resolved: true          # drop rows with ticker IS NULL
+  require_ticker_verified: false         # if true, require ticker_source IN ('openfigi','manual')
+
+  # Expensive snapshot-side filters (need yfinance) — Phase 2.
+  market_cap_min_usd: 50000000           # 50M  — hard floor; never asked
+  market_cap_fetch_ceiling_usd: 10000000000   # 10B — outer cap kept in the candidate pool
+                                              # (snapshot data is fetched + cached up to this size,
+                                              # so re-running with a tighter user cap costs no Yahoo calls)
+  market_cap_max_usd_default: 3700000000      # 3.7B — default if user prompt is skipped or empty
+  adv_30d_min_usd: 250000                # 250K
+  require_min_price_usd: 0.90
+  sector_allowlist: null                 # null = all; or ["Healthcare", "Biotechnology"]
+  sector_blocklist: null                 # null = none; or ["Financial Services"]
+
+snapshot:
+  # Two-tier freshness:
+  #  - static fields (shares_out, sector, industry, exchange) — slow-changing,
+  #    long TTL. Refetched only when stale, missing, or previously failed.
+  #  - price-derived fields (last_close, adv_30d, market_cap = shares_out × last_close)
+  #    — recomputed every run from the bars batch (chart endpoint, reliable).
+  static_ttl_days: 30                    # static-field TTL; daily runs only refresh price-derived
+  fetch_descriptive_info: false          # if true, also call .info for sector/industry/names
+                                         # (slower + more rate-limit-prone; only enable when
+                                         # sector_allowlist/blocklist are actually used)
+  bars_batch_size: 150                   # tickers per yf.download() call for ADV bars
+  info_max_workers: 4                    # parallel fast_info / .info workers
+  info_rate_per_s: 2.0                   # process-global cap on info HTTPS requests
+                                         # (lowered from 5.0 — Yahoo throttles aggressively)
+  bars_rate_per_s: 2.0                   # cap on yf.download bars calls
+  retries: 2                             # transient retries (1s/2s/4s); IP throttle aborts immediately
+  retry_backoff_s: [1.0, 2.0, 4.0]
+  fetch_timeout_s: 30

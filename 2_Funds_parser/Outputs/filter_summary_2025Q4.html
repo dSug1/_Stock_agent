@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang='en'><head><meta charset='utf-8'>
+<title>Module 4a Filter Summary — 2025Q4</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 980px; color: #222; }
+  h1 { margin-bottom: 0.2rem; }
+  .meta { color: #666; font-size: 0.9rem; margin-bottom: 1rem; }
+  .funnel { display: flex; gap: 0.5rem; align-items: center; margin: 1.5rem 0; flex-wrap: wrap; }
+  .funnel .stage { padding: 0.6rem 1rem; background: #eef; border-radius: 6px; }
+  .funnel .arrow { color: #999; font-size: 1.2rem; }
+  .funnel .pct { font-weight: 600; color: #045; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 0.4rem 0.7rem; border-bottom: 1px solid #eee; text-align: left; }
+  th { background: #f6f6f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+</style></head><body>
+<h1>Filter Summary — 2025Q4</h1>
+<div class='meta'>Generated 2026-04-23T17:04:23 UTC</div>
+<div class='meta'>Fetch ceiling: $10.0B · User-selected max cap: <b>$3.700B</b></div>
+
+<div class='funnel'>
+  <div class='stage'>Universe<br><b>2,486</b></div>
+  <div class='arrow'>→</div>
+  <div class='stage'>Rejected<br><b>1,489</b></div>
+  <div class='arrow'>→</div><div class='stage'>Candidate pool<br><b>1,443</b></div>
+  <div class='arrow'>→</div>
+  <div class='stage'>Survivors<br><b>997</b> <span class='pct'>(40.1%)</span></div>
+</div>
+
+<h2>Rejection breakdown</h2>
+<table>
+  <thead><tr><th>Reason</th><th class='num'>Count</th><th>Sample tickers</th></tr></thead>
+  <tbody>
+<tr><td><code>market_cap_fetch_ceiling_usd</code></td><td class='num'>520</td><td>A, AA, AAOI, AAPL, ABBV, ABNB, ABT, ADBE</td></tr>
+<tr><td><code>exclude_lonely_seller</code></td><td class='num'>459</td><td>ACIW, ACM, ADC, ADM, ADP, ADSK, AEP, AES</td></tr>
+<tr><td><code>user_market_cap_max</code></td><td class='num'>446</td><td>AAL, AAON, ABCB, ABG, ABVX, ACA, ACAD, ACHR</td></tr>
+<tr><td><code>require_min_price_usd</code></td><td class='num'>22</td><td>ALIT, ALUR, CALC, CPTAF, ENSC, GOSS, HOWL, HUMAW</td></tr>
+<tr><td><code>market_cap_missing</code></td><td class='num'>19</td><td>FLJP, IAGG, IBIT, IVV, IWF, JMBS, OPTU, RVMDW</td></tr>
+<tr><td><code>market_cap_min_usd</code></td><td class='num'>11</td><td>ADGM, ALGS, ATRA, BOLD, BOLT, NVNO, NXTC, PTN</td></tr>
+<tr><td><code>snapshot_unavailable</code></td><td class='num'>8</td><td>BFLYW, CADE, CIVI, CMA, GME/WS, NUVB/WS, PCH, PLYM</td></tr>
+<tr><td><code>adv_30d_min_usd</code></td><td class='num'>3</td><td>MOLN, NSPR, SERA</td></tr>
+<tr><td><code>require_ticker_resolved</code></td><td class='num'>1</td><td>—</td></tr>
+  </tbody>
+</table>
+</body></html>

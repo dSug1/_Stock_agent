@@ -1,0 +1,87 @@
+# Module 4b — trajectory archetypes.
+#
+# Each archetype specifies ranges on the SUBSET of features it cares about
+# (decision D5). Match confidence = matched / specified.
+#
+# Features (all strictly positive; computed on adjusted_close):
+#   R_4, R_12, R_26, R_52              (price_today / price_Xw_ago)
+#   R_4_over_R_12, R_4_over_R_26, R_4_over_R_52,
+#   R_12_over_R_26, R_12_over_R_52, R_26_over_R_52
+#
+# score: positive = "train hasn't left" candidate; negative = "train has left".
+# composite_score = score * match_confidence.
+
+archetypes:
+  fresh_awakening:
+    score: 10
+    description: "Flat-to-down over year, awakening in recent 12 weeks"
+    ranges:
+      R_52:           [0.85, 1.10]
+      R_26:           [0.90, 1.10]
+      R_12:           [1.05, 1.30]
+      R_4:            [1.02, 1.15]
+      R_12_over_R_26: [1.05, 1.40]
+      R_26_over_R_52: [0.95, 1.15]
+
+  quiet_compression:
+    score: 8
+    description: "Flat across all windows, coiled spring"
+    ranges:
+      R_52: [0.90, 1.10]
+      R_26: [0.92, 1.08]
+      R_12: [0.94, 1.06]
+      R_4:  [0.96, 1.04]
+
+  post_crash_rebase:
+    score: 6
+    description: "Down sharply over year, bottomed and stabilising"
+    ranges:
+      R_52:           [0.40, 0.75]
+      R_26:           [0.85, 1.10]
+      R_12:           [0.95, 1.10]
+      R_4:            [0.98, 1.08]
+      R_26_over_R_52: [1.15, 2.00]
+
+  early_breakout:
+    score: 7
+    description: "Recent move starting, not yet parabolic"
+    ranges:
+      R_52:          [0.90, 1.15]
+      R_12:          [1.10, 1.35]
+      R_4:           [1.05, 1.20]
+      R_4_over_R_12: [0.80, 1.10]
+
+  mature_uptrend:
+    score: 2
+    description: "Sustained uptrend across all windows"
+    ranges:
+      R_52: [1.20, 2.50]
+      R_26: [1.10, 1.80]
+      R_12: [1.00, 1.30]
+      R_4:  [0.98, 1.10]
+
+  parabolic_blowoff:
+    score: -10
+    description: "Train has left — recent move extreme"
+    ranges:
+      R_4:           [1.25, 999]
+      R_4_over_R_12: [1.30, 999]
+      R_4_over_R_52: [1.15, 999]
+
+  broken_trend:
+    score: -5
+    description: "Uptrend broken, recent weakness"
+    ranges:
+      R_52:           [1.10, 999]
+      R_12:           [0.70, 0.95]
+      R_4:            [0.85, 0.98]
+      R_12_over_R_26: [0.60, 0.95]
+
+  sustained_decline:
+    score: -3
+    description: "Falling across all windows — value trap risk"
+    ranges:
+      R_52: [0.001, 0.80]
+      R_26: [0.001, 0.90]
+      R_12: [0.001, 0.95]
+      R_4:  [0.001, 0.98]

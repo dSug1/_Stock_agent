@@ -1,0 +1,21 @@
+# Module 4b — ranking + price-fetch knobs.
+# Re-runnable with --rerank-only when only this file or archetypes.yaml change.
+
+ranking:
+  min_confidence: 0.70                   # below this -> "unclassified"
+  include_unclassified: true             # if false, drop unclassified rows
+  window_tolerance_trading_days: 3       # ± tolerance for window date matching
+  require_min_history_weeks: 12          # tickers below this -> excluded audit file
+  young_ticker_flat_fill: true           # missing windows -> R_Xw=1.0; false = exclude
+  output_top_n: null                     # null = keep all; or integer cap
+
+  # Price-fetch tuning (only used when NOT --rerank-only)
+  cold_start_period: "400d"              # initial fetch when ticker has no history
+  fetch_batch_size: 100                  # tickers per yf.download() for daily bars
+  fetch_rate_per_s: 2.0                  # process-global cap (token bucket); IP throttle aborts immediately
+  retries: 2
+  retry_backoff_s: [1.0, 2.0, 4.0]
+
+  tiebreakers:                           # applied after composite_score DESC
+    - fund_count_desc
+    - ticker_asc

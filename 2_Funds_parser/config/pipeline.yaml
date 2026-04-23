@@ -7,12 +7,13 @@ pipeline:
 
 paths:
   fundparser_db: 2_fundparser.db
-  prices_db: prices.db                           # created by Module 4b
+  prices_db: data/prices.db                      # created by Module 4 (snapshots + bars)
   outcomes_db: outcomes.db                       # created by Module 7
-  reports_dir: Outputs                           # human-browsable HTML/Excel
-  intermediate_outputs_dir: _intermediate_outputs  # Parquet plumbing
+  reports_dir: Outputs                           # files the user opens themselves
+  intermediate_outputs_dir: _intermediate_outputs  # Parquet plumbing between modules
   outputs_dir: _outputs                          # pipeline-final machine artifacts
   logs_dir: logs
+  data_dir: data                                 # durable cross-run caches (sqlite)
   fund_list_source: Input/list_of_funds.xlsx
 
 db_schema:

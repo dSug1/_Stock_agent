@@ -93,21 +93,61 @@ hard_filters:
   require_ticker_verified: false         # if true, require ticker_is_verified
 
   # Expensive (snapshot-side; require yfinance fetch) — evaluated after cheap filters
-  market_cap_min_usd: 50000000           # 50M
-  market_cap_max_usd: 3700000000         # 3.7B
-  adv_30d_min_usd: 250000                # 250K
+  market_cap_min_usd: 50000000                  # 50M  hard floor
+  market_cap_fetch_ceiling_usd: 10000000000     # 10B  outer bound — keeps candidate pool wide
+  market_cap_max_usd_default: 3700000000        # 3.7B default for the runtime user prompt / --no-prompt
+  adv_30d_min_usd: 250000                       # 250K
   require_min_price_usd: 0.90
-  sector_allowlist: null                 # null = all; or ["Healthcare", "Biotechnology"]
-  sector_blocklist: null                 # null = none; or ["Financial Services"]
+  sector_allowlist: null                        # null = all; or ["Healthcare", "Biotechnology"]
+  sector_blocklist: null                        # null = none; or ["Financial Services"]
 
 snapshot:
-  ttl_days: 7                            # snapshot row considered stale after N days
-  batch_size: 50                         # yfinance batch grouping for ADV bars
+  static_ttl_days: 30                           # static-field TTL; price-derived recomputed every run
+  fetch_descriptive_info: false                 # if true, also call .info for sector/industry/names
+  bars_batch_size: 150
+  info_max_workers: 4
+  info_rate_per_s: 2.0
+  bars_rate_per_s: 2.0
+  retries: 2
+  retry_backoff_s: [1.0, 2.0, 4.0]
   fetch_timeout_s: 30
-  retries: 1
 ```
 
 All thresholds tunable. Defaults are starting points calibrated for biotech small-mid cap.
+
+#### Two-cap design (the user-driven cap)
+
+The market-cap upper bound is split into two separate values:
+
+- **`market_cap_fetch_ceiling_usd` ($10B default)** — the outer boundary. Phase 2 keeps everything up to this size in a "candidate pool". Snapshots for the full pool are persisted in `data/prices.db`, so subsequent re-runs at any user cap below the ceiling cost zero Yahoo calls.
+- **User-chosen cap (CLI flag, prompt, or `market_cap_max_usd_default`)** — the actual cut applied to produce the final `survivors_{quarter}.parquet`. Tickers above the user cap (but below the ceiling) are recorded with `rejection_reason='user_market_cap_max'`, so it's easy to see what's just over the line.
+
+At the end of Phase 2, Module 4a prints a market-cap histogram of the candidate pool and prompts:
+```
+=== Market-cap distribution among 1443 candidates ===
+  bucket          count    cum  bar
+  <= $100M           4      4
+  $100M-$500M      111    115  ###
+  $500M-$1B        191    306  #####
+  $1B-$2B          257    563  ########
+  $2B-$3.7B        434    997  ##############
+  $3.7B-$5B        152   1149  ####
+  $5B-$7.5B        152   1301  ####
+  $7.5B-$10B       142   1443  ####
+  > $10B             0   1443  (already excluded by ceiling)
+  (default: $3.70B; ceiling: $10.0B)
+Enter max market cap in $M [Enter for default 3,700M, 'all' for full ceiling]:
+```
+
+User responses:
+- Empty → uses `market_cap_max_usd_default` (3.7B).
+- A number → interpreted as $M (e.g. `5000` → $5B).
+- `all` / `ceiling` / `max` → keeps everything up to the fetch ceiling.
+
+CLI overrides:
+- `scripts/4_run_hard_filters.py --market-cap-max-usd 5000000000` — explicit value, no prompt.
+- `scripts/4_run_hard_filters.py --no-prompt` — uses YAML default; suitable for headless / scheduled runs.
+- Non-TTY runs (e.g. piped through `tail`) auto-fall-back to the default.
 
 ### Algorithm
 
@@ -661,9 +701,29 @@ ranking:
 
 All tunables surface so the user can dial throughput up if Yahoo's behaviour changes — without touching code.
 
-### 8. Acceptance test (additional)
+### 8. Daily-run optimisation — `market_cap` is derived, not fetched
 
-9. Cold-start snapshot run for ~2,000 tickers completes in **≤ 10 minutes wall-time** with `fetch_status='ok'` rate ≥ 95%. If either threshold misses, raise `info_max_workers` to 12 and re-test before lowering the rate limit.
+`market_cap = shares_outstanding × last_close`. The expensive part (`shares_out` from `fast_info`) changes ~quarterly. The cheap part (`last_close` from the bars batch) changes daily. Therefore:
+
+- Snapshot rows have **two TTLs**: `static_ttl_days` (default 30) for `shares_out`, `sector`, `industry`, `exchange`, `currency`; price-derived fields (`last_close`, `adv_30d`, `market_cap`) recomputed every run from the always-fresh bars batch.
+- Daily runs after the first cold start hit ZERO `.info` / `fast_info` calls — only the bars endpoint, which is reliable and batched. Wall time: ~1-2 min for ~2,000 tickers.
+- After 30 days, a small subset of static rows expire and refresh.
+
+This makes the user's scheduled daily run cheap and throttle-safe.
+
+### 9. IP-throttle handling
+
+Yahoo enforces an undocumented per-IP cap (~few thousand HTTPS requests per hour across both `quoteSummary`/`fast_info` and chart endpoints). When exceeded, requests return `YFRateLimitError: Too Many Requests` and stay blocked for ~30-60 min regardless of backoff.
+
+Module 4's strategy: process-global throttle flag. First `YFRateLimitError` flips the flag; all subsequent yfinance calls in this run raise `YahooThrottled` immediately without HTTP. Whatever's already fetched persists; deferred tickers are marked `partial` (no `fetch_error`) so the next run's cache-staleness check picks them up. **No retry-storms; no compounding the throttle.**
+
+The `.info` endpoint is opt-in via `snapshot.fetch_descriptive_info` (default `false`). With the default, only `fast_info` is called per ticker — halving HTTP volume vs the legacy fast_info+.info path. Enable `.info` only when `sector_allowlist`/`blocklist` are actually used.
+
+### 10. Acceptance tests (additional)
+
+10. **Daily-run fast path:** second run within `static_ttl_days` makes ZERO `fast_info` / `.info` calls; only bars batches. Wall time ≤ 2 min for ~2,000 survivors.
+11. **Cold-start cap:** first run for ~2,000 tickers completes in ≤ 20 min wall (allowing for the 2 req/s default), or fails gracefully via `YahooThrottled` and persists what it got.
+12. **Throttle resumability:** after `YahooThrottled` aborts mid-run, a subsequent run picks up only the deferred tickers (partial rows with no fetch_error are detected as stale).
 
 ---
 

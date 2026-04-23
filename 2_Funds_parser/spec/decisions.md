@@ -192,7 +192,71 @@ The original Module 4 spec referenced two non-existent input files (`enriched_sn
 - **Code reuse from `0_Renderer/2_stock_visualizer.py`**: SQLite WAL setup, `_db()` context manager, batched `yf.download(tickers=" ".join(...), group_by="ticker", threads=True)` with per-ticker fallback, `_age_seconds` TTL helpers, SWR pattern. Copied (not imported) into `src/module_4/prices.py` so the two pipelines remain decoupled. Adaptations: ISO-date keys instead of unix-second `t`, `(ticker, date)` PK instead of `(ticker, interval, t)`, `auto_adjust=False`, no internet-clock calibration (4b is daily, not intraday).
 - **Yahoo Finance throughput plan locked.** Full detail in [module_4_spec.md § Yahoo Finance throughput](module_4_spec.md). Highlights: shared `curl_cffi.requests.Session(impersonate="chrome")` (yfinance 1.3.0 + curl_cffi 0.15.0 already in venv) is the single biggest speedup vs default `requests`; bars batched at 100–200 tickers per `yf.download(threads=True)`; `.info` parallelised with `ThreadPoolExecutor(max_workers=8)` under a process-global token-bucket at 5 req/s (ported from the proven `_EDGAR_LIMITER` pattern in [src/layer_1/edgar_13f.py](../src/layer_1/edgar_13f.py)); exponential-backoff retry 1s→2s→4s, max 2 retries; SQLite cache is the long-term dominant optimisation. Deliberately NOT done: `requests_cache`, async, `yf.Tickers(plural)`, proxy rotation. All knobs (rate, workers, batch sizes, TTL) exposed in `config/filters.yaml` + `config/ranking.yaml`.
 
-*(No implementation entries yet — code lands next session.)*
+### Implementation pass 1 — 2026-04-23 (revised after first 4a runs)
+
+Code landed under [src/module_4/](../src/module_4/) (six files). CLIs `scripts/4_run_hard_filters.py` and `scripts/4_rank.py` chained into [run_2_Funds_parser.bat](../run_2_Funds_parser.bat) behind two `[y/N]` prompts.
+
+The first end-to-end run on the 2025Q4 universe (2,486 → 2,026 phase-1 survivors → ~7 min cold start) exposed two Yahoo-side issues that drove a rewrite of the snapshot fetcher. Recording the diagnosis and the resulting design for future-me:
+
+#### Issue 1 — Yahoo "Invalid Crumb" cascade (resolved)
+- **Symptom:** First 50 `.info` calls returned `status=ok`. Every call from #100 onward came back `status=partial` (bars worked, `.info` returned `{}`). Final result: 1,890 / 2,026 rejections were `market_cap_missing`.
+- **Cause:** Yahoo's `.info` endpoint is gated behind a per-session anti-CSRF "crumb" token. yfinance fetches the crumb once per `requests.Session` and reuses it. Yahoo invalidates the crumb after a few hundred calls; once invalidated, every subsequent `.info` call on that session returns 401 / `Invalid Crumb`.
+- **Fix:** `_retry` detects 401/`invalid crumb` substrings and calls `reset_yf_session()` before the next attempt. Each `fetch_info` / `fetch_fast_info` calls `get_yf_session()` fresh per attempt so the reset takes effect.
+
+#### Issue 2 — Yahoo IP-level throttle (`YFRateLimitError`)
+- **Symptom:** After the first broken run + a 100-ticker test (which worked at 97% ok) + the start of a second full run, every `fast_info` attribute on every ticker — including AAPL we'd never queried — raised `YFRateLimitError: Too Many Requests`. Bars endpoint started failing intermittently too.
+- **Cause:** Cumulative request volume across the broken first run + the test + the start of the second run exceeded Yahoo's per-IP soft cap. The 5 req/s sustained rate compounded over ~5,000 cumulative requests is too high. IP throttles persist for ~30-60 minutes regardless of backoff.
+- **Fix (architectural — not just a rate tweak):**
+  1. **Process-global throttle flag.** First `YFRateLimitError` flips `_THROTTLED_AT`. All subsequent `_retry` calls in the run raise `YahooThrottled` immediately without an HTTP attempt. Custom exception bubbles up to `fetch_snapshots_parallel`, which marks the deferred ticker as `partial` (no `fetch_error`) so the next-run staleness check picks it up.
+  2. **`.info` is now opt-in.** `snapshot.fetch_descriptive_info` defaults to `false`. With the default, each ticker needs only 1 fast_info call (~halved HTTP volume vs the earlier path that did fast_info + .info). Tickers without sector/industry get `partial` status by design — but they still pass cap/ADV filters because `market_cap` is populated. Set the flag to `true` only when `sector_allowlist`/`blocklist` are actually used.
+  3. **Default rate dropped from 5 → 2 req/s.** Empirically, 5 req/s sustained over a full universe trips the IP cap. 2 req/s gives ~17 min cold-start wall time but stays under threshold.
+
+#### Issue 3 — SEC `/` vs Yahoo `-` ticker separators
+- **Symptom:** 4 tickers (`MOG/A`, `NUVB/WS`, `PBR/A`, `UHAL/B`) failed with `'Response' object has no attribute 'get'` — yfinance choked on the slash.
+- **Fix:** `_yahoo_symbol(ticker)` translates `/` → `-` for Yahoo lookups; snapshot rows are still keyed under the original SEC ticker so the join with the universe parquet works.
+
+#### The market-cap freshness redesign — the key insight
+The user asked: "market_cap changes daily. Do I need to refetch every day?" The answer drove the snapshot fetcher's final design.
+
+`market_cap = shares_outstanding × last_close`. Decomposed:
+
+| Field | Changes | Source | Cache TTL |
+|---|---|---|---|
+| `last_close`, `adv_30d` | Daily | Bars batch (chart endpoint, reliable) | Recompute every run |
+| `shares_out` | ~Quarterly | `fast_info` (rate-limit-prone) | 30 days |
+| `sector`, `industry`, names | ~Yearly | `.info` (rate-limit-prone) | 30 days |
+| `market_cap` | Daily, **derived** | `shares_out × last_close` | Computed every run |
+
+Implementation: `fetch_or_reuse_snapshots` checks two TTLs. If a ticker's `static_ttl_days` (default 30) hasn't elapsed and `shares_out` is present, it skips the yfinance HTTP entirely and recomputes `market_cap = cached.shares_out × bars_last_close`. Bars are fetched in a batch on every run (cheap, reliable, ~1-2 min for 2,000 tickers).
+
+**Cost shape:**
+- Day 1 cold start: ~2,000 fast_info calls + bars batches → ~17 min wall.
+- Day 2 daily run: 0 fast_info calls, just bars batches → ~1-2 min wall, no throttle risk.
+- Day 30+: small subset (those whose static_ttl expires) refetch → ~5-10 min.
+
+This means daily runs after the first cold-start are cheap and don't risk Yahoo throttle. The user's daily 18:00 scheduled run becomes a 1-2 minute operation, not a 17-minute one.
+
+#### Files changed
+- [src/module_4/prices.py](../src/module_4/prices.py): `YahooThrottled` + `mark_throttled` + `is_throttled`; `_retry` detects throttle and crumb errors; `_yahoo_symbol`; `fetch_fast_info`; `_compute_price_derived` (free price-derivation from bars); `fetch_snapshot_one` rewritten with `cached_static` + `static_is_fresh` + `fetch_descriptive_info` parameters; `fetch_snapshots_parallel` plumbs cached static rows + freshness map.
+- [src/module_4/hard_filters.py](../src/module_4/hard_filters.py): `fetch_or_reuse_snapshots` rewritten — two-tier freshness (static_ttl + always-fresh price-derived), passes `cached_static` and `fresh_static` set into `fetch_snapshots_parallel`.
+- [config/filters.yaml](../config/filters.yaml): `ttl_days` → `static_ttl_days` (30); new `fetch_descriptive_info: false`; default `info_rate_per_s: 2.0`; `info_max_workers: 4`.
+- [config/ranking.yaml](../config/ranking.yaml): `fetch_rate_per_s: 2.0`.
+
+*(End-to-end smoke test pending Yahoo cooldown; first run's 567 cached `ok` snapshots + this run's `partial` rows preserved for next attempt.)*
+
+### Implementation pass 2 — 2026-04-23 (post-cooldown, two-cap design)
+
+Successful end-to-end run after Yahoo unblock: 2,486 universe → 2,026 phase-1 → 1,992 ok snapshots (98.3%) → 996 survivors at the original `$3.7B` cap. Wall time ~10 min, throttled=0. Architecture validated.
+
+User then requested a runtime-driven cap selection. Implemented:
+
+- **Two cap layers, not one.** `filters.yaml` now exposes `market_cap_fetch_ceiling_usd` (default $10B — outer boundary; what gets snapshot-cached) and `market_cap_max_usd_default` (default $3.7B — what the prompt suggests). The previous single `market_cap_max_usd` field is removed.
+- **Phase 2 uses the ceiling, not the user cap.** Candidates between `default` and `ceiling` enter the candidate pool, get their market_cap cached, but are recorded with `rejection_reason='user_market_cap_max'` if the user picks a tighter cap. This means re-running at any cap ≤ ceiling costs zero Yahoo calls.
+- **Interactive histogram-style prompt.** At the end of Phase 2, `prompt_user_for_cap()` prints a 9-bucket market-cap histogram of the candidate pool and asks for a max in $M (or `all` for the ceiling, or Enter for default). ASCII-only output (Windows cp1252 console).
+- **Non-interactive paths.** `--market-cap-max-usd <USD>` CLI flag skips the prompt; `--no-prompt` uses the YAML default. Non-TTY runs (piped output, scheduled .bat without console) auto-fall-back to the default.
+- **Per-`feedback_avoid_multiplying_user_requests`:** this is the explicitly-carved-out "batched triage" exception — single bounded calibration prompt, not runtime per-row prompting.
+- **Smoke-test result with new design:** Phase 2 with $10B ceiling: 1,443 candidates. Default cap $3.7B → 997 survivors / 446 in `$3.7B-$10B` band as `user_market_cap_max` rejections / 520 `market_cap_fetch_ceiling_usd` rejections. Re-running at $5B would yield ~1,150 survivors instantly with no yfinance calls.
+- **Files changed:** [config/filters.yaml](../config/filters.yaml) (schema split), [src/module_4/hard_filters.py](../src/module_4/hard_filters.py) (`_check_snapshot` uses ceiling, new `prompt_user_for_cap` + `apply_user_market_cap` helpers, `run_hard_filters` accepts `user_market_cap_max_usd` + `interactive` params, HTML summary shows fetch ceiling + user cap), [scripts/4_run_hard_filters.py](../scripts/4_run_hard_filters.py) (`--market-cap-max-usd` and `--no-prompt` flags).
 
 ---
 

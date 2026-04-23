@@ -42,6 +42,7 @@ class PathsConfig:
     intermediate_outputs_dir: Path
     outputs_dir: Path
     logs_dir: Path
+    data_dir: Path
     fund_list_source: Path
 
 
@@ -236,6 +237,7 @@ def load_config(
         intermediate_outputs_dir=_path_field("intermediate_outputs_dir"),
         outputs_dir=_path_field("outputs_dir"),
         logs_dir=_path_field("logs_dir"),
+        data_dir=_path_field("data_dir"),
         fund_list_source=_path_field("fund_list_source"),
     )
 
@@ -245,6 +247,7 @@ def load_config(
         paths.intermediate_outputs_dir,
         paths.outputs_dir,
         paths.logs_dir,
+        paths.data_dir,
     ):
         ensure_dir(d)
 
