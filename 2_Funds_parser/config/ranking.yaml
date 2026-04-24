@@ -7,6 +7,11 @@ ranking:
                                          #   alpha=0   -> pure score*confidence (legacy)
                                          #   alpha=1   -> pure score (confidence is just a gate)
                                          #   alpha=0.7 -> mirrors min_confidence; score class dominates
+  horizons:                              # trading horizons to score (each must be keyed in archetypes.yaml)
+    - "3mo"                              #   medium-term (3-month) entries/exits
+    - "12mo"                             #   long-term (12-month) entries/exits
+                                         # Each ticker is tagged with best_horizon = argmax(composite_per_horizon)
+                                         # and sorted by max(composite). Downstream (Module 5+) consumes the tag.
   include_unclassified: true             # if false, drop unclassified rows
   window_tolerance_trading_days: 3       # ± tolerance for window date matching
   require_min_history_weeks: 52          # tickers below this -> excluded audit file

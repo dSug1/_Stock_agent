@@ -246,6 +246,41 @@ Current minimum gap (post pass 5) is **0.10**, between `fresh_awakening` (+10) a
 
 ---
 
+## D20 — Dual-horizon scoring (3-month + 12-month) with per-ticker routing
+
+**Decision:** Each archetype in `archetypes.yaml` carries a `scores: {<horizon>: int}` mapping instead of a scalar `score`. `ranking.yaml::horizons` declares which horizons are active (default `["3mo", "12mo"]`). Module 4b computes:
+
+```
+composite_<H> = score_<H> × (alpha + (1 - alpha) × match_confidence)
+best_horizon  = argmax_H(composite_<H>)      # "equal" on ties
+composite_best = max_H(composite_<H>)         # primary sort key
+```
+
+Per-horizon D19 invariant applies: each `scores.<H>` column uses unique integers in `[-10, +10]` excluding 0. Validated independently per horizon at archetype YAML load.
+
+Match engine's tie-break switches from `|score|` (single-horizon) to `max(|score_h|)` across defined horizons — "most opinionated label overall wins."
+
+**Rationale:** The user trades on both medium-term (3-month) and long-term (12-month) horizons. The same chart pattern earns different weight under different holding periods, and the three reference authors (Minervini, Weinstein, Livermore) explicitly differentiate:
+- **Trends persist** on long horizons → `mature_uptrend` +2 (3mo) → +5 (12mo); `extended_uptrend` −1 (3mo) → +1 (12mo).
+- **Climax reversion is 3mo-loaded** → `parabolic_blowoff` −10 (3mo) → −7 (12mo); price typically partially recovers within a year.
+- **Stage 4 is dead money over 12mo** → `sustained_decline` −5 (3mo) → −6 (12mo); Weinstein empirical data shows 30-50% further losses.
+- **Recoveries take 6-18 months** → `post_crash_rebase` +6 (3mo) → +8 (12mo).
+
+A single-score system would force one calibration over the other. Dual scoring preserves both views. Downstream (Module 5/6): every shortlisted ticker is enriched and estimated at **both** horizons; `best_horizon` is a research-depth hint, not a hard route. Final ranking is by `max_H(appreciation_H / H_months)` in Module 6 (rate-of-appreciation, per Overall_specification.md). Within any reasonable Module 5 shortlist threshold, the per-archetype score delta between horizons is 0–2 points and both same-sign, so using `best_horizon` as a hard route would discard LLM-estimated information that is typically orders of magnitude more significant than the pattern-prior delta.
+
+**Why per-ticker routing (argmax) rather than a weighted blend:** A blended score (`w_3 × composite_3mo + w_12 × composite_12mo`) hides the fact that any given ticker usually has a clear "best horizon," and it biases against specialist setups. `argmax` treats each horizon as an independent thesis and routes the ticker to wherever it scores strongest. The `best_horizon` tag carries the routing information downstream; no data is lost.
+
+**Why not a `horizon` switch (pick one at runtime):** User wants both active simultaneously (trading both a medium-term and a long-term book). A switch would require two pipeline runs and separate ranked lists, doubling LLM cost in Module 6 and requiring late-stage dedup in Module 7. Dual-column output, single ranked list, one LLM call per ticker.
+
+**Consequence for validation:** Adding or retuning an archetype must maintain **per-horizon uniqueness** on every active `scores.<H>` column. `load_archetypes()` now enforces this — duplicate `score_3mo` across two archetypes fails load, independently of whether their `score_12mo` values differ.
+
+**Alternatives considered:**
+- Single-horizon score, horizon picked via ranking.yaml knob — rejected (forces re-runs for multi-horizon trading, doubles Module 5/6 cost).
+- Weighted blend of the two horizons — rejected (hides per-ticker best-horizon information, biases against specialists).
+- Three+ horizons (e.g. 1mo / 3mo / 12mo) — deferred (the two-horizon split already spans the user's trading frame; Module 7 outcome feedback should inform whether finer granularity adds signal).
+
+---
+
 ## Open / deferred decisions
 
 These are acknowledged as unresolved. Claude Code should not invent defaults; it should flag them for explicit user input.

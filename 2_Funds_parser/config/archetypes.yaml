@@ -1,21 +1,31 @@
 # Module 4b — trajectory archetypes.
 #
-# Each archetype specifies ranges on the SUBSET of features it cares about
-# (decision D5). Match confidence = matched / specified.
+# Dual-horizon scoring (pass 8, 2026-04-24):
+#   Each archetype carries scores for both a 3-month (medium-term) and
+#   12-month (long-term) trading horizon. Module 4b computes composites for
+#   all horizons listed in ranking.yaml::ranking.horizons, tags each ticker
+#   with best_horizon = argmax(composite_per_horizon), and sorts by
+#   max composite across horizons.
+#
+# D19 (unique integer scores → disjoint composite bands) holds INDEPENDENTLY
+# per horizon: each `scores.<horizon>` column must use unique integers in
+# [-10, +10], excluding 0 (reserved for unclassified).
+#
+# Horizon-score rationale (see spec/decisions.md Implementation pass 8):
+#   - 12mo: rewards trend persistence (Minervini / Weinstein / Livermore:
+#     "trends continue, sit tight"); punishes Stage 4 more (30-50% further
+#     losses); softens parabolic and news breaks (partial recovery).
+#   - 3mo: rewards asymmetric pivot entries; cautious on extended trends
+#     (mean-reversion risk); harsh on parabolic (reversion sharpest near-term).
 #
 # Features (all strictly positive; computed on adjusted_close):
 #   R_4, R_12, R_26, R_52              (price_today / price_Xw_ago)
 #   R_4_over_R_12, R_4_over_R_26, R_4_over_R_52,
 #   R_12_over_R_26, R_12_over_R_52, R_26_over_R_52
-#
-# score: positive = "train hasn't left" candidate; negative = "train has left".
-# composite_score = score * (alpha + (1 - alpha) * match_confidence),
-# alpha from ranking.yaml. Scores are unique integers so composite-score bands
-# are disjoint at alpha=0.7, min_confidence=0.70 (min gap = 0.37).
 
 archetypes:
   fresh_awakening:
-    score: 10
+    scores: {"3mo": 10, "12mo": 10}
     description: "Flat-to-down over year, awakening in recent 12 weeks"
     ranges:
       R_52:           [0.85, 1.10]
@@ -26,25 +36,16 @@ archetypes:
       R_26_over_R_52: [0.95, 1.15]
 
   deep_base_breakout:
-    score: 9
+    scores: {"3mo": 9, "12mo": 9}
     description: "Deep intra-year crash, multi-month base, now breaking out (VCP-style)"
     ranges:
-      R_4:            [1.10, 1.30]   # breaking out, not parabolic
-      R_26:           [0.30, 0.80]   # deep intra-year crash visible
-      R_52:           [0.50, 1.00]   # year still down — crash not yet fully healed
-      R_12_over_R_26: [1.30, 5.00]   # meaningful bounce from crash low
-
-  early_breakout:
-    score: 7
-    description: "Recent move starting, not yet parabolic"
-    ranges:
-      R_52:          [0.90, 1.15]
-      R_12:          [1.10, 1.35]
-      R_4:           [1.05, 1.20]
-      R_4_over_R_12: [0.80, 1.10]
+      R_4:            [1.10, 1.30]
+      R_26:           [0.30, 0.80]
+      R_52:           [0.50, 1.00]
+      R_12_over_R_26: [1.30, 5.00]
 
   post_crash_rebase:
-    score: 6
+    scores: {"3mo": 6, "12mo": 8}
     description: "Down sharply over year, bottomed and stabilising"
     ranges:
       R_52:           [0.40, 0.80]
@@ -53,8 +54,17 @@ archetypes:
       R_4:            [0.98, 1.08]
       R_26_over_R_52: [1.15, 2.00]
 
+  early_breakout:
+    scores: {"3mo": 7, "12mo": 7}
+    description: "Recent move starting, not yet parabolic"
+    ranges:
+      R_52:          [0.90, 1.15]
+      R_12:          [1.10, 1.35]
+      R_4:           [1.05, 1.20]
+      R_4_over_R_12: [0.80, 1.10]
+
   v_recovery:
-    score: 5
+    scores: {"3mo": 5, "12mo": 6}
     description: "Recent strength after mid-period dip; long-term positive"
     ranges:
       R_52: [1.00, 3.00]
@@ -62,26 +72,8 @@ archetypes:
       R_12: [0.80, 1.10]
       R_4:  [1.02, 1.25]
 
-  shallow_rebase:
-    score: 4
-    description: "Mild decline over year with recent turn-up"
-    ranges:
-      R_52: [0.75, 0.95]
-      R_26: [0.85, 1.10]
-      R_12: [0.95, 1.15]
-      R_4:  [1.00, 1.15]
-
-  quiet_compression:
-    score: 3
-    description: "Flat across all windows, coiled spring (no directional edge without catalyst)"
-    ranges:
-      R_52: [0.90, 1.10]
-      R_26: [0.92, 1.08]
-      R_12: [0.94, 1.06]
-      R_4:  [0.96, 1.04]
-
   mature_uptrend:
-    score: 2
+    scores: {"3mo": 2, "12mo": 5}
     description: "Sustained uptrend across all windows"
     ranges:
       R_52: [1.20, 2.50]
@@ -90,7 +82,7 @@ archetypes:
       R_4:  [0.98, 1.10]
 
   stage2_pullback:
-    score: 1
+    scores: {"3mo": 1, "12mo": 4}
     description: "Weinstein Stage 2B / Livermore continuation pivotal — year strong, minor recent pullback"
     ranges:
       R_52: [1.10, 3.00]
@@ -98,9 +90,27 @@ archetypes:
       R_12: [1.05, 999]
       R_4:  [0.85, 1.03]
 
+  shallow_rebase:
+    scores: {"3mo": 4, "12mo": 3}
+    description: "Mild decline over year with recent turn-up"
+    ranges:
+      R_52: [0.75, 0.95]
+      R_26: [0.85, 1.10]
+      R_12: [0.95, 1.15]
+      R_4:  [1.00, 1.15]
+
+  quiet_compression:
+    scores: {"3mo": 3, "12mo": 2}
+    description: "Flat across all windows, coiled spring (no directional edge without catalyst)"
+    ranges:
+      R_52: [0.90, 1.10]
+      R_26: [0.92, 1.08]
+      R_12: [0.94, 1.06]
+      R_4:  [0.96, 1.04]
+
   extended_uptrend:
-    score: -1
-    description: "Strong uptrend past mature_uptrend's cap — train has left but not parabolic"
+    scores: {"3mo": -1, "12mo": 1}
+    description: "Strong uptrend past mature_uptrend's cap — train has left but not parabolic (12mo: trend persists)"
     ranges:
       R_52:          [2.50, 999]
       R_26:          [1.30, 999]
@@ -108,35 +118,35 @@ archetypes:
       R_4_over_R_12: [0.80, 1.25]
 
   late_stage_extension:
-    score: -2
-    description: "Minervini late-stage climax run / Weinstein late Stage 2 — hot recent move, not parabolic"
+    scores: {"3mo": -2, "12mo": -1}
+    description: "Minervini late-stage climax run — R_52 extended AND R_4 hot, not yet parabolic"
     ranges:
       R_52:          [2.00, 999]
       R_26:          [1.30, 999]
       R_4:           [1.25, 999]
       R_4_over_R_12: [0.40, 1.30]
 
-  sustained_decline:
-    score: -5
-    description: "Falling across all windows — Minervini Stage 4 'dead money' (score deepened −3→−5 for author alignment)"
-    ranges:
-      R_52: [0.001, 0.80]
-      R_26: [0.001, 0.90]
-      R_12: [0.001, 0.95]
-      R_4:  [0.001, 0.98]
-
   broken_trend:
-    score: -4
-    description: "Uptrend broken, recent weakness — softened from -5 to avoid punishing healthy dips"
+    scores: {"3mo": -4, "12mo": -3}
+    description: "Uptrend broken, recent weakness (12mo: news breaks often heal)"
     ranges:
       R_52:           [1.10, 999]
       R_12:           [0.70, 0.95]
       R_4:            [0.85, 0.98]
       R_12_over_R_26: [0.60, 0.95]
 
+  sustained_decline:
+    scores: {"3mo": -5, "12mo": -6}
+    description: "Falling across all windows — Minervini Stage 4 'dead money'"
+    ranges:
+      R_52: [0.001, 0.80]
+      R_26: [0.001, 0.90]
+      R_12: [0.001, 0.95]
+      R_4:  [0.001, 0.98]
+
   parabolic_blowoff:
-    score: -10
-    description: "Train has left — recent move extreme"
+    scores: {"3mo": -10, "12mo": -7}
+    description: "Train has left — recent move extreme (12mo: partial price recovery typical)"
     ranges:
       R_4:           [1.25, 999]
       R_4_over_R_12: [1.30, 999]

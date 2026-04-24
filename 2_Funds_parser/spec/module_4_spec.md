@@ -357,37 +357,55 @@ def match(features, archetype):
 
 Each archetype only specifies the ranges it cares about (decisions_module_4.md D5). Tickers are not penalised for unspecified dimensions.
 
-Among archetypes where `confidence >= ranking.min_confidence` (default 0.70), the ticker is assigned the one with the highest confidence. Ties broken by highest `|archetype_score|` (most opinionated archetype wins).
+Among archetypes where `confidence >= ranking.min_confidence` (default 0.70), the ticker is assigned the one with the highest confidence. Ties broken by highest `max(|scores.<horizon>|)` across defined horizons — the most opinionated label wins regardless of which horizon carries the opinion (D20).
 
-If no archetype qualifies: `archetype = "unclassified"`, `archetype_score = 0`, `confidence = 0`.
+If no archetype qualifies: `archetype = "unclassified"`, `scores = {}` (all score_<H> → 0), `confidence = 0`.
 
-#### Step 4 — Composite score
+#### Step 4 — Dual-horizon composite scores (D20)
+
+Each archetype carries a `scores: {<horizon>: int}` mapping. For each active horizon listed in `ranking.horizons` (default: `["3mo", "12mo"]`), Module 4b computes:
 
 ```
 alpha = ranking.confidence_floor_weight   # default 0.7
-composite_score = archetype_score × (alpha + (1 - alpha) × match_confidence)
+composite_<H> = score_<H> × (alpha + (1 - alpha) × match_confidence)
 ```
 
-Score-floor weighting (locked 2026-04-23 after the pure-multiplication formula was rejected for letting `(score=10, conf=0.5)` tie `(score=5, conf=1.0)`). With `alpha = 0.7`, every ticker assigned to a +10 archetype outranks every ticker assigned to a +5 archetype regardless of confidence; confidence becomes the within-class tiebreaker. `alpha = 0` reproduces the legacy formula; `alpha = 1` ignores confidence (gate-only).
+Then per ticker:
+
+```
+best_horizon   = argmax_H(composite_<H>)   # "equal" when all equal
+composite_best = max_H(composite_<H>)
+```
+
+**D19 invariant holds independently per horizon** — every `scores.<H>` column must use unique integers in `[-10, +10]` excluding 0. Validated at archetype YAML load.
+
+**Why dual scoring.** A mature uptrend has limited 3-month headroom (−2 in the 3mo column) but trends persist — Weinstein's 30-week data shows compounding over 12 months (+5 in the 12mo column). Parabolic blowoffs mean-revert sharpest near-term (−10 at 3mo) but stocks often partially recover by 12 months (−7 at 12mo). The horizon split preserves both views and lets downstream Module 5/6 evaluate each ticker through its most favourable lens.
+
+**Downstream contract (refined 2026-04-24).** Every shortlisted ticker (gated by `composite_best >= threshold`, threshold set in Module 5 config) is enriched at **both** horizons in Module 5 and estimated at **both** horizons in Module 6. The `best_horizon` tag is a **research-depth hint** only — devote more catalyst-research budget to the stronger horizon — but never exclude the other. Final ranking is by `max_H(expected_appreciation_H / H_months)` in Module 6 (rate-of-appreciation, per Overall_specification.md).
+
+Rationale: within any reasonable shortlist threshold (e.g. `composite_best >= 5`), the `score_3mo` vs `score_12mo` delta per archetype is 0–2 points and always same-sign (the only sign-flipping archetype, `extended_uptrend` −1/+1, does not pass the shortlist gate). That small pattern-prior delta is dwarfed by the LLM's appreciation estimates (%-scale), so making Module 5/6 branch on `best_horizon` as a hard route would discard information. The pattern prior's job is to surface the ticker and bias research effort; the rate decision is Module 6's.
 
 Pure trajectory-based ranking (decisions_module_4.md D2). Fund accumulation, compression, distance-to-52w-low, etc. are preserved in the output for human inspection and Module 5's LLM context, but do not enter the score.
 
 #### Step 5 — Rank and write outputs
 
-Sort by `composite_score` DESC. Tiebreakers from `ranking.tiebreakers` (default: `fund_count` DESC, then `ticker` ASC). Assign `rank` column (1-indexed).
+Sort by `composite_best` DESC. Tiebreakers from `ranking.tiebreakers` (default: `fund_count` DESC, then `ticker` ASC). Assign `rank` column (1-indexed).
 
-Write Parquet to `_intermediate_outputs/`. Generate HTML and Excel reports to `Outputs/`.
+Output columns: `rank`, `ticker`, `name_of_issuer`, `archetype`, one `score_<H>` per horizon, `match_confidence`, one `composite_<H>` per horizon, `best_horizon`, `composite_best`, then ratio + passthrough columns.
+
+Write Parquet to `_intermediate_outputs/`. Generate HTML (with per-ticker `best_horizon` badge) and Excel reports to `Outputs/`.
 
 ### Config schemas
 
 ```yaml
-# config/archetypes.yaml — 14 archetypes, all unique integer scores (D19, updated 2026-04-24)
-# Composite-score bands disjoint by construction at alpha=0.7, min_confidence=0.70
-# (min gap between adjacent classes = 0.10, between +10 and +9).
+# config/archetypes.yaml — 14 archetypes, dual-horizon scoring (D20).
+# Per-horizon D19 invariant: each scores.<H> column uses unique integers in
+# [-10, +10] excluding 0. Both the 3mo and 12mo columns are independently
+# validated at load.
 
 archetypes:
   fresh_awakening:
-    score: 10
+    scores: {"3mo": 10, "12mo": 10}
     description: "Flat-to-down over year, awakening in recent 12 weeks"
     ranges:
       R_52:           [0.85, 1.10]
@@ -398,7 +416,7 @@ archetypes:
       R_26_over_R_52: [0.95, 1.15]
 
   deep_base_breakout:
-    score: 9
+    scores: {"3mo": 9, "12mo": 9}
     description: "Deep intra-year crash, multi-month base, now breaking out (VCP-style)"
     ranges:
       R_4:            [1.10, 1.30]
@@ -406,8 +424,18 @@ archetypes:
       R_52:           [0.50, 1.00]
       R_12_over_R_26: [1.30, 5.00]
 
+  post_crash_rebase:
+    scores: {"3mo": 6, "12mo": 8}   # 12mo up: full recovery plays out in 6-18mo (Minervini)
+    description: "Down sharply over year, bottomed and stabilising"
+    ranges:
+      R_52:           [0.40, 0.80]
+      R_26:           [0.85, 1.10]
+      R_12:           [0.95, 1.10]
+      R_4:            [0.98, 1.08]
+      R_26_over_R_52: [1.15, 2.00]
+
   early_breakout:
-    score: 7
+    scores: {"3mo": 7, "12mo": 7}
     description: "Recent move starting, not yet parabolic"
     ranges:
       R_52:          [0.90, 1.15]
@@ -415,18 +443,8 @@ archetypes:
       R_4:           [1.05, 1.20]
       R_4_over_R_12: [0.80, 1.10]
 
-  post_crash_rebase:
-    score: 6
-    description: "Down sharply over year, bottomed and stabilising"
-    ranges:
-      R_52:           [0.40, 0.80]     # upper widened 0.75→0.80 (closes cliff vs shallow_rebase)
-      R_26:           [0.85, 1.10]
-      R_12:           [0.95, 1.10]
-      R_4:            [0.98, 1.08]
-      R_26_over_R_52: [1.15, 2.00]
-
   v_recovery:
-    score: 5
+    scores: {"3mo": 5, "12mo": 6}
     description: "Recent strength after mid-period dip; long-term positive"
     ranges:
       R_52: [1.00, 3.00]
@@ -434,26 +452,8 @@ archetypes:
       R_12: [0.80, 1.10]
       R_4:  [1.02, 1.25]
 
-  shallow_rebase:
-    score: 4
-    description: "Mild decline over year with recent turn-up"
-    ranges:
-      R_52: [0.75, 0.95]
-      R_26: [0.85, 1.10]
-      R_12: [0.95, 1.15]
-      R_4:  [1.00, 1.15]
-
-  quiet_compression:
-    score: 3                             # was 8 — no directional edge on 3mo without catalyst
-    description: "Flat across all windows, coiled spring (no directional edge without catalyst)"
-    ranges:
-      R_52: [0.90, 1.10]
-      R_26: [0.92, 1.08]
-      R_12: [0.94, 1.06]
-      R_4:  [0.96, 1.04]
-
   mature_uptrend:
-    score: 2
+    scores: {"3mo": 2, "12mo": 5}   # 12mo up: trend persistence (Weinstein, Livermore)
     description: "Sustained uptrend across all windows"
     ranges:
       R_52: [1.20, 2.50]
@@ -462,7 +462,7 @@ archetypes:
       R_4:  [0.98, 1.10]
 
   stage2_pullback:
-    score: 1
+    scores: {"3mo": 1, "12mo": 4}   # 12mo up: pullback resumes with time
     description: "Weinstein Stage 2B / Livermore continuation pivotal — year strong, minor recent pullback"
     ranges:
       R_52: [1.10, 3.00]
@@ -470,8 +470,26 @@ archetypes:
       R_12: [1.05, 999]
       R_4:  [0.85, 1.03]
 
+  shallow_rebase:
+    scores: {"3mo": 4, "12mo": 3}
+    description: "Mild decline over year with recent turn-up"
+    ranges:
+      R_52: [0.75, 0.95]
+      R_26: [0.85, 1.10]
+      R_12: [0.95, 1.15]
+      R_4:  [1.00, 1.15]
+
+  quiet_compression:
+    scores: {"3mo": 3, "12mo": 2}
+    description: "Flat across all windows, coiled spring (no directional edge without catalyst)"
+    ranges:
+      R_52: [0.90, 1.10]
+      R_26: [0.92, 1.08]
+      R_12: [0.94, 1.06]
+      R_4:  [0.96, 1.04]
+
   extended_uptrend:
-    score: -1
+    scores: {"3mo": -1, "12mo": 1}   # 12mo up: "trends persist" (Minervini)
     description: "Strong uptrend past mature_uptrend's cap — train has left but not parabolic"
     ranges:
       R_52:          [2.50, 999]
@@ -480,7 +498,7 @@ archetypes:
       R_4_over_R_12: [0.80, 1.25]
 
   late_stage_extension:
-    score: -2
+    scores: {"3mo": -2, "12mo": -1}
     description: "Minervini late-stage climax run — R_52 extended AND R_4 hot, not yet parabolic"
     ranges:
       R_52:          [2.00, 999]
@@ -488,17 +506,8 @@ archetypes:
       R_4:           [1.25, 999]
       R_4_over_R_12: [0.40, 1.30]
 
-  sustained_decline:
-    score: -5                            # was -3 — deepened for Minervini Stage 4 "dead money" alignment
-    description: "Falling across all windows — Minervini Stage 4 'dead money'"
-    ranges:
-      R_52: [0.001, 0.80]
-      R_26: [0.001, 0.90]
-      R_12: [0.001, 0.95]
-      R_4:  [0.001, 0.98]
-
   broken_trend:
-    score: -4                            # was -5 — softened to avoid over-punishing healthy dips
+    scores: {"3mo": -4, "12mo": -3}   # 12mo softer: news breaks often heal
     description: "Uptrend broken, recent weakness"
     ranges:
       R_52:           [1.10, 999]
@@ -506,8 +515,17 @@ archetypes:
       R_4:            [0.85, 0.98]
       R_12_over_R_26: [0.60, 0.95]
 
+  sustained_decline:
+    scores: {"3mo": -5, "12mo": -6}   # 12mo deeper: Stage 4 = 30-50% further loss (Weinstein)
+    description: "Falling across all windows — Minervini Stage 4 'dead money'"
+    ranges:
+      R_52: [0.001, 0.80]
+      R_26: [0.001, 0.90]
+      R_12: [0.001, 0.95]
+      R_4:  [0.001, 0.98]
+
   parabolic_blowoff:
-    score: -10
+    scores: {"3mo": -10, "12mo": -7}   # 12mo softer: price typically partially recovers
     description: "Train has left — recent move extreme"
     ranges:
       R_4:           [1.25, 999]
@@ -515,39 +533,50 @@ archetypes:
       R_4_over_R_52: [1.15, 999]
 ```
 
-#### Archetype score ladder (3-month horizon, alpha=0.7, min_confidence=0.70)
+#### Dual-horizon archetype score ladder
 
-| Score | Archetype | Composite band | Role on 3mo horizon |
-|------:|-----------|----------------|---------------------|
-| +10 | fresh_awakening    | [9.10, 10.00] | Asymmetric upside; base + recent awakening |
-| +9  | deep_base_breakout | [8.19, 9.00]  | Crash + multi-month base + breakout (VCP-style); deepest value entry with directional confirmation |
-| +7  | early_breakout     | [6.37, 7.00]  | Move started, not parabolic |
-| +6  | post_crash_rebase  | [5.46, 6.00]  | Deep-drawdown stabiliser; 3mo bounce candidate |
-| +5  | v_recovery         | [4.55, 5.00]  | Mid-period dip + recent strength, year up |
-| +4  | shallow_rebase     | [3.64, 4.00]  | Mild decline turning up |
-| +3  | quiet_compression  | [2.73, 3.00]  | Coiled spring; upward base skew but no catalyst |
-| +2  | mature_uptrend     | [1.82, 2.00]  | Trend intact, limited 3mo headroom |
-| +1  | stage2_pullback    | [0.91, 1.00]  | Weinstein Stage 2B / Livermore continuation pivotal — healthy pullback in uptrend |
-| −1  | extended_uptrend   | [−1.00, −0.91]| Past sensible-entry zone, not extreme |
-| −2  | late_stage_extension | [−2.00, −1.82]| Minervini late-stage climax run — R_4 hot, not parabolic |
-| −4  | broken_trend       | [−4.00, −3.64]| News-driven break; continuation risk |
-| −5  | sustained_decline  | [−5.00, −4.55]| Minervini Stage 4 — "dead money" |
-| −10 | parabolic_blowoff  | [−10.00, −9.10] | Imminent mean reversion |
+| Archetype | `scores.3mo` | 3mo band | `scores.12mo` | 12mo band | best_horizon routing |
+|-----------|---:|---|---:|---|---|
+| fresh_awakening      | +10 | [9.10, 10.00] | +10 | [9.10, 10.00] | equal |
+| deep_base_breakout   |  +9 | [8.19, 9.00]  |  +9 | [8.19, 9.00]  | equal |
+| post_crash_rebase    |  +6 | [5.46, 6.00]  |  +8 | [7.28, 8.00]  | 12mo |
+| early_breakout       |  +7 | [6.37, 7.00]  |  +7 | [6.37, 7.00]  | equal |
+| v_recovery           |  +5 | [4.55, 5.00]  |  +6 | [5.46, 6.00]  | 12mo |
+| mature_uptrend       |  +2 | [1.82, 2.00]  |  +5 | [4.55, 5.00]  | 12mo |
+| stage2_pullback      |  +1 | [0.91, 1.00]  |  +4 | [3.64, 4.00]  | 12mo |
+| shallow_rebase       |  +4 | [3.64, 4.00]  |  +3 | [2.73, 3.00]  | 3mo  |
+| quiet_compression    |  +3 | [2.73, 3.00]  |  +2 | [1.82, 2.00]  | 3mo  |
+| extended_uptrend     |  −1 | [−1.00,−0.91] |  +1 | [0.91, 1.00]  | 12mo (flips sign) |
+| late_stage_extension |  −2 | [−2.00,−1.82] |  −1 | [−1.00,−0.91] | 12mo (less bad) |
+| broken_trend         |  −4 | [−4.00,−3.64] |  −3 | [−3.00,−2.73] | 12mo (less bad) |
+| sustained_decline    |  −5 | [−5.00,−4.55] |  −6 | [−6.00,−5.46] | 3mo  (less bad) |
+| parabolic_blowoff    | −10 | [−10,−9.10]   |  −7 | [−7.00,−6.37] | 12mo (reversion is 3mo-loaded) |
 
-**Band-separation note.** The minimum theoretical gap between adjacent integer-score bands at α=0.7 is `0.91·s_high − s_low`. At the `+10 / +9` boundary this shrinks to 0.10, and at any `+n / +(n−1)` with `n ≥ 11` it goes negative. `deep_base_breakout = +9` is therefore the highest-score addition compatible with D19 without lowering α or widening `min_confidence`.
+**D19 per horizon.** Both columns use unique integers; bands disjoint independently. Min gap at +10/+9 on each column = 0.10. Scores outside `[−10, +10]` prohibited without lowering α (see decisions_module_4.md § D19).
+
+**Per-ticker rollup.**
+```
+best_horizon   = argmax_H(composite_<H>)    # "equal" when all composites match
+composite_best = max_H(composite_<H>)        # primary sort key
+```
+
+A ticker competes on its strongest horizon. Module 5 routes catalyst search by `best_horizon`; Module 6 prompts the LLM with the horizon-appropriate thesis frame.
 
 ```yaml
 # config/ranking.yaml
 ranking:
   min_confidence: 0.70
   confidence_floor_weight: 0.7            # composite = score * (alpha + (1-alpha)*confidence)
+  horizons:                               # active horizons; each must be keyed in archetypes.yaml
+    - "3mo"
+    - "12mo"
   include_unclassified: true              # keep at bottom; if false, drop
   window_tolerance_trading_days: 3
   require_min_history_weeks: 52           # tickers below this excluded from ranking
   young_ticker_flat_fill: true            # false = exclude young tickers
   fetch_batch_size: 50
   output_top_n: null                      # null = all survivors; or integer to cap
-  tiebreakers:                            # applied in order after composite_score
+  tiebreakers:                            # applied in order after composite_best
     - fund_count_desc
     - ticker_asc
 ```
@@ -594,8 +623,12 @@ def match_archetypes(
     features: dict[str, float],
     archetypes_config: dict,
     min_confidence: float = 0.70,
-) -> tuple[str, float, float]:
-    """Returns (archetype_name, archetype_score, match_confidence)."""
+) -> tuple[str, dict, float]:
+    """Returns (archetype_name, scores_dict, match_confidence).
+
+    scores_dict is the archetype's full {horizon: int} mapping, or {} for
+    'unclassified'. Tie-break (D20): prefer archetype with largest
+    max(|score_h|) across horizons — most opinionated label wins."""
 
 # src/module_4/ranking.py
 

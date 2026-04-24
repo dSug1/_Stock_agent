@@ -569,6 +569,93 @@ No overlaps introduced. Min gap across the full ladder remains 0.10 at the +10/+
 - [config/archetypes.yaml](../config/archetypes.yaml) — `sustained_decline.score: -3 → -5`.
 - [spec/module_4_spec.md](module_4_spec.md) — sample YAML + score ladder.
 
+### Implementation pass 8 — 2026-04-24 (dual-horizon scoring: 3mo + 12mo)
+
+User plans to trade both **3-month (medium-term)** and **12-month (long-term)** entries/exits. Single-score archetype output could not capture that the same pattern is weighted differently by holding period (Minervini/Weinstein/Livermore explicitly differentiate: trend persistence favours 12mo, climax reversion is 3mo-loaded, Stage 4 is dead money over 12mo but mean-reversion-possible in 3mo).
+
+**Schema change (D20, see decisions_module_4.md).** Each archetype now carries a `scores: {<horizon>: int}` mapping instead of a scalar `score`. Module 4b computes a composite per horizon, tags each ticker with `best_horizon = argmax_H(composite_<H>)`, and sorts by `composite_best = max_H(composite_<H>)`.
+
+**12mo score ladder (author-calibrated).** Unique integers per horizon (D19 invariant holds independently per column):
+
+| Archetype | 3mo | 12mo | Net change at 12mo |
+|---|---:|---:|---|
+| fresh_awakening       | +10 | +10 | same |
+| deep_base_breakout    | +9  | +9  | same |
+| post_crash_rebase     | +6  | **+8** | **+2** (recoveries play out 6-18mo) |
+| early_breakout        | +7  | +7  | same |
+| v_recovery            | +5  | +6  | +1 |
+| mature_uptrend        | +2  | **+5** | **+3** (trend persistence — Weinstein, Livermore) |
+| stage2_pullback       | +1  | **+4** | **+3** (pullback resumes with time) |
+| shallow_rebase        | +4  | +3  | −1 (turnaround bet loses to proven trend) |
+| quiet_compression     | +3  | +2  | −1 |
+| extended_uptrend      | −1  | **+1** | **+2 (sign flip — "trends persist")** |
+| late_stage_extension  | −2  | −1  | +1 |
+| broken_trend          | −4  | −3  | +1 (news breaks often heal) |
+| sustained_decline     | −5  | **−6** | **−1** (Stage 4 = 30-50% further loss — Weinstein) |
+| parabolic_blowoff     | −10 | **−7** | **+3** (reversion is 3mo-loaded; price partially recovers 12mo) |
+
+12mo unique integers: `{10, 9, 8, 7, 6, 5, 4, 3, 2, 1, −1, −3, −6, −7}` — D19 satisfied.
+
+**Rollup logic per ticker:**
+```
+best_horizon   = argmax_H(composite_<H>)        # "equal" when all equal
+composite_best = max_H(composite_<H>)            # primary sort key
+```
+
+**Downstream contract (refined after PGNY walk-through, 2026-04-24).** Every shortlisted ticker (gated by `composite_best >= threshold`, threshold set in Module 5 config) is enriched at **both** horizons in Module 5 and estimated at **both** horizons in Module 6. The `best_horizon` tag from Module 4b acts as a **research-depth hint only** — deeper catalyst research on the stronger horizon — but never excludes the other horizon from evaluation. Final ranking is by `max_H(expected_appreciation_H / H_months)` (rate-of-appreciation, per Overall_specification.md), computed in Module 6. The pattern-score delta between horizons (typically 0–2 points within the shortlist) is dwarfed by LLM appreciation estimates and does not compete with the rate calculation — it served its purpose by surfacing the ticker and guiding research emphasis. Module 7's forward-price window matches the `final_horizon` chosen by the rate calc.
+
+**Tie-break change in match engine.** When two archetypes match at equal confidence, winner picked by `max(|score_h|)` across defined horizons — most opinionated label overall wins regardless of which horizon carries the opinion. Prior rule (single `|score|`) was horizon-ambiguous under dual scoring.
+
+**Re-rank outcome (`4_rank.py --rerank-only`, same 1,423-row ranking):**
+
+- `best_horizon` distribution: **12mo = 904 (63.5%), equal = 361 (25.4%), 3mo = 158 (11.1%)**. Majority route to 12mo because trend-persistent and stage-4-dead-money classes are more extreme on 12mo, and bullish archetypes are at-or-above their 3mo scores on 12mo.
+- Top ranks unchanged in identity (fresh_awakening still leads). Top 13 all at `composite_best = 9.5–10.0`, `best_horizon = equal`.
+- Bottom 10: parabolic_blowoff tickers at `composite_best = −7.0`, `best_horizon = 12mo` (12mo is the less-bad horizon for them, so argmax routes there).
+- TCRX: rank #21, `deep_base_breakout`, scores `{9, 9}`, `best_horizon = equal`.
+- Archetype counts shifted slightly (mature_uptrend 169→185, late_stage_extension 110→87, broken_trend 50→66, sustained_decline 113→113) due to the tie-break switch from `|score|` to `max(|score_h|)` — in a few cases a different archetype now has the "more opinionated overall" score.
+
+**Files changed in pass 8:**
+- [config/archetypes.yaml](../config/archetypes.yaml) — every archetype rewritten to `scores: {3mo, 12mo}` schema.
+- [config/ranking.yaml](../config/ranking.yaml) — new `horizons: ["3mo", "12mo"]` knob.
+- [src/module_4/archetypes.py](../src/module_4/archetypes.py) — schema validation rewritten for dual scores with per-horizon D19 enforcement; `match_archetypes` returns `(name, scores_dict, conf)`.
+- [src/module_4/ranking.py](../src/module_4/ranking.py) — dual composite computation, `best_horizon` tag, `composite_best` sort key, HTML report shows per-ticker horizon badge, XLSX applies conditional formatting to every `composite_*` column.
+- [spec/module_4_spec.md](module_4_spec.md) — Step 4 rewritten for dual-horizon composites; sample YAML + dual-horizon ladder table.
+- [spec/decisions_module_4.md](decisions_module_4.md) — added D20 (dual-horizon scoring rationale).
+
+**What this unlocks for later modules (no code yet, design intent only):**
+- **Module 5** context collection at **both** horizons per ticker, with `best_horizon` as a research-depth hint.
+- **Module 6** LLM estimates appreciation at **both** horizons; final ranking by `max_H(appreciation_H / H_months)`.
+- **Module 7** forward-price outcome window aligned with the `final_horizon` chosen by Module 6's rate calc (not Module 4b's pattern-based `best_horizon`).
+- **Portfolio construction** (post-Module 6): filter top-N by `final_horizon` if trading a specific book (e.g., "top 10 3mo plays" or "top 10 12mo holdings").
+
+### Implementation pass 9 — 2026-04-24 (enable sector/industry fetch for Module 5 LLM context)
+
+**Change.** [config/filters.yaml::snapshot.fetch_descriptive_info](../config/filters.yaml): `false → true`. This re-enables Yahoo `.info` calls, populating `sector`, `industry`, `short_name`, `long_name` in `ticker_snapshot`.
+
+**Why.** Module 5's LLM context packs need company descriptors (sector + industry at minimum) to produce catalyst-search queries and valuation frames. Prior to this pass, 71.3% of the 1,423 ranked tickers had `sector=None` (1,014 of 1,423) because the pass-1 decision deferred `.info` behind this opt-in flag. The alternative (SEC EDGAR company-facts as a later Module 5 source) was considered but `.info` is already plumbed and cached end-to-end — enabling the flag is a one-line change that unblocks Module 5's design work.
+
+**Rationale for keeping the flag off at pass 1** still holds — `.info` is crumb-gated and rate-limit-prone. But we need the data now, so the cost is acceptable given the existing throttle machinery handles partial failures cleanly.
+
+**Execution** (2026-04-24 10:59 – 11:17 UTC):
+
+1. First 4a run with descriptive=true: **Yahoo IP-throttle fired at ticker ~1,500 of 2,027**. 528 tickers deferred with `status=partial` (no `fetch_error` per design). Cached snapshots intact. Phase 2 consequently rejected 536 tickers as `snapshot_unavailable`, collapsing survivors 1,446 → 1,081.
+2. Waited ~14 minutes for IP-throttle to partially clear, re-ran 4a. The `hard_filters.py:176-178` auto-refetch logic (when `fetch_descriptive=true` AND cached `sector IS NULL`) correctly surfaced only the 543 partial rows for retry — a ~4× smaller payload that did not re-trip the throttle. **Result: 2,027/2,027 fetched, throttled=0, 1,447 survivors (+1 vs pre-pass-9 baseline due to one marginal ticker moving in).**
+3. Ran `4_rank.py --rerank-only` to refresh the ranked parquet with the new snapshot data. Archetype + ranking distribution unchanged from pass 8 (1,423 ranked, 4.6% unclassified, top rank fresh_awakening, TCRX #21 deep_base_breakout, etc.) — as expected, since sector doesn't participate in scoring (D2 pure-trajectory).
+
+**Final sector coverage:**
+
+| Field | Before pass 9 | After pass 9 |
+|---|---:|---:|
+| sector populated | 409 / 1,423 (28.7%) | 1,422 / 1,423 (**99.9%**) |
+| industry populated | 409 / 1,423 (28.7%) | 1,422 / 1,423 (**99.9%**) |
+
+Top sectors in ranked set: Healthcare (379), Financial Services (219), Technology (173), Industrials (170), Consumer Cyclical (145), Real Estate (99), Basic Materials (59), Energy (55), Consumer Defensive (52), Communication Services (46), Utilities (25), unknown (1).
+
+**Retry lesson captured for future runs.** When enabling `fetch_descriptive_info` on a cold-ish snapshot cache (>1,000 tickers lacking sector), expect **one throttled run + one clean retry** at minimum. The retry is automatic — `hard_filters.py` only refetches the `partial` rows — so the second run is ~4× faster and rarely re-trips. Allow ~15 minutes wall-time between runs for the IP cap to clear. Do **not** panic and flip the flag back; the existing throttle machinery is designed for this case.
+
+**Files changed in pass 9:**
+- [config/filters.yaml](../config/filters.yaml) — `snapshot.fetch_descriptive_info: false → true` with inline comment pointing at this decision entry.
+
 ---
 
 ## Module 5 — Market Data Enrichment

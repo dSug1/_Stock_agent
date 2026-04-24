@@ -54,10 +54,21 @@ _RATIO_COLS: list[str] = list(WINDOWS_WEEKS.keys()) + [k for (k, _, _) in INTER_
 _PRICE_DATE_COLS: list[str] = [f"price_source_date_{k[2:]}w" for k in WINDOWS_WEEKS]
 
 
-def _ranked_columns(survivor_cols: list[str]) -> list[str]:
-    """Final column order for ranked_candidates_{quarter}.parquet."""
-    leading = ["rank", "ticker", "name_of_issuer", "archetype",
-               "archetype_score", "match_confidence", "composite_score"]
+def _ranked_columns(survivor_cols: list[str], horizons: list[str]) -> list[str]:
+    """Final column order for ranked_candidates_{quarter}.parquet.
+
+    Dual-horizon columns: for each horizon H, emit `score_<H>` and
+    `composite_<H>`. Plus `best_horizon` tag and `composite_best` sort key.
+    """
+    score_cols = [f"score_{h}" for h in horizons]
+    composite_cols = [f"composite_{h}" for h in horizons]
+    leading = (
+        ["rank", "ticker", "name_of_issuer", "archetype"]
+        + score_cols
+        + ["match_confidence"]
+        + composite_cols
+        + ["best_horizon", "composite_best"]
+    )
     ratios = list(_RATIO_COLS)
     prices = ["price_today"] + _PRICE_DATE_COLS + [
         "weeks_of_history_used", "young_ticker_flag",
@@ -165,33 +176,70 @@ def rank_universe(
 
     rankable = feats_df[~excluded_mask].copy().reset_index(drop=True)
 
-    # 4. Archetype matching
+    # Resolve active horizons. Default: both.
+    horizons_cfg = rcfg.get("horizons", ["3mo", "12mo"])
+    if not isinstance(horizons_cfg, list) or not horizons_cfg:
+        raise ConfigError("ranking.horizons must be a non-empty list of horizon names")
+    horizons: list[str] = [str(h) for h in horizons_cfg]
+    # Validate every active horizon is present in every archetype's scores.
+    for name, spec in archetypes.items():
+        missing = [h for h in horizons if h not in spec["scores"]]
+        if missing:
+            raise ConfigError(
+                f"archetype '{name}' missing scores for horizon(s) {missing}; "
+                f"ranking.yaml::horizons = {horizons}"
+            )
+
+    # 4. Archetype matching (one pass; scores dict carries all horizons)
     arch_names: list[str] = []
-    arch_scores: list[float] = []
+    arch_scores_list: list[dict] = []
     arch_confs: list[float] = []
     for _, r in rankable.iterrows():
-        name, score, conf = match_archetypes(
+        name, scores, conf = match_archetypes(
             r.to_dict(), archetypes, min_confidence=min_conf
         )
         arch_names.append(name)
-        arch_scores.append(score)
+        arch_scores_list.append(scores)
         arch_confs.append(conf)
     rankable["archetype"] = arch_names
-    rankable["archetype_score"] = arch_scores
     rankable["match_confidence"] = arch_confs
-    # Score-floor weighting: composite = score * (alpha + (1 - alpha) * confidence).
+
+    # Score-floor weighting: composite_H = score_H * (alpha + (1 - alpha) * confidence).
     # alpha=0 reproduces the legacy pure-multiplication formula; alpha=1 ignores
     # confidence (gate-only). Default 0.7 mirrors min_confidence so score class
-    # dominates and confidence becomes the within-class tiebreaker.
+    # dominates and confidence becomes the within-class tiebreaker. D19 holds
+    # independently per horizon.
     alpha = float(rcfg.get("confidence_floor_weight", 0.7))
     if not 0.0 <= alpha <= 1.0:
         raise ConfigError(
             f"ranking.confidence_floor_weight must be in [0, 1], got {alpha}"
         )
-    rankable["composite_score"] = (
-        rankable["archetype_score"]
-        * (alpha + (1.0 - alpha) * rankable["match_confidence"])
-    )
+    conf_mult = alpha + (1.0 - alpha) * rankable["match_confidence"]
+    for h in horizons:
+        col_score = f"score_{h}"
+        col_comp = f"composite_{h}"
+        # 0 for unclassified (empty scores dict), else the archetype's int.
+        rankable[col_score] = [
+            int(s.get(h, 0)) if s else 0 for s in arch_scores_list
+        ]
+        rankable[col_comp] = rankable[col_score].astype(float) * conf_mult
+
+    # Per-ticker best_horizon = argmax(composite_H). Ties -> "equal".
+    composite_h_cols = [f"composite_{h}" for h in horizons]
+    if len(horizons) == 1:
+        rankable["best_horizon"] = horizons[0]
+        rankable["composite_best"] = rankable[composite_h_cols[0]]
+    else:
+        comp_arr = rankable[composite_h_cols].to_numpy()
+        max_vals = comp_arr.max(axis=1)
+        best_idx = comp_arr.argmax(axis=1)
+        # Flag ties as "equal" (every horizon composite equal to max).
+        all_equal = (comp_arr == max_vals[:, None]).all(axis=1)
+        rankable["best_horizon"] = [
+            "equal" if tied else horizons[i]
+            for tied, i in zip(all_equal, best_idx)
+        ]
+        rankable["composite_best"] = max_vals
 
     if not bool(rcfg.get("include_unclassified", True)):
         rankable = rankable[rankable["archetype"] != "unclassified"].copy()
@@ -204,7 +252,7 @@ def rank_universe(
         rcfg.get("tiebreakers", ["fund_count_desc", "ticker_asc"])
     )
     merged = merged.sort_values(
-        by=["composite_score", *sort_keys],
+        by=["composite_best", *sort_keys],
         ascending=[False, *sort_asc],
         na_position="last",
         kind="stable",
@@ -216,7 +264,7 @@ def rank_universe(
         merged = merged.head(top_n).copy()
 
     # 6. Final column ordering
-    final_cols = _ranked_columns(list(survivors.columns))
+    final_cols = _ranked_columns(list(survivors.columns), horizons)
     final_cols = [c for c in final_cols if c in merged.columns]
     merged = merged[final_cols]
 
@@ -241,7 +289,7 @@ def _write_empty_ranking(survivors: pd.DataFrame, quarter: str,
     out_path = (
         config.paths.intermediate_outputs_dir / f"ranked_candidates_{quarter}.parquet"
     )
-    cols = _ranked_columns(list(survivors.columns))
+    cols = _ranked_columns(list(survivors.columns), ["3mo", "12mo"])
     empty = pd.DataFrame(columns=cols)
     empty.to_parquet(out_path, index=False, engine="pyarrow")
     return empty
@@ -311,13 +359,37 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         output_path.write_text(body, encoding="utf-8")
         return
 
-    columns = ["rank", "ticker", "name_of_issuer", "archetype",
-               "archetype_score", "match_confidence", "composite_score",
-               "fund_count", "market_cap", "sector",
-               "R_4", "R_12", "R_26", "R_52",
-               "R_4_over_R_12", "R_12_over_R_26", "R_26_over_R_52",
-               "young_ticker_flag"]
+    # Discover active horizons from column names (score_3mo, score_12mo, …).
+    horizon_cols: list[str] = []
+    for c in df.columns:
+        if c.startswith("score_"):
+            h = c[len("score_"):]
+            if f"composite_{h}" in df.columns:
+                horizon_cols.append(h)
+
+    score_cols = [f"score_{h}" for h in horizon_cols]
+    composite_cols = [f"composite_{h}" for h in horizon_cols]
+
+    columns = (
+        ["rank", "ticker", "name_of_issuer", "archetype"]
+        + score_cols
+        + ["match_confidence"]
+        + composite_cols
+        + ["best_horizon", "composite_best",
+           "fund_count", "market_cap", "sector",
+           "R_4", "R_12", "R_26", "R_52",
+           "R_4_over_R_12", "R_12_over_R_26", "R_26_over_R_52",
+           "young_ticker_flag"]
+    )
     columns = [c for c in columns if c in df.columns]
+
+    # Colour coding for best_horizon badge (cell-level).
+    horizon_bg = {"3mo": "#e0f4ff", "12mo": "#fff3cc", "equal": "#ececec"}
+    numeric_cols = set(score_cols + composite_cols) | {
+        "match_confidence", "composite_best",
+        "R_4", "R_12", "R_26", "R_52",
+        "R_4_over_R_12", "R_12_over_R_26", "R_26_over_R_52",
+    }
 
     rows_html = []
     for _, r in df.iterrows():
@@ -325,16 +397,21 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         cells = []
         for c in columns:
             v = r.get(c)
-            if c in ("rank", "fund_count"):
+            if c in ("rank", "fund_count", "market_cap"):
                 cell = f"<td class='num'>{_format_int(v)}</td>"
-            elif c == "market_cap":
-                cell = f"<td class='num'>{_format_int(v)}</td>"
-            elif c in ("archetype_score",):
-                cell = f"<td class='num'>{_format_num(v, '{:.1f}')}</td>"
-            elif c in ("match_confidence", "composite_score",
-                       "R_4", "R_12", "R_26", "R_52",
-                       "R_4_over_R_12", "R_12_over_R_26", "R_26_over_R_52"):
+            elif c in score_cols:
+                # Scores are ints; show as "+10" / "-4" for readability.
+                try:
+                    iv = int(v)
+                    cell = f"<td class='num'>{iv:+d}</td>" if iv != 0 else "<td class='num'>0</td>"
+                except (TypeError, ValueError):
+                    cell = f"<td class='num'>{_format_num(v, '{:.1f}')}</td>"
+            elif c in numeric_cols:
                 cell = f"<td class='num'>{_format_num(v)}</td>"
+            elif c == "best_horizon":
+                tag = str(v) if v is not None and not pd.isna(v) else ""
+                hbg = horizon_bg.get(tag, "#fff")
+                cell = f"<td style='background:{hbg}'>{html.escape(tag)}</td>"
             elif c == "young_ticker_flag":
                 cell = f"<td>{'Y' if bool(v) else ''}</td>"
             else:
@@ -344,10 +421,15 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         # so the JS doesn't have to parse formatted strings.
         fc_val = r.get("fund_count")
         mc_val = r.get("market_cap")
+        sec_val = r.get("sector")
         fc_attr = f" data-fund-count='{int(fc_val)}'" if pd.notna(fc_val) else ""
         mc_attr = f" data-market-cap='{int(mc_val)}'" if pd.notna(mc_val) else ""
+        if pd.notna(sec_val) and str(sec_val).strip():
+            sec_attr = f" data-sector='{html.escape(str(sec_val))}'"
+        else:
+            sec_attr = " data-sector='__missing__'"
         rows_html.append(
-            f"<tr style='background:{bg}'{fc_attr}{mc_attr}>"
+            f"<tr style='background:{bg}'{fc_attr}{mc_attr}{sec_attr}>"
             + "".join(cells) + "</tr>"
         )
 
@@ -358,6 +440,19 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
             f"<span class='lg-item' style='background:{v}'>{html.escape(k)}</span>"
         )
     legend = " ".join(legend_items)
+
+    # Sector dropdown: all non-empty sectors present in the ranked set,
+    # plus an explicit "(no sector)" option if any row is missing one.
+    sector_opts = ["<option value=''>(all sectors)</option>"]
+    if "sector" in df.columns:
+        uniq_sectors = sorted(
+            {str(s).strip() for s in df["sector"].dropna().tolist() if str(s).strip()}
+        )
+        for s in uniq_sectors:
+            sector_opts.append(f"<option value='{html.escape(s)}'>{html.escape(s)}</option>")
+        if df["sector"].isna().any() or (df["sector"].astype(str).str.strip() == "").any():
+            sector_opts.append("<option value='__missing__'>(no sector)</option>")
+    sector_options_html = "".join(sector_opts)
 
     body = f"""<!doctype html>
 <html lang='en'><head><meta charset='utf-8'>
@@ -380,6 +475,9 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
                      border: 1px solid #ccc; border-radius: 3px;
                      background: #fff; cursor: pointer; }}
   .filters button:hover {{ background: #eef; }}
+  .filters select {{ font: inherit; padding: 2px 6px;
+                     border: 1px solid #ccc; border-radius: 3px;
+                     background: #fff; }}
   .filters #row-count {{ margin-left: auto; color: #555; font-variant-numeric: tabular-nums; }}
   table {{ border-collapse: collapse; width: 100%; font-size: 0.85rem; }}
   th, td {{ padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; text-align: left; }}
@@ -394,6 +492,7 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   <label>Min funds: <input type='number' id='f-min-fc' min='0' step='1' style='width:60px' placeholder='0'></label>
   <label>Min cap $M: <input type='number' id='f-min-mc' min='0' step='10' style='width:90px' placeholder='0'></label>
   <label>Max cap $M: <input type='number' id='f-max-mc' min='0' step='100' style='width:90px' placeholder='∞'></label>
+  <label>Sector: <select id='f-sector'>{sector_options_html}</select></label>
   <button id='f-reset' type='button'>Reset</button>
   <span id='row-count'></span>
 </div>
@@ -408,6 +507,7 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   var minFc = document.getElementById('f-min-fc');
   var minMc = document.getElementById('f-min-mc');
   var maxMc = document.getElementById('f-max-mc');
+  var secSel = document.getElementById('f-sector');
   var reset = document.getElementById('f-reset');
   var counter = document.getElementById('row-count');
   var rows = document.querySelectorAll('tbody tr');
@@ -419,11 +519,13 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
     if (isNaN(minFcVal)) minFcVal = 0;
     var minMcRaw = isNaN(minMcVal) ? 0 : minMcVal * 1e6;
     var maxMcRaw = isNaN(maxMcVal) ? Infinity : maxMcVal * 1e6;
+    var secVal = secSel ? secSel.value : '';
     var visible = 0;
     for (var i = 0; i < rows.length; i++) {{
       var tr = rows[i];
       var fc = parseFloat(tr.dataset.fundCount);
       var mc = parseFloat(tr.dataset.marketCap);
+      var rowSec = tr.dataset.sector || '__missing__';
       var fcOk = isNaN(fc) ? minFcVal === 0 : fc >= minFcVal;
       var mcOk;
       if (isNaN(mc)) {{
@@ -431,7 +533,8 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
       }} else {{
         mcOk = mc >= minMcRaw && mc <= maxMcRaw;
       }}
-      var ok = fcOk && mcOk;
+      var secOk = (secVal === '') || (rowSec === secVal);
+      var ok = fcOk && mcOk && secOk;
       tr.style.display = ok ? '' : 'none';
       if (ok) visible++;
     }}
@@ -441,8 +544,10 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   minFc.addEventListener('input', applyFilters);
   minMc.addEventListener('input', applyFilters);
   maxMc.addEventListener('input', applyFilters);
+  if (secSel) secSel.addEventListener('change', applyFilters);
   reset.addEventListener('click', function() {{
     minFc.value = ''; minMc.value = ''; maxMc.value = '';
+    if (secSel) secSel.value = '';
     applyFilters();
   }});
   applyFilters();
@@ -455,7 +560,7 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
 
 def generate_ranking_report_xlsx(df: pd.DataFrame, quarter: str,
                                   output_path: Path) -> None:
-    """Write Excel with composite_score conditional formatting."""
+    """Write Excel with composite conditional formatting on each composite_* col."""
     try:
         import openpyxl  # noqa: F401
         from openpyxl.formatting.rule import ColorScaleRule
@@ -472,8 +577,10 @@ def generate_ranking_report_xlsx(df: pd.DataFrame, quarter: str,
 
     wb = openpyxl.load_workbook(output_path)
     ws = wb.active
-    if "composite_score" in df.columns:
-        col_idx = list(df.columns).index("composite_score") + 1
+    # Apply color scale to every composite_* column plus composite_best.
+    composite_cols = [c for c in df.columns if c.startswith("composite_")]
+    for col in composite_cols:
+        col_idx = list(df.columns).index(col) + 1
         col_letter = get_column_letter(col_idx)
         n = len(df)
         rng = f"{col_letter}2:{col_letter}{n + 1}"

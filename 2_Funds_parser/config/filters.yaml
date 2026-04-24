@@ -28,9 +28,11 @@ snapshot:
   #  - price-derived fields (last_close, adv_30d, market_cap = shares_out × last_close)
   #    — recomputed every run from the bars batch (chart endpoint, reliable).
   static_ttl_days: 30                    # static-field TTL; daily runs only refresh price-derived
-  fetch_descriptive_info: false          # if true, also call .info for sector/industry/names
-                                         # (slower + more rate-limit-prone; only enable when
-                                         # sector_allowlist/blocklist are actually used)
+  fetch_descriptive_info: true           # call .info for sector/industry/names.
+                                         # Enabled 2026-04-24 (pass 9) so Module 5's LLM
+                                         # context packs see sector/industry. Slower + more
+                                         # rate-limit-prone; hard_filters.py force-refetches
+                                         # any cached row missing sector when this flag is on.
   bars_batch_size: 150                   # tickers per yf.download() call for ADV bars
   info_max_workers: 4                    # parallel fast_info / .info workers
   info_rate_per_s: 2.0                   # process-global cap on info HTTPS requests
