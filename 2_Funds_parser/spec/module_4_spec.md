@@ -489,8 +489,8 @@ archetypes:
       R_4_over_R_12: [0.40, 1.30]
 
   sustained_decline:
-    score: -3
-    description: "Falling across all windows — value trap risk"
+    score: -5                            # was -3 — deepened for Minervini Stage 4 "dead money" alignment
+    description: "Falling across all windows — Minervini Stage 4 'dead money'"
     ranges:
       R_52: [0.001, 0.80]
       R_26: [0.001, 0.90]
@@ -530,8 +530,8 @@ archetypes:
 | +1  | stage2_pullback    | [0.91, 1.00]  | Weinstein Stage 2B / Livermore continuation pivotal — healthy pullback in uptrend |
 | −1  | extended_uptrend   | [−1.00, −0.91]| Past sensible-entry zone, not extreme |
 | −2  | late_stage_extension | [−2.00, −1.82]| Minervini late-stage climax run — R_4 hot, not parabolic |
-| −3  | sustained_decline  | [−3.00, −2.73]| Slow melt; could mean-revert |
 | −4  | broken_trend       | [−4.00, −3.64]| News-driven break; continuation risk |
+| −5  | sustained_decline  | [−5.00, −4.55]| Minervini Stage 4 — "dead money" |
 | −10 | parabolic_blowoff  | [−10.00, −9.10] | Imminent mean reversion |
 
 **Band-separation note.** The minimum theoretical gap between adjacent integer-score bands at α=0.7 is `0.91·s_high − s_low`. At the `+10 / +9` boundary this shrinks to 0.10, and at any `+n / +(n−1)` with `n ≥ 11` it goes negative. `deep_base_breakout = +9` is therefore the highest-score addition compatible with D19 without lowering α or widening `min_confidence`.

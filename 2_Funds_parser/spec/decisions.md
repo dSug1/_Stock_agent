@@ -540,6 +540,35 @@ Unclassified now at **4.6%** — likely the practical floor (remaining cohort is
 
 These could become later archetypes if/when Module 5 enrichment adds volatility-contraction or volume-trend features to the ratio matrix.
 
+### Implementation pass 7 — 2026-04-24 (score alignment with Minervini/Weinstein)
+
+Minor score retune following side-by-side comparison of our archetype scores against the three authors' bullish/bearish assessments of each pattern. Two misalignments identified in that review:
+
+- **`sustained_decline` at −3 was too mild.** Minervini's Stage 4 is emphatic: "avoid absolutely — dead money." Weinstein's empirical data shows Stage 4 stocks lose another 30–50% on average over the following year. Literature consensus puts this at −5 or −6.
+- **`extended_uptrend` at −1 was marginally too bearish** vs Minervini/Livermore's "trends persist — don't chase but don't short" doctrine. Authors would put it at 0 or +2 for a 12-month horizon.
+
+**Change applied:**
+- `sustained_decline`: **−3 → −5**. Now sits between `broken_trend` (−4) and `parabolic_blowoff` (−10). Ordering preserved: broken_trend (recent news-driven weakness, can bounce) less negative than sustained_decline (confirmed Stage 4 grind).
+
+**Change deferred:**
+- `extended_uptrend` stays at **−1**. No unused integer exists between +2 (`mature_uptrend`) and −1 under D19 + the convention `unclassified = 0`. The literature alignment issue here is horizon-specific — `extended_uptrend = −1` is defensible for 3-month entries (Minervini: "don't chase") but miscalibrated for 12-month holders. The clean fix is the horizon-split scoring proposed in the Module 5/6 design discussion (separate `score_3mo` and `score_12mo` columns); until that's implemented, the 3mo-appropriate −1 stays.
+
+**Band-disjointness check (all 14 bands at alpha=0.7, min_conf=0.70):**
+
+| score | band | gap to above |
+|---:|---|---:|
+| −4  | [−4.00, −3.64] | — |
+| −5  | [−5.00, −4.55] | 0.55 |
+| −10 | [−10.00, −9.10]| 4.10 |
+
+No overlaps introduced. Min gap across the full ladder remains 0.10 at the +10/+9 interface.
+
+**Re-rank outcome.** `sustained_decline` count rose 101 → 113, `broken_trend` dropped 59 → 50: the match engine's `|score|` tiebreak now prefers sustained_decline (|−5| > |−4|) on tickers that pattern-match both at equal confidence. This correctly reflects the literature — Stage 4 confirmed is worse than Stage 3→4 transition for new entries. Distribution otherwise unchanged.
+
+**Files changed in pass 7:**
+- [config/archetypes.yaml](../config/archetypes.yaml) — `sustained_decline.score: -3 → -5`.
+- [spec/module_4_spec.md](module_4_spec.md) — sample YAML + score ladder.
+
 ---
 
 ## Module 5 — Market Data Enrichment

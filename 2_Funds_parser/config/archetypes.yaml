@@ -117,8 +117,8 @@ archetypes:
       R_4_over_R_12: [0.40, 1.30]
 
   sustained_decline:
-    score: -3
-    description: "Falling across all windows — value trap risk"
+    score: -5
+    description: "Falling across all windows — Minervini Stage 4 'dead money' (score deepened −3→−5 for author alignment)"
     ranges:
       R_52: [0.001, 0.80]
       R_26: [0.001, 0.90]
