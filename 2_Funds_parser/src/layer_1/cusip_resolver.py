@@ -1,6 +1,6 @@
 """CUSIP -> ticker resolver backed by OpenFIGI, with SQLite cache.
 
-Ported verbatim from 1_Stock_Picker/src/layer_minus1/cusip_resolver.py,
+Ported verbatim from 1_not_used/src/layer_minus1/cusip_resolver.py,
 with the cache table renamed to the 2_Funds_parser schema. Behaviour is
 unchanged: batch of 10, 2.4s sleep (25 req/min), reject anything that
 isn't plain Common Stock / Depositary Receipt on a US equity exchange,

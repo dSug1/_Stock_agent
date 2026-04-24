@@ -3,7 +3,7 @@ misclassified as equities (mostly ETFs and closed-end trusts), plus
 every NULL row so the new securityType filter gets a chance to
 re-classify CUSIPs that previously returned no match.
 
-Run from 1_Stock_Picker/ with PYTHONPATH=src:
+Run from 1_not_used/ with PYTHONPATH=src:
 
     python scripts/clear_etf_cusips.py
 """

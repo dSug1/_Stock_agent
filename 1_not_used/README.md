@@ -37,7 +37,7 @@ If any API key is missing, alert me to obtain the API key before implementing th
 
 ### 3. Create `.env` at the repo root (one level above this folder)
 
-**Location:** `_Stock_agent/.env` — NOT inside `1_Stock_Picker/`.
+**Location:** `_Stock_agent/.env` — NOT inside `1_not_used/`.
 The file must be ignored by git (step 4 handles this).
 Never paste real keys into this README, commit messages, chat, or logs.
 
@@ -67,7 +67,7 @@ git check-ignore -v .env    # must print a .gitignore match line
 ### 4. Verify `.gitignore` at the repo root
 The root `.gitignore` already covers `.env`, `.venv/`, `__pycache__/`,
 `*.pyc`, `*.db`, `*.db-shm`, `*.db-wal`, and the picker's
-`1_Stock_Picker/data/_cache/` and `1_Stock_Picker/data/historical/`.
+`1_not_used/data/_cache/` and `1_not_used/data/historical/`.
 If any of those patterns are missing, append them — one per line:
 
 ```gitignore
@@ -78,8 +78,8 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
-1_Stock_Picker/data/_cache/
-1_Stock_Picker/data/historical/
+1_not_used/data/_cache/
+1_not_used/data/historical/
 .DS_Store
 ```
 

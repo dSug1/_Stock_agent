@@ -16,7 +16,7 @@ CURRENT_SCHEMA_VERSION = 7
 MARKET_VALUE_RAW_USD_CUTOFF = "2023-01-03"
 
 # Default DB location when callers pass no path. Resolved against cwd so
-# running from 1_Stock_Picker/ puts the file at 1_Stock_Picker/stockpicker.db.
+# running from 1_not_used/ puts the file at 1_not_used/stockpicker.db.
 DEFAULT_DB_PATH = Path("stockpicker.db")
 
 

@@ -1,6 +1,6 @@
 """Post-ingest diagnostic — inspect filings_log, holdings, CUSIPs, TWOS.
 
-Run from 1_Stock_Picker/ with the venv active:
+Run from 1_not_used/ with the venv active:
 
     python scripts/check_state.py
 

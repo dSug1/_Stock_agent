@@ -525,7 +525,7 @@ discovery_pipeline.py     Step 1.4 — supplementary discovery
 
 **Running quarterly updates:**
 
-All commands assume `cwd = 1_Stock_Picker/`, venv active, and
+All commands assume `cwd = 1_not_used/`, venv active, and
 `PYTHONPATH=src` — so imports use `from database.db ...` rather
 than `from src.database.db ...`.
 

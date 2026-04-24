@@ -31,7 +31,7 @@ Module 1 does **not** own: DB connection handling (Module 2's [src/database/db.p
 
 - `2_Funds_parser/config/pipeline.yaml` — global config (schema below).
 - `2_Funds_parser/config/<module_N>.yaml` — per-module configs. Module 1 validates they exist and parse as YAML; field-level schemas are enforced by the owning module.
-- `.env` at **repo root** (`C:\Users\sugit\Documents\Claude\_Stock_agent\.env`) — API keys. Shared with `1_Stock_Picker/`; not duplicated inside `2_Funds_parser/`.
+- `.env` at **repo root** (`C:\Users\sugit\Documents\Claude\_Stock_agent\.env`) — API keys. Shared with `1_not_used/`; not duplicated inside `2_Funds_parser/`.
 
 ## Outputs
 

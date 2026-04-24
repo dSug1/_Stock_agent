@@ -1,13 +1,13 @@
 @echo off
 REM ============================================================
 REM Stock Picker daily driver.
-REM Lives inside 1_Stock_Picker/ (moved here from repo root so
+REM Lives inside 1_not_used/ (moved here from repo root so
 REM the whole picker project is self-contained). The shared
 REM venv is still at the repo root (..\.venv\).
 REM
 REM Schedule in Windows Task Scheduler:
 REM   Actions tab -> Start a program -> this .bat
-REM   Start in:   ...\_Stock_agent\1_Stock_Picker
+REM   Start in:   ...\_Stock_agent\1_not_used
 REM   Run as the user who owns the venv.
 REM
 REM Cadence (Step 1.2 scope):
@@ -31,7 +31,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- Set import root (cwd is already 1_Stock_Picker\) -------
+REM --- Set import root (cwd is already 1_not_used\) -------
 set "PYTHONPATH=src"
 
 REM --- Ensure log dir exists ----------------------------------

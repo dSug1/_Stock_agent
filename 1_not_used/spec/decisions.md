@@ -151,13 +151,13 @@ relevant layer spec.
 
 ### Orchestrator
 - **Entry point:** [run_1_Stock_Picker.bat](../run_1_Stock_Picker.bat)
-  in `1_Stock_Picker/`, scheduled daily at 18:00 via Windows Task
+  in `1_not_used/`, scheduled daily at 18:00 via Windows Task
   Scheduler. Renamed from `run_stockpicker.bat` and moved from the
-  repo root into `1_Stock_Picker/` so the picker project is
+  repo root into `1_not_used/` so the picker project is
   self-contained; the shared venv at `../.venv/` is still activated
   one level up from the .bat.
 - **Orchestrator:** [daily_orchestrator.py](../scripts/daily_orchestrator.py)
-  at `1_Stock_Picker/scripts/`.
+  at `1_not_used/scripts/`.
 - **PYTHONPATH=src** (not `.`), consistent with
   [CLAUDE.md](../CLAUDE.md). Imports are `from database.db ...`
   and `from layer_minus1.X ...`.
@@ -175,7 +175,7 @@ relevant layer spec.
   branch + a heartbeat-only default.
 - **Weekends:** heartbeat log entry only.
 
-### Scripts that exist in `1_Stock_Picker/scripts/`
+### Scripts that exist in `1_not_used/scripts/`
 Source of truth: `ls scripts/`.
 - `check_state.py` — ad-hoc DB state inspection.
 - `clear_etf_cusips.py` — deletes known non-equity tickers + all

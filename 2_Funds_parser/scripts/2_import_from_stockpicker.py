@@ -1,6 +1,6 @@
-"""One-shot pre-seed: copy 13F data from 1_Stock_Picker/stockpicker.db.
+"""One-shot pre-seed: copy 13F data from 1_not_used/stockpicker.db.
 
-Rationale: 1_Stock_Picker has already ingested 13F-HR filings for many
+Rationale: 1_not_used has already ingested 13F-HR filings for many
 of the same CIKs tracked here. Copying that data once saves ~25
 filings * N overlapping funds of EDGAR/OpenFIGI round-trips on the
 very first run.
@@ -23,7 +23,7 @@ safe and a no-op after the first success.
 Usage:
     python 2_Funds_parser/scripts/2_import_from_stockpicker.py
     python 2_Funds_parser/scripts/2_import_from_stockpicker.py \\
-        --source ../1_Stock_Picker/stockpicker.db
+        --source ../1_not_used/stockpicker.db
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ if str(SRC) not in sys.path:
 
 from database.db import get_connection  # noqa: E402
 
-DEFAULT_SOURCE_DB = REPO_ROOT / "1_Stock_Picker" / "stockpicker.db"
+DEFAULT_SOURCE_DB = REPO_ROOT / "1_not_used" / "stockpicker.db"
 
 
 def build_cik_map(

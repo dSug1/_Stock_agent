@@ -1,5 +1,5 @@
 """One-shot verification: compare each fund in
-Input/list_of_funds.xlsx against 1_Stock_Picker/stockpicker.db
+Input/list_of_funds.xlsx against 1_not_used/stockpicker.db
 institutions table.
 
 For each row:
@@ -25,7 +25,7 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 XLSX = REPO_ROOT / "2_Funds_parser" / "Input" / "list_of_funds.xlsx"
-DB = REPO_ROOT / "1_Stock_Picker" / "stockpicker.db"
+DB = REPO_ROOT / "1_not_used" / "stockpicker.db"
 
 # Tokens that carry no identity information in fund names.
 STOPWORDS = {

@@ -13,8 +13,8 @@ __pycache__/
 
 # Cached stock data (regenerated at runtime)
 _outputs/cache/
-1_Stock_Picker/data/_cache/
-1_Stock_Picker/data/historical/
+1_not_used/data/_cache/
+1_not_used/data/historical/
 
 # SQLite databases
 *.db

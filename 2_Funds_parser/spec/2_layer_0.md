@@ -5,7 +5,7 @@ one canonical SEC CIK per fund. Every later layer (filing fetch,
 holdings parse, etc.) reads from this table; nothing writes to it
 except the seeder.
 
-**Design intent.** Deliberately simpler than the 1_Stock_Picker
+**Design intent.** Deliberately simpler than the 1_not_used
 `institutions` table: no tier, no multiplier, no tier_label, no
 primary_coverage, no processing_status. A fund either is in the
 registry or isn't. Downstream layers decide what to do with it;
@@ -108,11 +108,11 @@ downstream EDGAR lookups work.
 
 ---
 
-## Deviations from 1_Stock_Picker
+## Deviations from 1_not_used
 
 For traceability to the prior project:
 
-| Concern                   | 1_Stock_Picker (Layer −1.1)                                  | 2_Funds_parser (Layer 0)            |
+| Concern                   | 1_not_used (Layer −1.1)                                  | 2_Funds_parser (Layer 0)            |
 |---------------------------|--------------------------------------------------------------|--------------------------------------|
 | Table                     | `institutions`                                               | `funds`                              |
 | Tier / multiplier         | `tier`, `tier_label`, `multiplier` columns (1A..4, 0.0×..4.0×) | Not modelled.                        |

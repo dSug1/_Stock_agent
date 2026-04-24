@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS funds (
 
 CREATE INDEX IF NOT EXISTS idx_funds_name ON funds(name);
 
--- One row per (fund, filing_date, cusip). Matches 1_Stock_Picker's
+-- One row per (fund, filing_date, cusip). Matches 1_not_used's
 -- institution_holdings shape but keyed on funds.id.
 CREATE TABLE IF NOT EXISTS holdings (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -5,7 +5,7 @@ filer names EDGAR returns.
 The intent is human-in-the-loop: this script lists candidates; you
 verify on EDGAR and update institution_registry.py manually.
 
-Run from 1_Stock_Picker/ with PYTHONPATH=src:
+Run from 1_not_used/ with PYTHONPATH=src:
 
     python scripts/find_cik_candidates.py
 """

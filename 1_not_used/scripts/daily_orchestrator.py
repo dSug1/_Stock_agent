@@ -18,7 +18,7 @@ quarterly-cadence dataset. Saturday was chosen so the work
 runs when markets are closed and no interactive session is
 likely to be competing for the DB file.
 
-Invocation assumes cwd = 1_Stock_Picker/ and PYTHONPATH=src,
+Invocation assumes cwd = 1_not_used/ and PYTHONPATH=src,
 set by the parent run_1_Stock_Picker.bat.
 """
 from __future__ import annotations

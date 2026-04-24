@@ -4,7 +4,7 @@ Answers: how many tickers sit at each score range, how many survive
 each active-threshold candidate, and what kinds of tickers slip into
 active monitoring with no Tier 1A/1B holder.
 
-Run from 1_Stock_Picker/ with PYTHONPATH=src:
+Run from 1_not_used/ with PYTHONPATH=src:
 
     python scripts/twos_distribution.py
 """

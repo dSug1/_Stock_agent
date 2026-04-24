@@ -1,6 +1,6 @@
 """EDGAR 13F-HR fetcher + parser + ingester for 2_Funds_parser.
 
-Ported from 1_Stock_Picker/src/layer_minus1/edgar_13f_parser.py and
+Ported from 1_not_used/src/layer_minus1/edgar_13f_parser.py and
 simplified: no tier/multiplier/classification/TWOS. Just:
 
     EDGAR submissions API -> list 13F-HR filings filtered by filing_date
@@ -283,7 +283,7 @@ def backfill_missing_issuer_names(
 ) -> dict:
     """Fill in `holdings.name_of_issuer` for filings that already have a
     filings_log row but were ingested before `name_of_issuer` existed
-    (e.g., pre-seeded from 1_Stock_Picker). Re-downloads the info-table
+    (e.g., pre-seeded from 1_not_used). Re-downloads the info-table
     XML once per affected filing and UPDATEs matching rows by CUSIP.
 
     Idempotent: once a filing's rows are filled, it no longer matches

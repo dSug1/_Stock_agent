@@ -1,6 +1,6 @@
 """Top-N tickers by TWOS score for the latest run.
 
-Run from 1_Stock_Picker/ with PYTHONPATH=src:
+Run from 1_not_used/ with PYTHONPATH=src:
 
     python scripts/top_twos.py          # default: top 30
     python scripts/top_twos.py 50       # top 50

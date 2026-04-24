@@ -8,7 +8,7 @@ market_value) into SQLite. Running the script a second time with no
 new SEC filings is a no-op.
 
 **Design intent.** Port the proven logic from
-`1_Stock_Picker/src/layer_minus1/edgar_13f_parser.py` and
+`1_not_used/src/layer_minus1/edgar_13f_parser.py` and
 `cusip_resolver.py` into this project with **no policy layer on top**.
 This means: no tier/multiplier, no change-type classification, no
 TWOS scoring, no primary-coverage weighting. Just the raw positions
@@ -41,7 +41,7 @@ holdings (fund_id, filing_date, cusip, ticker, shares, market_value)
 filings_log (fund_id, accession_number, parse_status, ...)
 ```
 
-**filing_date only.** Matches 1_Stock_Picker critical constraint #1:
+**filing_date only.** Matches 1_not_used critical constraint #1:
 we filter on `filing_date` (when the filer actually filed), not on
 `period_of_report` (which can be months earlier and gets amended).
 `period_of_report` is captured and stored but never used as a filter.
@@ -185,7 +185,7 @@ different security. Current recovery: ~9% of holdings move from
 NULL ticker to `sec_name` ticker; the remaining ~30% are delisted
 or acquired issuers SEC no longer lists.
 
-Filtering rules (preserved verbatim from 1_Stock_Picker):
+Filtering rules (preserved verbatim from 1_not_used):
 - Accept only `exchCode ∈ {US, UN, UA, UW, UR}`.
 - Accept only `securityType` or `securityType2` equal to
   `"Common Stock"` or `"Depositary Receipt"`.
@@ -202,7 +202,7 @@ Filtering rules (preserved verbatim from 1_Stock_Picker):
 ## Start-date default
 
 `DEFAULT_FROM_DATE = "2025-01-01"` — matches the default used by
-1_Stock_Picker's `ingest_all_institutions`. The reasoning there was
+1_not_used's `ingest_all_institutions`. The reasoning there was
 that pre-2025 filings are stale for catalyst attribution purposes.
 For 2_Funds_parser the scope is broader (fund-following, not
 catalyst extraction), so this default is a compromise to keep the
@@ -233,7 +233,7 @@ a fund has filed a fresh 13F-HR since the last run.
 
 ### [scripts/2_import_from_stockpicker.py](../scripts/2_import_from_stockpicker.py)
 
-**One-shot** pre-seed from `1_Stock_Picker/stockpicker.db`. Intended
+**One-shot** pre-seed from `1_not_used/stockpicker.db`. Intended
 to be run *once*, before the first `2_ingest_13f.py` call, so the
 first ingest doesn't re-hit EDGAR/OpenFIGI for data we already have.
 
@@ -251,7 +251,7 @@ UNIQUE constraints.
 ```
 python 2_Funds_parser/scripts/2_import_from_stockpicker.py
 python 2_Funds_parser/scripts/2_import_from_stockpicker.py \
-    --source ../1_Stock_Picker/stockpicker.db
+    --source ../1_not_used/stockpicker.db
 ```
 
 After pre-seed, subsequent `2_ingest_13f.py` runs will consult EDGAR
@@ -274,9 +274,9 @@ the 10 non-overlapping funds.
 
 ---
 
-## Differences from 1_Stock_Picker Layer −1
+## Differences from 1_not_used Layer −1
 
-| Concern                   | 1_Stock_Picker                                                   | 2_Funds_parser                              |
+| Concern                   | 1_not_used                                                   | 2_Funds_parser                              |
 |---------------------------|-------------------------------------------------------------------|---------------------------------------------|
 | Ingest entry point        | `ingest_all_institutions`                                         | `ingest_all_funds`                          |
 | Driver script             | Called by `daily_orchestrator.py`                                | Manual CLI only                             |
@@ -318,7 +318,7 @@ Name of Issuer (case-insensitive); holdings whose name has not yet
 been retrieved fall to the bottom of the table with blank cells.
 
 **Name-of-issuer backfill.** `name_of_issuer` was added to the
-schema after the Layer-1 pre-seed from 1_Stock_Picker, so the
+schema after the Layer-1 pre-seed from 1_not_used, so the
 24,235 pre-seeded rows originally had NULL in that column.
 [`ingest_all_funds`](../src/layer_1/edgar_13f.py) runs a
 `backfill_missing_issuer_names` pass on every invocation: it finds
@@ -367,7 +367,7 @@ only be re-seeded when column A changes. Same for
   batch failure, so re-running recovers gracefully.
 - **SEC submissions-index pagination.** `recent` returns up to ~1000
   filings. For funds that file very frequently, older filings are in
-  `files[]` with separate URLs. 1_Stock_Picker never needed this;
+  `files[]` with separate URLs. 1_not_used never needed this;
   if a fund in this registry exceeds it, add pagination before
   running with `--from-date` earlier than 2020.
 - **Malformed XML.** `parse_13f_xml` catches `ET.ParseError` and

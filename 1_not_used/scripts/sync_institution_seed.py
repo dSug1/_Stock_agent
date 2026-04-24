@@ -10,7 +10,7 @@ the registry, the DB still holds the old value. This script:
     has no ON DELETE CASCADE).
   * Leaves rows that match the seed untouched.
 
-Run from 1_Stock_Picker/ with PYTHONPATH=src:
+Run from 1_not_used/ with PYTHONPATH=src:
 
     python scripts/sync_institution_seed.py
 """

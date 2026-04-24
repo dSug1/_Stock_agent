@@ -6,7 +6,7 @@ For each: hit EDGAR's submissions endpoint and classify it as
     NO_13F-HR    — seeded CIK never filed a 13F-HR (wrong entity)
     FETCH_ERROR  — submissions endpoint unreachable or malformed
 
-Run from 1_Stock_Picker/ with PYTHONPATH=src so the edgar client
+Run from 1_not_used/ with PYTHONPATH=src so the edgar client
 module resolves:
 
     python scripts/probe_missing_ciks.py

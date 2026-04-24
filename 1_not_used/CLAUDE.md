@@ -1,16 +1,16 @@
 # Stock Picker — Claude Code Project
 
 ## Environment setup
-- Virtual environment: ../.venv/ (one level above 1_Stock_Picker/)
-- Working directory for all commands: 1_Stock_Picker/
-- PYTHONPATH must be set to src (source root lives at 1_Stock_Picker/src/)
+- Virtual environment: ../.venv/ (one level above 1_not_used/)
+- Working directory for all commands: 1_not_used/
+- PYTHONPATH must be set to src (source root lives at 1_not_used/src/)
 - Activate before any terminal command:
-    Windows: ..\.venv\Scripts\activate (from 1_Stock_Picker/)
+    Windows: ..\.venv\Scripts\activate (from 1_not_used/)
     Mac/Linux: source ../.venv/bin/activate
     Then: set PYTHONPATH=src (Windows cmd)
           $env:PYTHONPATH="src" (Windows PowerShell)
           export PYTHONPATH=src (Mac/Linux)
-- Default DB path: stockpicker.db (resolved relative to cwd = 1_Stock_Picker/)
+- Default DB path: stockpicker.db (resolved relative to cwd = 1_not_used/)
 
 ## What this is
 Autonomous stock picker for a $75,000 real-money portfolio.
