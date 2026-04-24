@@ -2145,8 +2145,12 @@
         } else {
           entry.sepEl.remove();  // remove trailing separator
         }
-        // Mark closest
-        entry.rowEl.classList.toggle('closest', i === 0);
+        // Mark closest by billboard identity, NOT by visual row index.
+        // In percent-sort mode the top visual row may be a non-closest
+        // billboard (the most-negative-% one) — state 2 hides every
+        // non-.closest row, so keying on identity is what guarantees the
+        // correct row stays visible.
+        entry.rowEl.classList.toggle('closest', bb === _closestInteractive);
       }
 
       // Rows are always rendered at their natural fixed size — no font
@@ -3479,6 +3483,14 @@
       _closestInteractive = null;
       for (let i = ordered.length - 1; i >= 0; i--) {
         if (ordered[i].b.interactive) { _closestInteractive = ordered[i].b; break; }
+      }
+      // While a row-click / giraffe-click rotation is in flight, the clicked
+      // billboard hasn't yet become geometrically closest — but the UI
+      // (overlay, state-2 detail, .closest row) must reflect the user's intent
+      // immediately. Override until _clickOrbitTarget is cleared by the
+      // rotation loop.
+      if (_clickOrbitTarget && _clickOrbitTarget.interactive) {
+        _closestInteractive = _clickOrbitTarget;
       }
 
       for (let rank = 0; rank < ordered.length; rank++) {

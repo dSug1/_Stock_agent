@@ -177,3 +177,20 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 **Where:** [index.html:2287-2302](../index.html#L2287) `toggleMarkerInputRow()`; [index.html:2076-2086](../index.html#L2076) stale-entry loop in `buildTickerListRows()`.
 
 **Invariant for future changes.** Any code path that removes a focused input from the DOM must blur it first and clear the window selection. Treat `input.select()` as leaving residue; pair it with an explicit cleanup on close.
+
+---
+
+## D15 — Closest-billboard is identity-based, and overridden by `_clickOrbitTarget` during rotation
+
+**Problem (2026-04-24).** Two separate bugs compounded when the ticker list was in percent-sort mode:
+
+1. **`.closest` was keyed on visual row index (`i === 0`).** In percent-sort mode the top visual row is the most-negative-%Δ billboard, not the angularly-closest one. State 2's CSS (`body.chat-open.chat-expanded .tl-row:not(.closest) { display: none; }`) therefore showed the wrong row as the "only one".
+2. **`_closestInteractive` is recomputed each frame from camera distance.** When the user clicked a giraffe button on a non-closest row, `_clickOrbitTarget` queued a camera rotation — but the clicked billboard does not become geometrically closest until the rotation completes. During the transition, the overlay, state-2 detail, and `.closest` row all pointed at the old billboard. The giraffe click appeared to jump to the wrong ticker.
+
+**Decision.**
+- `updateBillboardProjection()` still computes `_closestInteractive` from camera distance, then **overrides** it with `_clickOrbitTarget` while a rotation is in flight. This makes `_closestInteractive` an "intent-aware" pointer: what the UI should be anchored on *right now*, not strictly what's geometrically closest.
+- `buildTickerListRows()` marks `.closest` by **identity** (`bb === _closestInteractive`) instead of visual position. In default sort mode the two are equivalent (closest sorts to index 0); in percent-sort mode the identity check keeps state 2 showing the correct billboard.
+
+**Where:** [index.html:3479-3492](../index.html#L3479) (`updateBillboardProjection()` override block); [index.html:2149-2155](../index.html#L2149) (`.closest` identity check in `buildTickerListRows()`).
+
+**Invariant for future changes.** `_closestInteractive` is the single source of truth for "which billboard does the UI represent". Any new UI surface that needs to track the selected billboard must read `_closestInteractive`, not re-derive from distance or from ticker-list row position.
