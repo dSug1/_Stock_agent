@@ -358,17 +358,6 @@
       color: var(--text);
       font-size: 13px;
     }
-    #chat-body .cb-ticker {
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--accent, #58a6ff);
-      margin-bottom: 4px;
-    }
-    #chat-body .cb-company {
-      font-size: 13px;
-      opacity: 0.7;
-      margin-bottom: 12px;
-    }
     #chat-body .cb-placeholder {
       font-size: 12px;
       opacity: 0.5;
@@ -761,8 +750,6 @@
       cursor: pointer;
       position: relative;  /* for absolute-positioned .tl-plus */
     }
-    .tl-row:hover .tl-ticker { color: var(--accent, #58a6ff); }
-    .tl-row.closest .tl-ticker { color: var(--accent, #58a6ff); }
     .tl-ticker {
       font-size: calc(13px * var(--ticker-row-scale, 1));
       font-weight: 700;
@@ -2498,15 +2485,11 @@
       _detailLastTicker = ticker;
       $chatBody.replaceChildren();
       if (!ticker) return;
-      const h = document.createElement('div');
-      h.className = 'cb-ticker';
-      h.textContent = ticker;
-      const c = document.createElement('div');
-      c.className = 'cb-company';
-      c.textContent = company;
+      // Ticker + company are already shown in the state-2 top row
+      // (#ticker-list's .closest .tl-row) — no need to repeat them here.
       const targets = document.createElement('div');
       targets.className = 'cb-targets';
-      $chatBody.append(h, c, targets);
+      $chatBody.append(targets);
       renderEntryTargets(targets, ticker);
     }
 

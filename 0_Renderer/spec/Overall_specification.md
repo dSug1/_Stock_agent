@@ -255,7 +255,7 @@ Three states, toggled by the `+` / `←` buttons in the top-right of the overlay
 |---|---|
 | **Bottom bar** (default) | Not "chat-open". Single-row `po-row1` + `po-row2` (pre/post-market) price overlay at the bottom. |
 | **State 1** (chat-open) | Right 1/3 of the screen. Shows a scrollable ticker-list — one row per ring billboard, closest on top. Each row shows ticker / company / price / change plus a `+` button that opens an inline entry-target input. |
-| **State 2** (chat-open, chat-expanded) | Full-height overlay. Only the closest billboard's row is shown, with all entry-target inputs visible below. Used for deep edit of a single ticker. |
+| **State 2** (chat-open, chat-expanded) | Full-height overlay. Only the closest billboard's row is shown (ticker, company, price, change, status); the `#chat-body` panel below it holds only the entry-target input list — no duplicated ticker/company header. Used for deep edit of a single ticker. |
 
 State-2 UI also includes a **second entry price / text field** — if it parses as a positive float it is broadcast to the chart iframe as `target2`, which renders a second target label (blue if current < target, orange if current > target).
 
