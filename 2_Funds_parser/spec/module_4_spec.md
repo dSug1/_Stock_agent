@@ -381,9 +381,9 @@ Write Parquet to `_intermediate_outputs/`. Generate HTML and Excel reports to `O
 ### Config schemas
 
 ```yaml
-# config/archetypes.yaml — 11 archetypes, all unique integer scores (D19, 2026-04-24)
+# config/archetypes.yaml — 12 archetypes, all unique integer scores (D19, updated 2026-04-24)
 # Composite-score bands disjoint by construction at alpha=0.7, min_confidence=0.70
-# (min gap between adjacent classes = 0.37).
+# (min gap between adjacent classes = 0.10, between +10 and +9).
 
 archetypes:
   fresh_awakening:
@@ -396,6 +396,15 @@ archetypes:
       R_4:            [1.02, 1.15]
       R_12_over_R_26: [1.05, 1.40]
       R_26_over_R_52: [0.95, 1.15]
+
+  deep_base_breakout:
+    score: 9
+    description: "Deep intra-year crash, multi-month base, now breaking out (VCP-style)"
+    ranges:
+      R_4:            [1.10, 1.30]
+      R_26:           [0.30, 0.80]
+      R_52:           [0.50, 1.00]
+      R_12_over_R_26: [1.30, 5.00]
 
   early_breakout:
     score: 7
@@ -492,17 +501,20 @@ archetypes:
 
 | Score | Archetype | Composite band | Role on 3mo horizon |
 |------:|-----------|----------------|---------------------|
-| +10 | fresh_awakening   | [9.10, 10.00] | Asymmetric upside; base + recent awakening |
-| +7  | early_breakout    | [6.37, 7.00]  | Move started, not parabolic |
-| +6  | post_crash_rebase | [5.46, 6.00]  | Deep-drawdown stabiliser; 3mo bounce candidate |
-| +5  | v_recovery        | [4.55, 5.00]  | Mid-period dip + recent strength, year up |
-| +4  | shallow_rebase    | [3.64, 4.00]  | Mild decline turning up |
-| +3  | quiet_compression | [2.73, 3.00]  | Coiled spring; upward base skew but no catalyst |
-| +2  | mature_uptrend    | [1.82, 2.00]  | Trend intact, limited 3mo headroom |
-| −1  | extended_uptrend  | [−1.00, −0.91]| Past sensible-entry zone, not extreme |
-| −3  | sustained_decline | [−3.00, −2.73]| Slow melt; could mean-revert |
-| −4  | broken_trend      | [−4.00, −3.64]| News-driven break; continuation risk |
-| −10 | parabolic_blowoff | [−10.00, −9.10] | Imminent mean reversion |
+| +10 | fresh_awakening    | [9.10, 10.00] | Asymmetric upside; base + recent awakening |
+| +9  | deep_base_breakout | [8.19, 9.00]  | Crash + multi-month base + breakout (VCP-style); deepest value entry with directional confirmation |
+| +7  | early_breakout     | [6.37, 7.00]  | Move started, not parabolic |
+| +6  | post_crash_rebase  | [5.46, 6.00]  | Deep-drawdown stabiliser; 3mo bounce candidate |
+| +5  | v_recovery         | [4.55, 5.00]  | Mid-period dip + recent strength, year up |
+| +4  | shallow_rebase     | [3.64, 4.00]  | Mild decline turning up |
+| +3  | quiet_compression  | [2.73, 3.00]  | Coiled spring; upward base skew but no catalyst |
+| +2  | mature_uptrend     | [1.82, 2.00]  | Trend intact, limited 3mo headroom |
+| −1  | extended_uptrend   | [−1.00, −0.91]| Past sensible-entry zone, not extreme |
+| −3  | sustained_decline  | [−3.00, −2.73]| Slow melt; could mean-revert |
+| −4  | broken_trend       | [−4.00, −3.64]| News-driven break; continuation risk |
+| −10 | parabolic_blowoff  | [−10.00, −9.10] | Imminent mean reversion |
+
+**Band-separation note.** The minimum theoretical gap between adjacent integer-score bands at α=0.7 is `0.91·s_high − s_low`. At the `+10 / +9` boundary this shrinks to 0.10, and at any `+n / +(n−1)` with `n ≥ 11` it goes negative. `deep_base_breakout = +9` is therefore the highest-score addition compatible with D19 without lowering α or widening `min_confidence`.
 
 ```yaml
 # config/ranking.yaml

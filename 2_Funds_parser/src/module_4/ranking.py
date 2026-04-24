@@ -266,18 +266,19 @@ def _resolve_tiebreakers(tiebreakers: list[str]) -> tuple[list[str], list[bool]]
 # ─── Reports ─────────────────────────────────────────────────────────────────
 
 _ARCHETYPE_PALETTE = {
-    "fresh_awakening":   "#cfe9ff",
-    "early_breakout":    "#dff5e3",
-    "post_crash_rebase": "#fff1c2",
-    "v_recovery":        "#d6f0d6",
-    "shallow_rebase":    "#f0f5c2",
-    "quiet_compression": "#e3f5d6",
-    "mature_uptrend":    "#f0e6ff",
-    "extended_uptrend":  "#ffe9c2",
-    "sustained_decline": "#f3d7d7",
-    "broken_trend":      "#ffe0c2",
-    "parabolic_blowoff": "#ffd6d6",
-    "unclassified":      "#eeeeee",
+    "fresh_awakening":    "#cfe9ff",
+    "deep_base_breakout": "#c2ecff",
+    "early_breakout":     "#dff5e3",
+    "post_crash_rebase":  "#fff1c2",
+    "v_recovery":         "#d6f0d6",
+    "shallow_rebase":     "#f0f5c2",
+    "quiet_compression":  "#e3f5d6",
+    "mature_uptrend":     "#f0e6ff",
+    "extended_uptrend":   "#ffe9c2",
+    "sustained_decline":  "#f3d7d7",
+    "broken_trend":       "#ffe0c2",
+    "parabolic_blowoff":  "#ffd6d6",
+    "unclassified":       "#eeeeee",
 }
 
 

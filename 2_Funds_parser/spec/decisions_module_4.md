@@ -133,7 +133,7 @@
 **Rationale:** User tunes pipeline without code edits. Version control on configs tracks tuning history.
 
 **Alternatives considered:**
-- Hardcoded defaults with CLI overrides — rejected: doesn't scale to 11 archetypes × up to 6 ranges each.
+- Hardcoded defaults with CLI overrides — rejected: doesn't scale to 12 archetypes × up to 6 ranges each.
 
 ---
 
@@ -220,15 +220,29 @@
 
 ## D19 — Unique integer archetype scores (disjoint composite-score bands)
 
-**Decision:** Every archetype in `archetypes.yaml` must have a **unique integer `score`**. With `alpha = 0.7` and `min_confidence = 0.70`, this guarantees the composite-score ranges of different archetypes never overlap, because the multiplier band `[alpha + (1-alpha)·min_conf, 1]` = `[0.91, 1.00]` is narrower than 1 unit of score. Minimum adjacent-class composite gap = 0.37.
+**Decision:** Every archetype in `archetypes.yaml` must have a **unique integer `score`**. With `alpha = 0.7` and `min_confidence = 0.70`, this guarantees the composite-score ranges of different archetypes never overlap, because the multiplier band `[alpha + (1-alpha)·min_conf, 1]` = `[0.91, 1.00]` is narrower than 1 unit of score for scores in `[−10, +10]`.
 
 **Rationale:** Two archetypes with the same score produce identical composite ranges — a ticker's score class becomes ambiguous whenever confidence happens to align. Keeping scores unique makes the composite score monotonically partition tickers into named classes, so downstream Module 5/6 consumers can treat the score as a reliable bucket identifier. It also means calibration changes that move an archetype's score can be validated by a single invariant (the "all scores unique" check) rather than re-deriving band overlaps by hand.
 
 **Consequence:** When tweaking scores in a calibration pass, a retune cannot collide with an existing score. Example: softening `broken_trend` from −5 cannot use −3 (taken by `sustained_decline`); it must use −4 (or −2, −6, …). This was the constraint that drove pass 4's score choices (`quiet_compression` → +3, `broken_trend` → −4).
 
+**Bounds.** The gap between adjacent integer-score bands at α=0.7 equals `0.91·s_high − s_low` (positive numerator). For `s_high − s_low = 1`, the gap shrinks as the score magnitude grows:
+
+| s_low | s_high | gap |
+|---:|---:|---:|
+| 6 | 7  | 0.37 |
+| 7 | 8  | 0.28 |
+| 8 | 9  | 0.19 |
+| 9 | 10 | 0.10 |
+| 10 | 11 | 0.01 |
+| 11 | 12 | −0.08 (OVERLAP) |
+
+Current minimum gap (post pass 5) is **0.10**, between `fresh_awakening` (+10) and `deep_base_breakout` (+9). Scores outside `[−10, +10]` are prohibited without first lowering α or raising `min_confidence`.
+
 **Alternatives considered:**
 - Allow duplicate scores, treat overlaps as tied — rejected: fragile, consumers downstream would have to special-case ties on composite_score rather than trusting it as a partition.
 - Use non-integer scores (e.g. 2.5, 5.5) — rejected: harder to read, no practical benefit over picking a different integer.
+- Expand the score range beyond ±10 — rejected without an α re-design: at α=0.7 even `+11` collides with `+10` (gap = 0.01) and `+12` overlaps outright. If more than 21 distinct archetype classes are ever needed, lower α first.
 
 ---
 

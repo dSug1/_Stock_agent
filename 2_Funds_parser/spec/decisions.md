@@ -418,6 +418,56 @@ Unclassified roughly halved. The remaining 14% is long-tail (high-R_52 outliers,
 
 **No code changes.** No Yahoo calls. Memory `project_module4b_archetype_calibration_blocker` now closed.
 
+### Implementation pass 5 — 2026-04-24 (TCRX-driven: `deep_base_breakout` archetype)
+
+Calibration pass triggered by TCRX (rank #930, composite=0) sitting unclassified despite a textbook **crash → base → breakout** trajectory: R_52=0.75, R_26=0.52, R_12=1.18, R_4=1.21. Price path today $1.20: 52w ago $1.60 → 26w peak $2.31 → 12w post-crash $1.02 → 4w base $0.99 → today $1.20 (+21% breakout). No existing archetype captured this:
+
+- `post_crash_rebase` requires R_26 ≈ 1.0 (assumes year-long crash) and R_4 ≤ 1.08 (no breakout yet).
+- `v_recovery` requires R_52 ≥ 1.00 (year up) — TCRX is year down.
+- `shallow_rebase` requires R_26 ≥ 0.85 — TCRX is 0.52 (too deep).
+
+**Added archetype:**
+
+```yaml
+deep_base_breakout:
+  score: 9
+  ranges:
+    R_4:            [1.10, 1.30]   # breaking out, not parabolic
+    R_26:           [0.30, 0.80]   # deep intra-year crash
+    R_52:           [0.50, 1.00]   # year still down
+    R_12_over_R_26: [1.30, 5.00]   # meaningful bounce from crash low
+```
+
+**Score placement +9 (between `fresh_awakening` +10 and `early_breakout` +7).** On a 3-month horizon, breakouts from long post-crash bases are empirically the strongest setup (convergent evidence from Minervini, Weinstein, Livermore). The crash provides a deeper cost basis than `fresh_awakening`'s flat base, but the breakout is already underway (R_4 > 1.10), so some asymmetric move has already occurred. Hence +9 not +10. This is the highest-score addition compatible with D19 at α=0.7, min_conf=0.70 — see decisions_module_4.md § D19 for the s ≤ 10 constraint.
+
+**Re-rank outcome (`4_rank.py --rerank-only`, 1,423-row ranking):**
+
+| archetype | pre-pass-5 | post-pass-5 |
+|---|---:|---:|
+| fresh_awakening (+10)     |  13 |  13 |
+| deep_base_breakout (+9)   |  —  | **130** |
+| early_breakout (+7)       | 159 | 153 |
+| post_crash_rebase (+6)    |  22 |  22 |
+| v_recovery (+5)           | 425 | 396 |
+| shallow_rebase (+4)       |  47 |  45 |
+| quiet_compression (+3)    |  12 |  12 |
+| mature_uptrend (+2)       | 191 | 191 |
+| extended_uptrend (−1)     | 103 | 103 |
+| sustained_decline (−3)    | 152 | 101 |
+| broken_trend (−4)         |  68 |  68 |
+| parabolic_blowoff (−10)   |  31 |  31 |
+| **unclassified (0)**      | **200 (14.1%)** | **158 (11.1%)** |
+
+**TCRX placement.** Now rank #21, archetype `deep_base_breakout`, confidence 1.00, composite_score 9.0 (up from unclassified/0.0).
+
+**Where the 130 came from.** 42 fresh classifications from `unclassified`; the rest reclassified from `sustained_decline` (51 stolen — these had recent R_4 strength that the old schema couldn't see) and `v_recovery` (29 stolen — borderline R_26 cases). Classifier behaved correctly via `|score|` tiebreak: `|+9|` beats `|-3|` and ties `|+5|` on confidence → higher |score| wins.
+
+**Files changed in pass 5:**
+- [config/archetypes.yaml](../config/archetypes.yaml) — new `deep_base_breakout` entry, header comment updated.
+- [src/module_4/ranking.py](../src/module_4/ranking.py) — palette extended with `deep_base_breakout` colour.
+- [spec/module_4_spec.md](module_4_spec.md) — sample YAML + score-ladder table updated; added band-separation note on the s ≤ 10 constraint.
+- [spec/decisions_module_4.md § D19](decisions_module_4.md) — min gap updated 0.37 → 0.10; added `s ≥ 11` prohibition.
+
 ---
 
 ## Module 5 — Market Data Enrichment

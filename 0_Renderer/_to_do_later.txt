@@ -1,3 +1,4 @@
+- when tickers are added automatically, create a 3 state selector (same as time window selector) to display the manually-entered tickers, the automatically-entered ticker, both
 - CSS update for mobile/tablet format
 
 License:

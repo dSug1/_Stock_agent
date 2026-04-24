@@ -25,6 +25,15 @@ archetypes:
       R_12_over_R_26: [1.05, 1.40]
       R_26_over_R_52: [0.95, 1.15]
 
+  deep_base_breakout:
+    score: 9
+    description: "Deep intra-year crash, multi-month base, now breaking out (VCP-style)"
+    ranges:
+      R_4:            [1.10, 1.30]   # breaking out, not parabolic
+      R_26:           [0.30, 0.80]   # deep intra-year crash visible
+      R_52:           [0.50, 1.00]   # year still down — crash not yet fully healed
+      R_12_over_R_26: [1.30, 5.00]   # meaningful bounce from crash low
+
   early_breakout:
     score: 7
     description: "Recent move starting, not yet parabolic"
