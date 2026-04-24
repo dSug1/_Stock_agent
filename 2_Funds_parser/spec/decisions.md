@@ -363,6 +363,61 @@ Confidence is now purely the within-class tiebreaker. Top of ranking is unchange
 
 **Files changed:** [config/ranking.yaml](../config/ranking.yaml) (new `confidence_floor_weight: 0.7` knob), [src/module_4/ranking.py](../src/module_4/ranking.py) (formula + bounds-check on alpha), [spec/module_4_spec.md § Step 4](module_4_spec.md) (formula + sample YAML updated).
 
+### Implementation pass 4 — 2026-04-24 (archetype calibration — 3-month horizon, close the unclassified gap)
+
+Calibration pass triggered by the 33.5% unclassified rate from pass 3. Goal: re-express the archetype set so (a) scores reflect a **3-month investment horizon** where catalyst timing matters (Module 5's role), (b) the dominant unclassified patterns get named archetypes, (c) composite-score bands stay perfectly disjoint at `alpha=0.7, min_confidence=0.70`.
+
+**Gap analysis on the 475 unclassifieds:**
+- 125 U-U-U-U tickers (all windows up) with median `R_52 ≈ 2.63` — outside `mature_uptrend`'s [1.20, 2.50] cap, not extreme enough for `parabolic_blowoff`.
+- 203 "V-recovery" patterns: recent R_4 up, R_12/R_26 soft, R_52 ≥ 1 — classic biotech post-dip. No archetype described this.
+- 72 tickers between `post_crash_rebase` (R_52 ≤ 0.75) and the positive bucket — a `shallow_rebase` cliff.
+- Near-miss analysis: `broken_trend.R_12` blocked 121, `sustained_decline.R_52` blocked 112, `mature_uptrend.R_52` blocked 65.
+
+**Changes to [config/archetypes.yaml](../config/archetypes.yaml):**
+
+Added three archetypes:
+| Archetype | Score | Captures |
+|---|---:|---|
+| `v_recovery` | +5 | Mid-period dip + recent strength, year up. 418 rows in re-rank. |
+| `shallow_rebase` | +4 | R_52 in [0.75, 0.95] with recent turn-up. 46 rows. |
+| `extended_uptrend` | −1 | R_52 > 2.50, not parabolic. "Train has left but not extreme." 99 rows. |
+
+Score retuning for 3-month horizon (preserved unique integers so composite-score bands stay disjoint — D19):
+- `quiet_compression`: **8 → 3**. Coiled-spring pattern has no directional edge on 3mo without a catalyst.
+- `broken_trend`: **−5 → −4**. Softened one notch to avoid over-punishing healthy dips; still more negative than `sustained_decline` (−3) because news-driven breaks continue more than slow melts.
+
+Range tweak:
+- `post_crash_rebase.R_52`: **[0.40, 0.75] → [0.40, 0.80]**. Closes the cliff with the new `shallow_rebase` at 0.75.
+
+**Verification.** Composite-score bands of all 11 classes are disjoint at `alpha=0.7, min_confidence=0.70`. Minimum adjacent-class gap = 0.37 (between scores +6 and +7). Any two archetypes sharing the same score would break this — locked into D19.
+
+**Re-rank outcome (`4_rank.py --rerank-only`, same 1,420-row survivor set):**
+
+| archetype | old count | new count |
+|---|---:|---:|
+| fresh_awakening (+10) | 31 | 14 |
+| early_breakout (+7) | 146 | 159 |
+| post_crash_rebase (+6) | 30 | 23 |
+| v_recovery (+5) | — | **418** |
+| shallow_rebase (+4) | — | 46 |
+| quiet_compression (+3, was +8) | 48 | 12 |
+| mature_uptrend (+2) | 324 | 193 |
+| extended_uptrend (−1) | — | 99 |
+| sustained_decline (−3) | 194 | 157 |
+| broken_trend (−4, was −5) | 154 | 69 |
+| parabolic_blowoff (−10) | 18 | 31 |
+| **unclassified (0)** | **475 (33.5%)** | **199 (14.0%)** |
+
+Unclassified roughly halved. The remaining 14% is long-tail (high-R_52 outliers, mixed-direction patterns with <3 feature hits against any archetype) — intentionally left unclassified rather than over-specifying.
+
+**Files changed in pass 4:**
+- [config/archetypes.yaml](../config/archetypes.yaml) — 3 new archetypes, 2 score retunes, 1 range widening, header comment updated.
+- [src/module_4/ranking.py](../src/module_4/ranking.py) — `_ARCHETYPE_PALETTE` extended with `v_recovery`, `shallow_rebase`, `extended_uptrend` colours; dict re-ordered to bullish-to-bearish for readability.
+- [spec/module_4_spec.md § Config schemas](module_4_spec.md) — sample YAML updated; added "Archetype score ladder" table.
+- [spec/decisions_module_4.md](decisions_module_4.md) — D19 added (unique integer scores ⇒ disjoint composite bands).
+
+**No code changes.** No Yahoo calls. Memory `project_module4b_archetype_calibration_blocker` now closed.
+
 ---
 
 ## Module 5 — Market Data Enrichment

@@ -381,7 +381,9 @@ Write Parquet to `_intermediate_outputs/`. Generate HTML and Excel reports to `O
 ### Config schemas
 
 ```yaml
-# config/archetypes.yaml
+# config/archetypes.yaml — 11 archetypes, all unique integer scores (D19, 2026-04-24)
+# Composite-score bands disjoint by construction at alpha=0.7, min_confidence=0.70
+# (min gap between adjacent classes = 0.37).
 
 archetypes:
   fresh_awakening:
@@ -395,25 +397,6 @@ archetypes:
       R_12_over_R_26: [1.05, 1.40]
       R_26_over_R_52: [0.95, 1.15]
 
-  quiet_compression:
-    score: 8
-    description: "Flat across all windows, coiled spring"
-    ranges:
-      R_52: [0.90, 1.10]
-      R_26: [0.92, 1.08]
-      R_12: [0.94, 1.06]
-      R_4:  [0.96, 1.04]
-
-  post_crash_rebase:
-    score: 6
-    description: "Down sharply over year, bottomed and stabilizing"
-    ranges:
-      R_52:           [0.40, 0.75]
-      R_26:           [0.85, 1.10]
-      R_12:           [0.95, 1.10]
-      R_4:            [0.98, 1.08]
-      R_26_over_R_52: [1.15, 2.00]
-
   early_breakout:
     score: 7
     description: "Recent move starting, not yet parabolic"
@@ -422,6 +405,43 @@ archetypes:
       R_12:          [1.10, 1.35]
       R_4:           [1.05, 1.20]
       R_4_over_R_12: [0.80, 1.10]
+
+  post_crash_rebase:
+    score: 6
+    description: "Down sharply over year, bottomed and stabilising"
+    ranges:
+      R_52:           [0.40, 0.80]     # upper widened 0.75→0.80 (closes cliff vs shallow_rebase)
+      R_26:           [0.85, 1.10]
+      R_12:           [0.95, 1.10]
+      R_4:            [0.98, 1.08]
+      R_26_over_R_52: [1.15, 2.00]
+
+  v_recovery:
+    score: 5
+    description: "Recent strength after mid-period dip; long-term positive"
+    ranges:
+      R_52: [1.00, 3.00]
+      R_26: [0.70, 1.00]
+      R_12: [0.80, 1.10]
+      R_4:  [1.02, 1.25]
+
+  shallow_rebase:
+    score: 4
+    description: "Mild decline over year with recent turn-up"
+    ranges:
+      R_52: [0.75, 0.95]
+      R_26: [0.85, 1.10]
+      R_12: [0.95, 1.15]
+      R_4:  [1.00, 1.15]
+
+  quiet_compression:
+    score: 3                             # was 8 — no directional edge on 3mo without catalyst
+    description: "Flat across all windows, coiled spring (no directional edge without catalyst)"
+    ranges:
+      R_52: [0.90, 1.10]
+      R_26: [0.92, 1.08]
+      R_12: [0.94, 1.06]
+      R_4:  [0.96, 1.04]
 
   mature_uptrend:
     score: 2
@@ -432,22 +452,14 @@ archetypes:
       R_12: [1.00, 1.30]
       R_4:  [0.98, 1.10]
 
-  parabolic_blowoff:
-    score: -10
-    description: "Train has left — recent move extreme"
+  extended_uptrend:
+    score: -1
+    description: "Strong uptrend past mature_uptrend's cap — train has left but not parabolic"
     ranges:
-      R_4:           [1.25, 999]
-      R_4_over_R_12: [1.30, 999]
-      R_4_over_R_52: [1.15, 999]
-
-  broken_trend:
-    score: -5
-    description: "Uptrend broken, recent weakness"
-    ranges:
-      R_52:           [1.10, 999]
-      R_12:           [0.70, 0.95]
-      R_4:            [0.85, 0.98]
-      R_12_over_R_26: [0.60, 0.95]
+      R_52:          [2.50, 999]
+      R_26:          [1.30, 999]
+      R_4:           [0.95, 1.25]
+      R_4_over_R_12: [0.80, 1.25]
 
   sustained_decline:
     score: -3
@@ -457,7 +469,40 @@ archetypes:
       R_26: [0.001, 0.90]
       R_12: [0.001, 0.95]
       R_4:  [0.001, 0.98]
+
+  broken_trend:
+    score: -4                            # was -5 — softened to avoid over-punishing healthy dips
+    description: "Uptrend broken, recent weakness"
+    ranges:
+      R_52:           [1.10, 999]
+      R_12:           [0.70, 0.95]
+      R_4:            [0.85, 0.98]
+      R_12_over_R_26: [0.60, 0.95]
+
+  parabolic_blowoff:
+    score: -10
+    description: "Train has left — recent move extreme"
+    ranges:
+      R_4:           [1.25, 999]
+      R_4_over_R_12: [1.30, 999]
+      R_4_over_R_52: [1.15, 999]
 ```
+
+#### Archetype score ladder (3-month horizon, alpha=0.7, min_confidence=0.70)
+
+| Score | Archetype | Composite band | Role on 3mo horizon |
+|------:|-----------|----------------|---------------------|
+| +10 | fresh_awakening   | [9.10, 10.00] | Asymmetric upside; base + recent awakening |
+| +7  | early_breakout    | [6.37, 7.00]  | Move started, not parabolic |
+| +6  | post_crash_rebase | [5.46, 6.00]  | Deep-drawdown stabiliser; 3mo bounce candidate |
+| +5  | v_recovery        | [4.55, 5.00]  | Mid-period dip + recent strength, year up |
+| +4  | shallow_rebase    | [3.64, 4.00]  | Mild decline turning up |
+| +3  | quiet_compression | [2.73, 3.00]  | Coiled spring; upward base skew but no catalyst |
+| +2  | mature_uptrend    | [1.82, 2.00]  | Trend intact, limited 3mo headroom |
+| −1  | extended_uptrend  | [−1.00, −0.91]| Past sensible-entry zone, not extreme |
+| −3  | sustained_decline | [−3.00, −2.73]| Slow melt; could mean-revert |
+| −4  | broken_trend      | [−4.00, −3.64]| News-driven break; continuation risk |
+| −10 | parabolic_blowoff | [−10.00, −9.10] | Imminent mean reversion |
 
 ```yaml
 # config/ranking.yaml
