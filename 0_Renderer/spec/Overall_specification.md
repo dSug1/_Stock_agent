@@ -311,6 +311,7 @@ Every user-tunable setting is persisted to `localStorage` on every change and re
 | `sv.chatBottomHidden` | `0` \| `1` | Whether the ring-controls row is collapsed. |
 | `sv.markerText.<TICKER>` | string | Per-ticker marker text. |
 | `sv.entryTargets.<TICKER>` | JSON `string[]` | Per-ticker entry-target values (first is the primary target; second, if a positive float, becomes `target2` on the chart). |
+| `sv.tickerSource.<TICKER>` | `"manual"` \| `"auto"` | Per-ticker provenance tag. Missing ≡ `manual`. Drives the pink color applied to the ticker symbol when `auto`. Written by the Go button, URL-launch, and initial-ring bootstrap (all as `manual`); `markTickerAuto()` is reserved for a future ingestion script and refuses to overwrite an existing entry (user actions always win). Applies only to `.tl-ticker` / `.po-ticker`; company / price / target colors are unchanged. |
 
 `persistSession()` is called after every user-driven mutation (period change, ticker add/remove/swap/edit) and once on first load so a URL-launched session is captured.
 

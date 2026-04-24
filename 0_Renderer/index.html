@@ -756,6 +756,11 @@
       color: var(--text);
       min-width: calc(52px * var(--ticker-row-scale, 1));
     }
+    /* Ticker source indicator — `.source-auto` paints the symbol pink so the
+       user can tell auto-ingested tickers apart from ones they typed. Applies
+       only to the ticker text; company/price/change keep their own rules. */
+    .tl-ticker.source-auto,
+    .po-ticker.source-auto { color: #ff69b4; }
     .tl-company {
       font-size: calc(11px * var(--ticker-row-scale, 1));
       color: var(--text);
@@ -1100,6 +1105,39 @@
       } catch (_) { return null; }
     }
 
+    // Ticker source — 'manual' (user typed it via Go / URL param) or 'auto'
+    // (reserved for a future ingestion script that seeds the ring without
+    // user interaction). Persisted per-ticker so it survives ring reshuffles
+    // and sessions. Default on missing key = MANUAL — every pre-existing
+    // ticker was entered by hand, so absence ≡ manual is safe.
+    //
+    // Conflict policy: user actions always win. markTickerManual() force-
+    // overwrites any existing value; markTickerAuto() only writes when no
+    // entry exists yet, so the auto-script can never downgrade a user's
+    // ticker to pink.
+    const TICKER_SOURCE = Object.freeze({ MANUAL: 'manual', AUTO: 'auto' });
+    const LS_TICKER_SOURCE_KEY_PFX = 'sv.tickerSource.';
+    function getTickerSource(ticker) {
+      if (!ticker) return TICKER_SOURCE.MANUAL;
+      try {
+        const raw = localStorage.getItem(LS_TICKER_SOURCE_KEY_PFX + ticker);
+        return raw === TICKER_SOURCE.AUTO ? TICKER_SOURCE.AUTO : TICKER_SOURCE.MANUAL;
+      } catch (_) { return TICKER_SOURCE.MANUAL; }
+    }
+    function markTickerManual(ticker) {
+      if (!ticker) return;
+      try { localStorage.setItem(LS_TICKER_SOURCE_KEY_PFX + ticker, TICKER_SOURCE.MANUAL); } catch (_) {}
+    }
+    function markTickerAuto(ticker) {
+      if (!ticker) return;
+      try {
+        const existing = localStorage.getItem(LS_TICKER_SOURCE_KEY_PFX + ticker);
+        if (existing == null) {
+          localStorage.setItem(LS_TICKER_SOURCE_KEY_PFX + ticker, TICKER_SOURCE.AUTO);
+        }
+      } catch (_) {}
+    }
+
     // Marker text helpers — keyed by ticker symbol so markers follow the
     // ticker across ring swaps / add / remove operations.
     function getMarkerText(ticker) {
@@ -1207,6 +1245,20 @@
         .map(t => (typeof t === 'string' ? t : ''));
     } else {
       initialRingTickers = new Array(CIRCLE_COUNT).fill('');
+    }
+
+    // Mark every initial ticker as MANUAL unless it already has an explicit
+    // source entry. URL-launched tickers came from the user's shell; cached
+    // tickers pre-date this feature and were all user-entered. Doing this up
+    // front makes the storage state explicit from day 1, so when the
+    // auto-ingest script ships it has a clean default to diff against.
+    for (const t of initialRingTickers) {
+      if (!t) continue;
+      try {
+        if (localStorage.getItem(LS_TICKER_SOURCE_KEY_PFX + t) == null) {
+          markTickerManual(t);
+        }
+      } catch (_) {}
     }
 
     // Resolve initial period. Priority: URL param → cached session → 1d default.
@@ -1936,6 +1988,8 @@
         if (info && info.ticker) {
           hasClosest = true;
           $poTicker.textContent  = info.ticker;
+          $poTicker.classList.toggle('source-auto',
+            getTickerSource(info.ticker) === TICKER_SOURCE.AUTO);
           $poCompany.textContent = info.company;
           const color = info.positive ? '#3fb950' : '#f85149';
           $poPrices.forEach(el  => { el.textContent = info.price;      el.style.color = color; });
@@ -2234,6 +2288,13 @@
         if (entry._lastTicker !== ticker) {
           entry.ticker.textContent = ticker;
           entry._lastTicker = ticker;
+        }
+        // Dirty-check the source class — flips only when the ticker changes
+        // or when Go/markTickerAuto rewrites the LS entry.
+        const srcAuto = (ticker && getTickerSource(ticker) === TICKER_SOURCE.AUTO);
+        if (entry._lastSrcAuto !== srcAuto) {
+          entry.ticker.classList.toggle('source-auto', srcAuto);
+          entry._lastSrcAuto = srcAuto;
         }
         if (entry._lastCompany !== company) {
           entry.company.textContent = company;
@@ -2928,6 +2989,8 @@
       const target = findClosestInteractiveBillboard();
       if (!target) return;
       target.ticker = ticker;
+      // User typed this in → always manual (wins over any prior 'auto').
+      markTickerManual(ticker);
       // Rewrite the iframe src so the chart reloads with the new ticker at
       // the current global period.
       target.element.src =
@@ -2937,6 +3000,8 @@
       $tickerInput.blur();
       // Force the next refresh to re-apply (avoids a stale cache match).
       _lastClosestBillboard = null;
+      _lastTickerListGen = -1;   // refresh .tl-ticker source class
+      _cameraDirty = true;
       persistSession();
     }
 

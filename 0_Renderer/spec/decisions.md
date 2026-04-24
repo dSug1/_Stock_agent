@@ -194,3 +194,38 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 **Where:** [index.html:3479-3492](../index.html#L3479) (`updateBillboardProjection()` override block); [index.html:2149-2155](../index.html#L2149) (`.closest` identity check in `buildTickerListRows()`).
 
 **Invariant for future changes.** `_closestInteractive` is the single source of truth for "which billboard does the UI represent". Any new UI surface that needs to track the selected billboard must read `_closestInteractive`, not re-derive from distance or from ticker-list row position.
+
+---
+
+## D16 — Ticker source: string-enum, per-ticker, user-action-wins
+
+**Feature (2026-04-24).** Tickers gain a `source` attribute — `manual` for ones the user typed via Go / URL-launch, `auto` for ones a future ingestion script will seed. Auto tickers render in pink; manual keeps the default text color.
+
+**Design choices.**
+
+1. **String enum, not numeric codes.** `TICKER_SOURCE = { MANUAL: 'manual', AUTO: 'auto' }` (frozen). Strings serialize transparently to `localStorage`, read cleanly in DevTools, and a future `'watchlist'` / `'algorithmic'` value slots in without a migration.
+
+2. **Keyed per-ticker, not per-slot.** Storage key `sv.tickerSource.<TICKER>` mirrors the existing `sv.markerText.*` / `sv.entryTargets.*` pattern. A ticker's provenance doesn't change when the user moves it around the ring or reshuffles billboards.
+
+3. **Missing key ≡ `manual`.** Backwards-compatible default: every ticker currently in any user's localStorage was entered by hand, so absence-means-manual is safe. The auto-script must opt into pink by writing `"auto"` explicitly.
+
+4. **User-action-wins conflict policy.** `markTickerManual()` force-overwrites any existing entry (including `auto`). `markTickerAuto()` refuses to write if an entry already exists. Result: if the user types a symbol that was previously ingested, it flips back to manual / default color; the auto-script can never "downgrade" a user's ticker to pink.
+
+5. **Rendering — ticker symbol only.** Only `.tl-ticker` (ticker-list rows, states 1 + 2) and `.po-ticker` (bottom bar, state 0) get the `.source-auto` CSS class. Company, price, change, target labels all keep their existing color rules. The chart-iframe's `#ticker-label` is left alone — the spec scopes this purely to the chat-container surfaces.
+
+6. **Manual-stamping call sites (today).**
+   - Go button success path — `markTickerManual(ticker)` after resolution. Also invalidates `_lastTickerListGen` so the row's pink class re-evaluates on the next frame when a manual write overwrites a prior auto.
+   - URL-launch `?tickers=A,B,C` / cached-session boot — initial-ring loop calls `markTickerManual()` on any ticker that has no existing source entry. Makes the storage state explicit from day 1 so the future auto-script has a clean default to diff against.
+   - Ring-plus button (`+`) — creates a blank billboard, no ticker. The eventual Go that assigns a ticker is what stamps manual.
+
+**Alternative considered:** storing source on the billboard object rather than in localStorage. Rejected — billboards are transient UI objects rebuilt from `ringTickers`; storage must outlive them.
+
+**Where:**
+- Enum + helpers: [index.html:1103-1131](../index.html#L1103) (`TICKER_SOURCE`, `getTickerSource`, `markTickerManual`, `markTickerAuto`).
+- Initial-ring bootstrap: [index.html:1213-1224](../index.html#L1213).
+- Go handler: [index.html:2969-2984](../index.html#L2969).
+- CSS: [index.html:760-766](../index.html#L760) (`.source-auto` rule).
+- Ticker-list render: [index.html:2286-2293](../index.html#L2286) (dirty-check + class toggle).
+- Price-overlay render: [index.html:1987-1990](../index.html#L1987).
+
+**Future integration.** When the auto-ingest script ships, it should call `markTickerAuto(symbol)` for every ticker it adds. It must NOT call `markTickerManual`, and it must NOT bypass the helpers and write to localStorage directly — both would defeat the user-action-wins policy.
