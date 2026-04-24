@@ -2077,7 +2077,11 @@
         if (!currentSet.has(bb)) {
           entry.rowEl.remove();
           entry.sepEl.remove();
-          if (entry.inputRowEl) entry.inputRowEl.remove();
+          if (entry.inputRowEl) {
+            if (entry.inputEl) { try { entry.inputEl.blur(); } catch (_) {} }
+            try { window.getSelection()?.removeAllRanges(); } catch (_) {}
+            entry.inputRowEl.remove();
+          }
           _tickerRowMap.delete(bb);
         }
       }
@@ -2285,6 +2289,11 @@
       const entry = _tickerRowMap.get(b);
       if (!entry) return;
       if (entry.inputRowEl) {
+        // Blur the focused input and drop any lingering text selection
+        // (input.select() on open leaves a range in window.getSelection())
+        // so the caret doesn't linger after the element is removed.
+        if (entry.inputEl) { try { entry.inputEl.blur(); } catch (_) {} }
+        try { window.getSelection()?.removeAllRanges(); } catch (_) {}
         entry.inputRowEl.remove();
         entry.inputRowEl = null;
         entry.inputEl = null;

@@ -161,3 +161,19 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 **Why it's acceptable.** Trusted-network personal use. No credentials, no PII, no trading actions — the app only displays market data.
 
 **Boundary.** If this ever gets deployed beyond the local machine (see the licensing memory), `host` must drop to `127.0.0.1` **and** an auth layer must be added **before** any public exposure — in the same PR that swaps yfinance for a licensed provider.
+
+---
+
+## D14 — Marker-input row: blur + clear selection before DOM removal
+
+**Problem (2026-04-24).** Clicking the `−` button to close a ticker row's marker-text input left a blinking caret on screen. The caret persisted into chat state 2 and even into the bottom-bar mode after the chat was closed; only a page refresh cleared it.
+
+**Root cause.** `toggleMarkerInputRow()` opens the input with `input.focus()` + `input.select()`. On close, it called `inputRowEl.remove()` directly. Two artefacts were left behind:
+1. The focused element vanishing from the DOM does not always move the focus ring cleanly — some Chromium builds keep drawing the caret at the last position.
+2. `input.select()` creates a range in `window.getSelection()` that outlives the input's removal.
+
+**Fix.** Before removing the row, call `inputEl.blur()` and `window.getSelection()?.removeAllRanges()`. Same two steps applied to the stale-entry cleanup path in `buildTickerListRows()` (so a billboard removed from the ring while its input is focused doesn't leak a caret).
+
+**Where:** [index.html:2287-2302](../index.html#L2287) `toggleMarkerInputRow()`; [index.html:2076-2086](../index.html#L2076) stale-entry loop in `buildTickerListRows()`.
+
+**Invariant for future changes.** Any code path that removes a focused input from the DOM must blur it first and clear the window selection. Treat `input.select()` as leaving residue; pair it with an explicit cleanup on close.
