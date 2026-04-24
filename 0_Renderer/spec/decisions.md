@@ -178,6 +178,10 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Invariant for future changes.** Any code path that removes a focused input from the DOM must blur it first and clear the window selection. Treat `input.select()` as leaving residue; pair it with an explicit cleanup on close.
 
+**Extended 2026-04-24** to the state-2 entry-target inputs (`.cb-target-input` inside `#chat-body`). Same bug class: every state-2 exit path (`chat-state-btn` close, `chat-back-btn` to state 1, giraffe `ticker-go` toggle, and the closest-ticker flip inside `updateTickerDetail` that calls `$chatBody.replaceChildren()`) now funnels through a shared helper `clearChatBodyCaret()` that blurs the focused descendant and clears window selection before the DOM mutation or class flip happens. Helper at [index.html:2732-2742](../index.html#L2732); call sites at [index.html:2744](../index.html#L2744), [2752](../index.html#L2752), [2781](../index.html#L2781), [2555](../index.html#L2555).
+
+**Generalised invariant.** When hiding or rebuilding any panel that may contain a focused text input, call the matching `clear*Caret()` helper *before* the DOM / class mutation. Removing the input after it has lost focus is safe; removing it while focused — or hiding its container with focus still inside — can leak a phantom caret on Chromium.
+
 ---
 
 ## D15 — Closest-billboard is identity-based, and overridden by `_clickOrbitTarget` during rotation

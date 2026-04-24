@@ -2548,6 +2548,10 @@
       const company = info ? info.company : '';
       if (_detailLastTicker === ticker) return;
       _detailLastTicker = ticker;
+      // Closest ticker just flipped (e.g. user orbited, or ←/→ swapped) —
+      // blur + clear selection so a currently-focused entry-target input
+      // doesn't leave a phantom caret when replaceChildren() destroys it.
+      clearChatBodyCaret();
       $chatBody.replaceChildren();
       if (!ticker) return;
       // Ticker + company are already shown in the state-2 top row
@@ -2729,7 +2733,22 @@
       $chatStateBtn.setAttribute('aria-label', 'Close chat');
     }
 
+    // Blur any focused descendant of #chat-body and drop window selection
+    // ranges. Called before every state-2 exit path (close, back, giraffe
+    // toggle). Without this, a focused .cb-target-input being removed by
+    // replaceChildren() — or hidden via a class flip — leaves a phantom
+    // caret that persists across states 0/1/2 until a page refresh (same
+    // root cause as D14 for the marker-text input).
+    function clearChatBodyCaret() {
+      const focused = document.activeElement;
+      if (focused && $chatBody.contains(focused) && typeof focused.blur === 'function') {
+        try { focused.blur(); } catch (_) {}
+      }
+      try { window.getSelection()?.removeAllRanges(); } catch (_) {}
+    }
+
     document.getElementById('ticker-go').addEventListener('click', () => {
+      clearChatBodyCaret();
       document.body.classList.toggle('chat-open');
       _chatExpanded = false;
       document.body.classList.remove('chat-expanded');
@@ -2738,6 +2757,7 @@
       _cameraDirty = true;
     });
     function closeChatContainer() {
+      clearChatBodyCaret();
       document.body.classList.remove('chat-open');
       document.body.classList.remove('chat-expanded');
       _chatExpanded = false;
@@ -2762,6 +2782,7 @@
     // Back button — state 2 → state 1. Collapses the detail view and
     // restores the scrollable ticker list.
     document.getElementById('chat-back-btn').addEventListener('click', () => {
+      clearChatBodyCaret();
       _chatExpanded = false;
       document.body.classList.remove('chat-expanded');
       $chatBody.replaceChildren();
