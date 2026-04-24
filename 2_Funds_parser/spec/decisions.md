@@ -468,6 +468,78 @@ deep_base_breakout:
 - [spec/module_4_spec.md](module_4_spec.md) — sample YAML + score-ladder table updated; added band-separation note on the s ≤ 10 constraint.
 - [spec/decisions_module_4.md § D19](decisions_module_4.md) — min gap updated 0.37 → 0.10; added `s ≥ 11` prohibition.
 
+### Implementation pass 6 — 2026-04-24 (classic-literature gap fill: Stage 2B pullback + late-stage climax)
+
+Follow-up calibration mapping our 12 archetypes against Minervini/Weinstein/Livermore's documented setups. Most canonical patterns are already covered (VCP = `deep_base_breakout`, Stage 2A = `early_breakout`, climax = `parabolic_blowoff`, Stage 4 = `sustained_decline`, etc.). Two gaps remained, both accounting for the bulk of the 158 pass-5 unclassifieds:
+
+**Gap A — Minervini late-stage climax run (49/158 = 31% of unclassifieds).** Residual U-U-U-U cohort with `R_4 > 1.25` and `R_4/R_12 < 1.30`. Examples: ORKA, SYRE, TNGX, ERAS, RLAY — biotech small-caps up 4–17× in a year with hot but non-accelerating 4-week moves. Classic Minervini late-Stage-2 warning / Weinstein Stage 2 → 3 boundary. Not captured by `extended_uptrend` (R_4 ≤ 1.25 cap) or `parabolic_blowoff` (requires R_4/R_12 ≥ 1.30 acceleration).
+
+**Gap B — Weinstein Stage 2B pullback / Livermore continuation pivotal (17/158 = 11%).** D-U-U-U + F-U-U-U residuals: year strong, mid-period strong, recent minor pullback. Examples: BCRX, MASI, LRMR, OBIO, MUR. Mildly positive setup — trend intact, waiting for the resumption pivot. No existing archetype captured "healthy pullback in an established uptrend."
+
+**Added archetypes:**
+
+```yaml
+stage2_pullback:
+  score: 1    # between mature_uptrend (+2) and extended_uptrend (−1)
+  ranges:
+    R_52: [1.10, 3.00]
+    R_26: [1.05, 999]
+    R_12: [1.05, 999]
+    R_4:  [0.85, 1.03]
+
+late_stage_extension:
+  score: -2   # between extended_uptrend (−1) and sustained_decline (−3)
+  ranges:
+    R_52:          [2.00, 999]
+    R_26:          [1.30, 999]
+    R_4:           [1.25, 999]
+    R_4_over_R_12: [0.40, 1.30]
+```
+
+Both scores (+1 and −2) deliberately moderate. 3-month horizon + catalyst coming from Module 5 means patterns in transition (pullback-within-trend, climax-in-progress) are genuinely more ambiguous than clean setups — the score should flag directional bias without making a strong bullish/bearish claim.
+
+**Re-rank outcome (`4_rank.py --rerank-only`, same 1,423-row ranking):**
+
+| archetype | pre-pass-6 | post-pass-6 |
+|---|---:|---:|
+| fresh_awakening (+10)     |  13 |  13 |
+| deep_base_breakout (+9)   | 130 | 130 |
+| early_breakout (+7)       | 153 | 153 |
+| post_crash_rebase (+6)    |  22 |  22 |
+| v_recovery (+5)           | 396 | 395 |
+| shallow_rebase (+4)       |  45 |  45 |
+| quiet_compression (+3)    |  12 |  12 |
+| mature_uptrend (+2)       | 191 | 169 |
+| stage2_pullback (+1)      |  —  | **75** |
+| extended_uptrend (−1)     | 103 |  43 |
+| late_stage_extension (−2) |  —  | **110** |
+| sustained_decline (−3)    | 101 | 101 |
+| broken_trend (−4)         |  68 |  59 |
+| parabolic_blowoff (−10)   |  31 |  31 |
+| **unclassified (0)**      | **158 (11.1%)** | **65 (4.6%)** |
+
+Unclassified now at **4.6%** — likely the practical floor (remaining cohort is genuinely mixed-direction and ambiguous: U-D-U-D, F-D-D-D, etc.). `extended_uptrend` dropped 103 → 43 because `late_stage_extension` correctly absorbs the R_4-hot subset (the prior −1 score conflated "merely extended" with "extended + hot recently"). `mature_uptrend` dropped 191 → 169 as pullback cases moved to `stage2_pullback`.
+
+**Cumulative progress across passes 4-6:**
+
+| metric | pass 3 | pass 4 | pass 5 | pass 6 |
+|---|---:|---:|---:|---:|
+| archetype count | 8 | 11 | 12 | **14** |
+| unclassified share | 33.5% | 14.0% | 11.1% | **4.6%** |
+
+**Files changed in pass 6:**
+- [config/archetypes.yaml](../config/archetypes.yaml) — `stage2_pullback` + `late_stage_extension` added; header comment archetype count 12 → 14.
+- [src/module_4/ranking.py](../src/module_4/ranking.py) — palette extended with both new colours.
+- [spec/module_4_spec.md](module_4_spec.md) — score ladder + sample YAML updated.
+- [spec/decisions_module_4.md](decisions_module_4.md) — D11 count 12 → 14.
+
+**Note on literature limits.** Three classic setups were explicitly *not* added because our weekly `R_Xw` feature set cannot see them:
+- **Minervini Power Play / High Tight Flag** requires daily volatility contraction (tightening ranges on the handle) — we only have weekly adjusted closes.
+- **Livermore shakeout-and-resume** requires intraday/daily resolution.
+- **Weinstein Stage 3 distribution before the break** would need volume confirmation; we have ADV but not weekly volume.
+
+These could become later archetypes if/when Module 5 enrichment adds volatility-contraction or volume-trend features to the ratio matrix.
+
 ---
 
 ## Module 5 — Market Data Enrichment

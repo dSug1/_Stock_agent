@@ -133,7 +133,7 @@
 **Rationale:** User tunes pipeline without code edits. Version control on configs tracks tuning history.
 
 **Alternatives considered:**
-- Hardcoded defaults with CLI overrides — rejected: doesn't scale to 12 archetypes × up to 6 ranges each.
+- Hardcoded defaults with CLI overrides — rejected: doesn't scale to 14 archetypes × up to 6 ranges each.
 
 ---
 

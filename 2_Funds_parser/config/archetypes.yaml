@@ -89,6 +89,15 @@ archetypes:
       R_12: [1.00, 1.30]
       R_4:  [0.98, 1.10]
 
+  stage2_pullback:
+    score: 1
+    description: "Weinstein Stage 2B / Livermore continuation pivotal — year strong, minor recent pullback"
+    ranges:
+      R_52: [1.10, 3.00]
+      R_26: [1.05, 999]
+      R_12: [1.05, 999]
+      R_4:  [0.85, 1.03]
+
   extended_uptrend:
     score: -1
     description: "Strong uptrend past mature_uptrend's cap — train has left but not parabolic"
@@ -97,6 +106,15 @@ archetypes:
       R_26:          [1.30, 999]
       R_4:           [0.95, 1.25]
       R_4_over_R_12: [0.80, 1.25]
+
+  late_stage_extension:
+    score: -2
+    description: "Minervini late-stage climax run / Weinstein late Stage 2 — hot recent move, not parabolic"
+    ranges:
+      R_52:          [2.00, 999]
+      R_26:          [1.30, 999]
+      R_4:           [1.25, 999]
+      R_4_over_R_12: [0.40, 1.30]
 
   sustained_decline:
     score: -3

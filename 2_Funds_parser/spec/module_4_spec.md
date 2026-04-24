@@ -381,7 +381,7 @@ Write Parquet to `_intermediate_outputs/`. Generate HTML and Excel reports to `O
 ### Config schemas
 
 ```yaml
-# config/archetypes.yaml — 12 archetypes, all unique integer scores (D19, updated 2026-04-24)
+# config/archetypes.yaml — 14 archetypes, all unique integer scores (D19, updated 2026-04-24)
 # Composite-score bands disjoint by construction at alpha=0.7, min_confidence=0.70
 # (min gap between adjacent classes = 0.10, between +10 and +9).
 
@@ -461,6 +461,15 @@ archetypes:
       R_12: [1.00, 1.30]
       R_4:  [0.98, 1.10]
 
+  stage2_pullback:
+    score: 1
+    description: "Weinstein Stage 2B / Livermore continuation pivotal — year strong, minor recent pullback"
+    ranges:
+      R_52: [1.10, 3.00]
+      R_26: [1.05, 999]
+      R_12: [1.05, 999]
+      R_4:  [0.85, 1.03]
+
   extended_uptrend:
     score: -1
     description: "Strong uptrend past mature_uptrend's cap — train has left but not parabolic"
@@ -469,6 +478,15 @@ archetypes:
       R_26:          [1.30, 999]
       R_4:           [0.95, 1.25]
       R_4_over_R_12: [0.80, 1.25]
+
+  late_stage_extension:
+    score: -2
+    description: "Minervini late-stage climax run — R_52 extended AND R_4 hot, not yet parabolic"
+    ranges:
+      R_52:          [2.00, 999]
+      R_26:          [1.30, 999]
+      R_4:           [1.25, 999]
+      R_4_over_R_12: [0.40, 1.30]
 
   sustained_decline:
     score: -3
@@ -509,7 +527,9 @@ archetypes:
 | +4  | shallow_rebase     | [3.64, 4.00]  | Mild decline turning up |
 | +3  | quiet_compression  | [2.73, 3.00]  | Coiled spring; upward base skew but no catalyst |
 | +2  | mature_uptrend     | [1.82, 2.00]  | Trend intact, limited 3mo headroom |
+| +1  | stage2_pullback    | [0.91, 1.00]  | Weinstein Stage 2B / Livermore continuation pivotal — healthy pullback in uptrend |
 | −1  | extended_uptrend   | [−1.00, −0.91]| Past sensible-entry zone, not extreme |
+| −2  | late_stage_extension | [−2.00, −1.82]| Minervini late-stage climax run — R_4 hot, not parabolic |
 | −3  | sustained_decline  | [−3.00, −2.73]| Slow melt; could mean-revert |
 | −4  | broken_trend       | [−4.00, −3.64]| News-driven break; continuation risk |
 | −10 | parabolic_blowoff  | [−10.00, −9.10] | Imminent mean reversion |
