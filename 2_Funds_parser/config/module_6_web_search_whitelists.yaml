@@ -1,0 +1,137 @@
+# Module 6 — web_search allowed_domains whitelists, keyed by M5 pack's `industry` column.
+#
+# How it's used:
+#   1. Each ticker's API call builds its tool-use `allowed_domains` by
+#      concatenating `universal` + the matching `by_industry` list.
+#   2. If the ticker's industry isn't listed below, the fallback is `universal`
+#      alone. That's the safety net — no ticker ever goes through with an
+#      unrestricted search.
+#   3. Domains are exact hostnames; Anthropic's web_search matches subdomains
+#      automatically (e.g. `sec.gov` covers `www.sec.gov`, `edgar.sec.gov`).
+#
+# IR / investor-relations capture strategy:
+#   US biotechs post essentially all material news through the wire services
+#   (GlobeNewswire / PR Newswire / BusinessWire) which are universal-tier. Per-
+#   ticker IR subdomains (`investors.<ticker>.com`) are NOT whitelisted
+#   individually — `allowed_domains` is per-call and we'd need 133+ entries.
+#   The wires carry the same press-release text.
+
+# -----------------------------------------------------------------------------
+# Universal tier — applied to every ticker regardless of industry.
+# -----------------------------------------------------------------------------
+universal:
+  - sec.gov                    # 10-K / 10-Q / 8-K / 13F filings
+  - globenewswire.com          # press-release wire (biotech-heavy)
+  - prnewswire.com             # press-release wire
+  - businesswire.com           # press-release wire
+
+# -----------------------------------------------------------------------------
+# Research tier — background research on technology, TAM, science, moat.
+# Applied to every ticker regardless of industry (D40 — m6-v2 reshape).
+# These are for scientific / commercial background, not catalyst discovery.
+# -----------------------------------------------------------------------------
+research:
+  # Peer-reviewed / science
+  - nature.com                 # [FREE-abstract, PAYWALL full] peer-reviewed
+  - nejm.org                   # [PAYWALL] New England Journal of Medicine
+  - thelancet.com              # [PAYWALL-mostly] The Lancet
+  - cell.com                   # [PAYWALL] Cell Press
+  - sciencedirect.com          # [PAYWALL-mostly] Elsevier journals
+  - pubmed.ncbi.nlm.nih.gov    # [FREE] MEDLINE abstracts
+  - nih.gov                    # [FREE] research context (re-added for m6-v2)
+
+  # Conference proceedings — catalyst + precedent data
+  - asco.org                   # ASCO — oncology
+  - ash.confex.com             # ASH — hematology
+  - aacr.org                   # AACR — cancer research
+  - asgct.org                  # ASGCT — gene/cell therapy
+
+  # IP / tech origin
+  - patents.google.com         # [FREE] patent search for IP position / licensing history
+
+  # TAM / commercial / market sizing
+  - grandviewresearch.com      # [FREE summary] market research
+  - fortunebusinessinsights.com # [FREE summary]
+  - marketsandmarkets.com      # [FREE summary]
+  - precedenceresearch.com     # [FREE summary]
+
+  # Industry trade (broader — for moat / partnership / M&A context)
+  - biospace.com               # [FREE-ads] industry trade
+  - pharmaceutical-technology.com # [FREE-ads]
+  - biopharmadealmakers.nature.com # [FREE] deal tracker
+
+# -----------------------------------------------------------------------------
+# Per-industry tier — matched against the M5 pack's `industry` column.
+# Industry names must match exactly what yfinance / M5 enrichment emits.
+# -----------------------------------------------------------------------------
+by_industry:
+
+  # ------------------- Biotechnology / pharma -------------------
+  # Paywall flags: [FREE] full text indexed / [PAYWALL] snippet-only via Brave index.
+  # Reviewed 2026-04-24; re-check if web_search_cache.content_length on these
+  # consistently < 150 chars on the first sync run (drop candidates).
+  "Biotechnology":
+    - fda.gov                  # [FREE] approvals, CRLs, AdCom, PDUFA dates
+    - clinicaltrials.gov       # [FREE] trial registry, status, endpoints
+    - fiercebiotech.com        # [FREE-ads] industry trade
+    - endpts.com               # [PAYWALL] industry trade — snippet-only
+    - statnews.com             # [PAYWALL] industry trade — snippet-only
+    - biopharmadive.com        # [FREE-ads] industry trade
+    - bioworld.com             # [PAYWALL] industry trade — snippet-only
+    - oncologypipeline.com     # [FREE] pipeline tracker (verify on first run)
+
+  "Drug Manufacturers - Specialty & Generic":
+    - fda.gov                  # [FREE]
+    - clinicaltrials.gov       # [FREE]
+    - fiercebiotech.com        # [FREE-ads]
+    - endpts.com               # [PAYWALL]
+    - statnews.com             # [PAYWALL]
+    - biopharmadive.com        # [FREE-ads]
+    - bioworld.com             # [PAYWALL]
+    - oncologypipeline.com     # [FREE]
+
+  "Drug Manufacturers - General":
+    - fda.gov                  # [FREE]
+    - clinicaltrials.gov       # [FREE]
+    - fiercebiotech.com        # [FREE-ads]
+    - endpts.com               # [PAYWALL]
+    - statnews.com             # [PAYWALL]
+    - biopharmadive.com        # [FREE-ads]
+    - bioworld.com             # [PAYWALL]
+    - oncologypipeline.com     # [FREE]
+
+  # ------------------- Medical devices / instruments -------------------
+  # (User has not pruned these yet — review when first device ticker surfaces.)
+  "Medical Devices":
+    - fda.gov
+    - fiercemedtech.com
+    - medtechdive.com
+    - massdevice.com
+
+  "Medical Instruments & Supplies":
+    - fda.gov
+    - fiercemedtech.com
+    - medtechdive.com
+    - massdevice.com
+
+  # ------------------- Diagnostics -------------------
+  "Diagnostics & Research":
+    - fda.gov
+    - 360dx.com
+    - genomeweb.com
+    - darkdaily.com
+
+  # ------------------- Healthcare services -------------------
+  "Healthcare Plans":
+    - cms.gov
+    - hhs.gov
+    - modernhealthcare.com
+    - healthcaredive.com
+    - beckershospitalreview.com
+
+  "Medical Care Facilities":
+    - cms.gov
+    - hhs.gov
+    - modernhealthcare.com
+    - healthcaredive.com
+    - beckershospitalreview.com

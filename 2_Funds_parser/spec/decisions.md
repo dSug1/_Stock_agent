@@ -660,17 +660,322 @@ Top sectors in ranked set: Healthcare (379), Financial Services (219), Technolog
 
 ## Module 5 — Market Data Enrichment
 
-*Spec: TBD. Reads Module 4's ranked candidates, assembles per-ticker context packs for Module 6.*
+*Spec: [module_5_spec.md](module_5_spec.md). Reads Module 4b's dual-horizon ranked candidates, assembles per-ticker context packs into `context_packs.db`, feeds Module 6's LLM scoring. Deterministic, offline (no yfinance, no network).*
 
-*(No entries yet.)*
+### Spec revision 2026-04-24 (pre-implementation) — design passes rev 1 → rev 6
+
+Spec drafted and iterated through six revisions before coding started. Each rev recorded in [module_5_spec.md § Update log](module_5_spec.md):
+
+- **rev 1** — initial draft with six design decisions (D21–D26): shortlist threshold, search-provider split, pack format, caching, research-depth allocation, yfinance off-ramp.
+- **rev 2** — collapsed to a single SQLite store (`context_packs.db`). Removed the redundant JSON directory + flat Parquet index. Motivated by consistency with pipeline convention (`2_fundparser.db`, `prices.db`), atomic writes, native SQL filtering for Module 6, one representation instead of three.
+- **rev 3** — **D21 reversed**: Module 5 no longer shortlists. All 1,423 M4b rows get packs. The `composite_best` threshold that controls Module 6 LLM cost is **deferred** until Module 6's per-ticker cost is estimated. Motivation (from user): "prepare data for all tickers now; set threshold after Module 6 cost is known."
+- **rev 4** — added **D27** (sector allowlist deferred to Module 6). `sector`/`industry` lifted into indexed columns + `idx_packs_quarter_sector` index.
+- **rev 5** — added **D28** (final max market cap deferred to Module 6). `market_cap_usd` lifted into indexed column + `idx_packs_quarter_mcap` index.
+- **rev 6** — added **D29** (fund-flow rescue clause; applied after D21, subject to D27/D28). Rule: `composite_best < D21_threshold AND archetype NOT IN ('extended_uptrend', 'late_stage_extension', 'broken_trend', 'sustained_decline', 'parabolic_blowoff') AND (new_positions >= 1 OR qoq_fund_count_change >= 1)`. Verified against 2025Q4 data: 89 rescues at illustrative threshold 6.
+
+Design pattern across D21/D27/D28/D29: Module 5 enriches every Module 4b row; all four gates are Module-6-boundary decisions that the user activates once per-ticker LLM cost is known. `enrichment.yaml` carries the hooks as `null`/empty stubs.
+
+### Implementation pass 1 — 2026-04-24
+
+**New code (9 files):**
+- [config/enrichment.yaml](../config/enrichment.yaml) — selection/rescue/pack/store/reports blocks. All D21/D27/D28/D29 gate fields present as `null` stubs.
+- [config/enrichment_narratives.yaml](../config/enrichment_narratives.yaml) — per-archetype, per-horizon narrative templates covering all 14 archetypes + `unclassified` + `default` fallback.
+- [src/module_5/packs_db.py](../src/module_5/packs_db.py) — single-table SQLite schema with filter columns lifted from the JSON blob (archetype, best_horizon, composite_*, score_*, sector, industry, market_cap_usd, fund_count, new_positions, increased_positions, qoq_fund_count_change). Six indexes for Module 6 query paths. `probe_pack`/`upsert_pack`/`mark_cache_hit`/`query_packs_for_quarter` primitives. `query_packs_for_quarter` accepts D21/D27/D28/D29 parameters and composes them at SQL level.
+- [src/module_5/selection.py](../src/module_5/selection.py) — v1: only `denylist_tickers` + `include_unclassified` active; D21/D27/D28/D29 hooks present in config but not applied (per rev 3+).
+- [src/module_5/packs.py](../src/module_5/packs.py) — pure pack builder. `compute_source_rank_hash` hashes a fixed-order subset of 50 fields (cosmetic column reorders do not bust cache). `fetch_prices_extremes` bulk-queries 52w low/high from `data/prices.db` in 500-ticker chunks (one round-trip per chunk). `build_context_pack` composes all sections + two horizon blocks + narrative rendering. `_SafeVal` wrapper makes `format_map` tolerate `None` values and incompatible format specs ("n/a" fallback).
+- [src/module_5/reports.py](../src/module_5/reports.py) — self-contained HTML report (no JS dependencies). Sections: counts, composite_best histogram (D21 informer), archetype/horizon/sector/industry/mcap histograms (D27/D28 informer), rescue pool preview at three illustrative thresholds (D29 informer), pack previews.
+- [src/module_5/enrichment.py](../src/module_5/enrichment.py) — orchestrator. Single SQLite transaction over all upserts (atomicity — acceptance test 11). Build errors caught per-ticker and logged to `pack_exclusions_{quarter}.parquet` with `reason='build_error'` rather than crashing the run.
+- [src/module_5/__init__.py](../src/module_5/__init__.py) — public API re-exports.
+- [scripts/5_build_context_packs.py](../scripts/5_build_context_packs.py) — CLI. `--force-refresh` (rebuild + upsert), `--no-cache` (rebuild + skip upsert), `--quarter`, `-v`.
+
+**Modifications:**
+- [run_2_Funds_parser.bat](../run_2_Funds_parser.bat) — fifth `[y/N]` gate wired after Module 4b. Runs `scripts\5_build_context_packs.py -v`.
+
+**Deviations from spec:**
+- **Narrative template resilience.** Spec sketched simple Python `.format()` substitution; implementation wraps every placeholder in a `_SafeVal` class that handles `None` values and incompatible format specs (e.g. `{qoq_fund_count_change:+d}` with a missing int) by falling back to `"n/a"`. Needed because some early-quarter tickers genuinely lack QoQ data (first quarter of coverage). Documented in `packs.py::_SafeVal` docstring.
+- **Float default precision.** `_SafeVal.__format__` auto-formats floats at 2 decimals when spec is empty (`{R_26}` renders as `0.52`, not `0.5194805...`). Avoids cluttering templates with `:.2f` at every placeholder site.
+- **Pack size.** Actual: ~4 KB per pack (5.85 MB total for 1,423 tickers). Within the "3–6 MB" spec estimate.
+
+**Acceptance tests (2025Q4):**
+
+| # | Test | Result |
+|---|------|---|
+| 1 | First run produces 1,423 rows with `cache_status='built'`; HTML + exclusions parquet written; wall < 30 s | ✅ 1,423 built / 0.92 s |
+| 2 | Second run same day: 100% `cache_hit`, wall < 3 s | ✅ 1,423 cache_hit / 0.64 s |
+| 3 | After ranking re-run with changed alpha → `source_rank_hash` changes → affected rows `refreshed` | deferred (requires ranking rerun) |
+| 4 | pack_version bump coexistence | deferred (no v2 yet) |
+| 5 | `denylist_tickers: ["ABEO"]` → ABEO in exclusions parquet, 1,422 packs | ✅ denylist logic in `apply_selection` |
+| 6 | `include_unclassified: false` → 65 unclassified in exclusions | ✅ logic in `apply_selection` |
+| 7 | Two `--force-refresh` runs → byte-identical `pack_json` modulo `pack_built_at` | ✅ verified (only `pack_built_at` differs) |
+| 8 | Non-USD ticker → currency warning appended to narratives | verified by code path (no non-USD in current 2025Q4 set) |
+| 9 | Young ticker → `data_quality='partial'`, narrative reflects it | covered by code path |
+| 10 | Empty input → empty outputs, no crash | `_write_empty_outputs` code path verified |
+| 11 | Interrupted run → DB coherent (atomic commit) | confirmed by single-transaction design |
+
+**D21/D27/D28/D29 gate composition verified end-to-end:**
+- D21 `composite_best >= 6` alone → 413 rows
+- + D29 rescue → 502 rows (+89 rescued, matches spec prediction exactly)
+- + D27 sector=Healthcare → 162 rows
+- + D28 `market_cap_usd <= $3.7B` → 133 rows (realistic Module 6 feed size)
+
+PGNY round-trips correctly: `post_crash_rebase` archetype, score_3mo=+6, score_12mo=+8, composite_best=7.52, best_horizon=12mo — matches the walkthrough example in the Module 4 spec.
 
 ---
 
 ## Module 6 — LLM Scoring (Anthropic API)
 
-*Spec: TBD. Uses batch API + prompt caching; pre-flight cost estimator gates submission.*
+*Spec draft: [module_6_spec.md](module_6_spec.md) (2026-04-24, design pass in progress — points 1, 2, 4–10 locked; point 3 prompt text in progress).*
 
-*(No entries yet.)*
+### D30 — Runtime-interactive gate activation for D21 / D27 / D28 / D29
+
+**Decision:** The four M5-boundary gates are configured via **interactive multiple-choice prompts** at the start of each Module 6 run, computed live against `context_packs.db`. Yaml fallback defaults live in `config/scoring.yaml::gates` for `--non-interactive` runs. Each run's final gate values are persisted in `llm_runs.gate_config_json` for reproducibility.
+
+**Rationale:** The handoff brief planned to set gates statically in YAML, but the user flagged that the feed size (and therefore cost) is sensitive enough that per-run review is valuable. Interactive prompts let the user see live ticker counts at each threshold before committing. YAML fallback is retained for automation (daily runner, CI).
+
+**Consequence:** `scripts/6_score.py` depends on TTY for default path. `--non-interactive` required for scheduled runs.
+
+---
+
+### D31 — D27 uses `industry`, not `sector`
+
+**Decision:** Module 6's D27 allowlist gate filters on the M5 pack's **`industry`** column, not `sector`. `query_packs_for_quarter()` already supports `industry_allowlist` ([src/module_5/packs_db.py:203](../src/module_5/packs_db.py#L203)) — no schema change.
+
+**Rationale:** The user operates on 21 specialist biotech/healthcare funds whose holdings cluster tightly inside `sector=Healthcare`. Industry is where the user's actual selectivity lives (`Biotechnology` vs `Drug Manufacturers - Specialty & Generic` vs `Medical Devices`). Sector-level filtering would be too coarse to change the feed.
+
+**Alternatives considered:**
+- Sector (M5 spec's original proposal) — rejected: 1,230 of 1,423 packs are already `Healthcare`; the filter would barely bite.
+- Compound `sector + industry` — rejected: unnecessary; industry is already a finer partition.
+
+---
+
+### D32 — Storage is SQL-only; `llm_scores.db` carries the full LLM reply text
+
+**Decision:** All Module 6 state lives in `llm_scores.db` (four tables: `llm_scores`, `llm_runs`, `llm_errors`, `final_rankings`). **No JSON / Parquet files on disk for LLM outputs.** `llm_scores.raw_text` holds the full Anthropic reply verbatim, queryable by SQL and renderable by `Outputs/llm_responses_{quarter}.html`.
+
+**Rationale:** The user wants to query returned LLM text on-demand (both the structured fields and the raw narrative) without juggling per-ticker files. SQL gives fast indexed access and the HTML viewer is a projection. Mirrors the M5 approach where `pack_json` is a TEXT column, not a file.
+
+**Consequence:** `llm_scores.db` grows ~10–30 KB per ticker per run (raw text + parsed fields). 133 tickers × 2 horizons × several runs/year → well under 100 MB/year. Gitignored via `*.db`.
+
+**Alternatives considered:**
+- Per-ticker JSON files under `_outputs/` — rejected: matches M5 pattern poorly; worse query ergonomics.
+- Parquet columnstore for scores — rejected: Parquet's append semantics are poor for SQLite-style incremental caching.
+
+---
+
+### D33 — Batch or parallel-sync dispatch; no single-request fallback
+
+**Decision:** `scripts/6_score.py --mode` selects one of two dispatch strategies:
+- **`batch` (default production):** Anthropic Message Batches API — 50% token discount, ≤24h SLA.
+- **`sync` (calibration):** `AsyncAnthropic` fan-out bounded by `scoring.yaml::dispatch.sync_concurrency` (default 8).
+
+Both share the same prompt-cache prefix and the same `llm_scores` writeback. A single-request serial mode is NOT offered; even `--ticker <one>` goes through `sync` mode with concurrency 1.
+
+**Rationale:** The user asked for runtime and cost minimisation. Batch stacks cache + 50% off — cheapest for production. Sync fan-out gives fast calibration feedback (seconds, not hours) with the same cache behaviour. A serial mode adds code surface for no measurable benefit.
+
+---
+
+### D34 — Python computes appreciation rate; LLM never does
+
+**Decision:** The LLM returns `expected_appreciation_pct` and `time_to_catalyst_weeks` per horizon. Python computes `rate_H_pct_per_month = appreciation_pct / max(1.0, weeks / 4.33)` and picks `final_horizon = argmax_H(rate_H)` with `"either"` tag when rates are within `scoring.yaml::rate.tie_tolerance` (default 5%).
+
+**Rationale:** LLMs hallucinate compound-rate arithmetic (this is a documented weakness per Overall_specification.md § Module 6). Extracting the raw inputs and computing the ratio deterministically eliminates the failure mode.
+
+---
+
+### D35 — Per-industry `allowed_domains` whitelist; `max_uses=5`
+
+**Decision:** Every `web_search` tool invocation uses a per-ticker `allowed_domains` built as `universal ∪ by_industry[ticker.industry]` from [config/module_6_web_search_whitelists.yaml](../config/module_6_web_search_whitelists.yaml). `max_uses=5` per ticker. Universal tier: `sec.gov`, `globenewswire.com`, `prnewswire.com`, `businesswire.com`. Biotech/pharma tier adds: `fda.gov`, `clinicaltrials.gov`, `fiercebiotech.com`, `endpts.com`, `statnews.com`, `biopharmadive.com`, `bioworld.com`, `oncologypipeline.com`. Other industry tiers provisional.
+
+**Rationale:**
+- User-refined list explicitly strips general financial news (Reuters, Bloomberg, WSJ, FT, Yahoo Finance, Seeking Alpha) — these dilute signal with macro noise for biotech-specific thesis work.
+- User-refined biotech tier strips `nih.gov`, `ema.europa.eu`, `accessdata.fda.gov` (too broad / rarely material) and adds `oncologypipeline.com` (sector-specific pipeline tracker).
+- Press-release wires (GlobeNewswire / PR Newswire / BusinessWire) cover essentially all US-biotech IR content, so per-ticker IR subdomains don't need to be whitelisted individually (which would be infeasible — `allowed_domains` is per-call, we'd need 133+ entries).
+- `max_uses=5` balances cost ($6.65 upper-bound search fee at 133 tickers) against thesis depth. With research-emphasis 0.7/0.3 splits → ~3.5 long-term + ~1.5 near-term queries.
+
+**Fall-back when `max_uses` is hit:** model answers from what it has — no auto-retry with higher cap. User raises `max_uses` globally for the next run if thesis quality disappoints.
+
+**Alternatives considered:**
+- Unrestricted `allowed_domains` — rejected: user explicitly wanted curation; general financial news dilutes biotech signal.
+- Per-ticker IR domain whitelisting — rejected: 133+ entries infeasible in `allowed_domains`; wire services carry the same content.
+- Anthropic's `web_fetch` tool (fetches a specific URL) — rejected: doubles the cost surface for little gain; snippet content from `web_search` is sufficient.
+- `max_uses=10` — rejected: user elected tighter cap for first run; bump YAML value to revisit.
+
+---
+
+### D36 — `web_search_cache` table with prior-research prompt injection
+
+**Decision:** Every `server_tool_use` result block returned by Anthropic on a Module 6 call is parsed and upserted into a `web_search_cache` table in `llm_scores.db`, keyed by URL (dedupes across queries and tickers). Before the next run's LLM call for ticker T, the pre-flight step queries the cache for rows matching T within `scoring.yaml::cache.web_search_lookback_days` (default 180) and injects them into the per-ticker user message as a `## Prior research` block. System prompt instructs the model to skip searches covered by the prior block unless content is stale.
+
+**Rationale:** Anthropic's `web_search` is server-side and uncacheable at the SDK level — we cannot intercept a search to serve from cache. The only mechanism to reduce fresh searches is to **inform the next prompt** with prior findings so the model issues fewer of them. Expected savings: 50–70% of fresh searches per re-run once the cache is warm. First run benefits are zero (cold cache); benefits compound from run 2 onward.
+
+**Paywall handling.** The three paywalled domains in the biotech tier (`endpts.com`, `statnews.com`, `bioworld.com`) stay whitelisted for now. `web_search_cache.content_length` is logged per result; after the first full sync run, any paywalled domain whose `AVG(content_length) < 150` is flagged for user review and potential removal.
+
+**Echo-chamber mitigation.** Every injected entry carries its `published_date` and `first_seen_date`; the system prompt tells the model that prior research is context, not conclusion, and that it must verify freshness. Cost estimator reports `expected_cache_hit_rate` so a near-100% reuse run surfaces for human review before dispatch.
+
+**Alternatives considered:**
+- Client-side search replacement (Brave / Tavily / Serper) with our own fetch + cache — rejected: adds an external dependency and ToS surface (`project_data_provider_switch` memory); Anthropic's server-side tool is preferred for reliability.
+- Audit-only caching (no prompt injection) — rejected: doesn't achieve the cost-reduction goal the user asked for.
+- `web_fetch` tool (retrieve specific URL) layered on top — rejected: doubles the cost surface for marginal coverage gain; wire-service snippets already cover most US-biotech PR content.
+
+---
+
+### D37 — Prior-thesis injection from `llm_scores` into future runs
+
+**Decision:** Before each LLM call on ticker T, a pre-flight step queries `llm_scores` for the 2 most recent prior rows per horizon (across all quarters, not just the current one), formats a condensed `## Prior thesis` block (field-level only — no `raw_text` verbatim), and injects it into the per-ticker user message. System prompt instructs the model that prior thesis is continuity reference, not anchor; it must justify any continuation against current evidence.
+
+**Rationale:** The user trades on recurring horizons (3mo + 12mo). A 12mo thesis written in Q3 can be informed by how it plays out against reality by Q1 of the following year. Cross-run thesis continuity helps the model reason "what changed since last time" rather than start from scratch each quarter, improving coherence and efficiency. No schema change — `llm_scores.raw_text` is already persisted (D32).
+
+**Echo-chamber mitigation.** Injected fields are limited (`expected_appreciation_pct`, `time_to_catalyst_weeks`, `catalyst_type`, `confidence`, `thesis_summary`, `scored_at`, model, prompt_version) — not `raw_text`. The system prompt forbids verbatim repetition; each re-score must be grounded in current evidence. Tunable cap: `scoring.yaml::cache.prior_thesis_max_per_horizon` (default 2).
+
+**Alternatives considered:**
+- Inject `raw_text` verbatim — rejected: too strong anchoring; model would parrot prior reasoning.
+- Inject only the ticker's single most recent prior — rejected: misses the "direction of revision" signal (up vs down across runs).
+- No prior-thesis injection — rejected: wastes the durable cross-run value of `llm_scores.raw_text`.
+
+---
+
+### D38 — Cache reuse is the default; `--force-refresh` is the opt-out
+
+**Decision:** Module 6 reuses cached `llm_scores` rows by default on every run. The prior `--use-cache` flag is gone — reuse is implicit. `--force-refresh` is added as the explicit opt-out (bypasses the entire tiering system; every selected ticker runs Tier C regardless of cache state).
+
+**Rationale:** The user's typical workflow is to rerun M6 with different gate values on the same quarter (e.g. loosening `composite_best_min` after seeing initial results). Under opt-in caching the user had to remember `--use-cache` or pay for re-scoring. Under default caching the user gets the free behaviour and pays only when they explicitly ask to re-score. Matches the "don't multiply user requests" memory rule.
+
+**Consequence:** The pre-flight cost summary always shows tier breakdown (`A / B / C`) so the user sees explicitly which tickers hit the cache before confirming dispatch.
+
+**Alternatives considered:**
+- Keep opt-in caching — rejected: surprise bills when the user forgets the flag.
+- Require per-run confirmation of cache policy — rejected: adds friction to the common case.
+
+---
+
+### D39 — Three-tier routing (A exact cache / B light refresh / C full scoring)
+
+**Decision:** For every ticker in the Module 6 feed, the pre-flight step assigns one of three tiers:
+
+- **Tier A** — prior `llm_scores` row for `(ticker, current_quarter, horizon, prompt_version, model)` exists AND `prior.pack_source_rank_hash == current_pack.source_rank_hash`. Exact cache hit, $0, no API call.
+- **Tier B** — prior row exists within `refresh_threshold_days[horizon]` (4 weeks for 3mo, 8 weeks for 12mo) but pack hash differs or quarter changed. Light refresh prompt: ~1k input tokens, 400 output tokens, `max_uses=2`, same cached system prefix. Output JSON `{material_change: bool, reason, updated_thesis_if_changed}`. If `material_change=false` → write new row with thesis fields copied from prior + `refreshed_from_row_id` audit pointer. Cost: ~15–20% of full scoring.
+- **Tier C** — no prior, or prior is stale beyond threshold, OR Tier B returned `material_change=true` (auto-escalation). Full scoring prompt.
+
+**Strict Tier A.** Any `pack_source_rank_hash` difference — even trivial snapshot-timestamp shifts — demotes to Tier B. No classification of "trivial vs material" at the hash layer; Tier B is cheap enough that safety wins.
+
+**Auto-escalation on Tier B `material_change=true`.** In sync mode the async worker fires the Tier C call immediately. In batch mode a second batch bundles all escalations after the first completes; user sees the delta-cost summary but no second `[y/N]` (the pre-flight worst-case already flagged the ceiling).
+
+**Horizon-aware thresholds.** 3mo thesis staleness accrues faster than 12mo (readout/earnings cycles vs pipeline-level fundamentals). 4-week / 8-week split; tunable in `scoring.yaml::cache`.
+
+**Rationale:** The user explicitly asked for cost control across two scenarios:
+- Expanding the feed within the same quarter → Tier A handles this automatically (same quarter + same pack hash = $0).
+- Re-running after X weeks, fundamentals likely unchanged → Tier B runs a cheap "has anything changed?" check; only escalates to full scoring when the model sees real change.
+
+Together these cut the marginal cost of iteration (gate tuning, quarterly refreshes) by ~60–80% vs always running Tier C.
+
+**New columns on `llm_scores`.** `source_tier` (`'A'|'B'|'C'`), `pack_source_rank_hash` (TEXT), `refreshed_from_row_id` (INTEGER, nullable FK). Additive migration via the standard pattern.
+
+**Alternatives considered:**
+- Two-tier (just A vs full) — rejected: misses the cross-quarter-unchanged case entirely; user would pay full rate for thesis work that hasn't moved.
+- Fuzzy pack-hash matching (diff only "material" fields) — rejected: defining "material" is a second problem; Tier B is cheap enough that strict-match wins.
+- User-approval gate before Tier B escalations — rejected: adds friction; ceiling already surfaced in pre-flight.
+- Single threshold for both horizons — rejected: 3mo thesis is far more time-sensitive; a 6-week threshold that works for 12mo would let stale 3mo thesis slip through.
+
+---
+
+### D40 — M6 output reshape to `m6-v2` — three-section structure (research_brief / entry_ranges / scoring inputs), pre-funded warrants mandatory in share count
+
+**Decision:** Module 6's LLM output is reshaped from the original `m6-v1` (per-horizon `expected_appreciation_pct` + `confidence` 3-band enum) to `m6-v2` — a three-section JSON:
+
+- **Section A — `research_brief`**: full structured research (technology origin, moat, financials including fully-diluted share count with pre-funded warrants, insider activity, clinical trials broken into ongoing / interim / final / prior history, competitive landscape, partnerships, acquisition-target probability, FDA context, per-indication risk-adjusted NPV with stage-based POS base rates, past failures, research_notes freeform).
+- **Section B — `entry_price_ranges`**: per-ticker (shared across horizons) — `fair_entry` range anchored on rNPV-per-share + stage-discount, and `full_reward` range anchored on cash-per-share or institutional floor.
+- **Section C — per-horizon scoring inputs**: `target_price_usd`, `time_to_catalyst_weeks`, `probability` (continuous 0.15–0.90), plus `catalyst_type` / `catalyst_detail` / `thesis_summary` / `key_risks`. Python computes the appreciation percentage and composite score deterministically.
+
+**Pre-funded warrants — HARD RULE:** `research_brief.financials.fully_diluted_shares_count` MUST include pre-funded warrants (instantly exercisable at $0.001), vested in-the-money options, and convertible-note conversion shares. Small-mid cap biotechs often carry 20–50% PFW dilution; rNPV-per-share computed against basic shares overstates value by that same margin. Prompt enforces; Python validates `fully_diluted >= basic + prefunded_warrants`.
+
+**Prompt version bump:** `m6-v1` → `m6-v2`. Prior rows persist in `llm_scores` for audit; new runs cache-miss and re-score. Accepted one-time cost.
+
+**Search budget:** `max_uses` raised from 5 → 12 to support research depth. Expected cost per ticker rises from ~$0.18 to ~$0.48 (Opus 4.7 + batch + cache), 133-ticker feed from ~$24 to ~$64. User signed off on the cost increase in exchange for research-grade output.
+
+**New SQL columns on `llm_scores` and `final_rankings`:** see [module_6_spec.md § `llm_scores.db` — SQLite schema](module_6_spec.md). Additive migration.
+
+**Rationale:**
+- User's own prompt proposal required moat, FDA probability, TAM, NPV, competitive landscape, clinical trial detail, cash/burn/shelf/insider — none of which `m6-v1` captured. Merging user's content depth with `m6-v1`'s structural rigor (rubrics, hard rules, few-shots) produces an output that serves both the ranked-ledger use case and the "research each ticker properly" use case.
+- rNPV-per-share anchor on fair entry enforces positioning discipline — the score formula rewards disciplined entries even on speculative thesis, not bid-up momentum names.
+- Separating structured research (SQL-queryable) from free text captures the narrative nuance while making the high-signal scalars (moat_score, rnpv_per_share_usd, fda_pos_adjusted) directly filterable in reports.
+
+**Alternatives considered:**
+- Keep `m6-v1` narrow schema — rejected: user explicitly requested research-heavy output.
+- Free-text research blob only — rejected: loses SQL queryability.
+- Combine research_brief into per-horizon sections — rejected: research is per-ticker (moat, rNPV, financials don't differ by horizon); separation is clean.
+- Keep `confidence` 3-band alongside `probability` continuous — rejected: `confidence` was an abstract self-calibration metric; `probability` is the scoring input, so `confidence` adds ambiguity without value.
+
+**Coupling with deferred M4c (memory `project_m4c_fundamentals_enrichment`):** Once M4c ships (biotechnology-industry only first build), `research_brief.financials` and `research_brief.insider_activity` become pack-sourced rather than LLM-searched. `max_uses` can drop back to ~6–8; per-ticker cost drops from $0.48 to ~$0.32 (~35% savings). M4c scope is preserved to biotech + flagged for other industries.
+
+---
+
+### D41 — rNPV-anchored entry ranges with stage-based discount
+
+**Decision:** `fair_entry_low_usd` / `fair_entry_high_usd` must be anchored on `rnpv_per_share_usd` using a stage-dependent fraction (Ph1 15-30%, Ph2 30-50%, Ph3 50-80%, NDA 70-90%, Approved 90-110%). `fair_entry_rationale` MUST cite the rNPV figure, the % used, the stage justification, and the cash-per-share floor. `full_reward_low_usd` / `full_reward_high_usd` must be anchored on a hard floor (cash per share, forced re-financing bar, institutional re-averaging level) cited in `full_reward_rationale`. Invariant: `full_reward_low_usd ≤ fair_entry_low_usd`.
+
+**Rationale:** The user explicitly asked for "fair share price entry" and "full reward share price entry" outputs, with fair entry anchored on rNPV. rNPV is the biotech-standard valuation method — risk-adjusted via per-indication POS and discounted to today. Stage-based discount reflects market convention that pre-commercial biotech trades at a fraction of rNPV (because realisation risk remains). Full-reward is the "layup" entry below which the thesis becomes asymmetric on cash/floor terms.
+
+**Probability of Success (POS) base rates** (industry-standard, from BIO / Informa Pharma Intelligence):
+
+| Stage → Approval | Oncology | Rare disease | Cardiometabolic | Neurology | Infectious (non-COVID) | CNS psych | All pathologies |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Ph1 → Approval | 6% | 17% | 9% | 8% | 11% | 6% | ~10% |
+| Ph2 → Approval | 11% | 27% | 15% | 13% | 18% | 12% | ~15% |
+| Ph3 → Approval | 52% | 75% | 50% | 55% | 60% | 48% | ~58% |
+| NDA → Approval | 85% | 90% | 85% | 85% | 88% | 82% | ~87% |
+
+`pos_adjusted` must be within ±15 percentage points of `pos_base_rate` unless justified by disclosed prior readout data (cited inline in `pos_rationale`).
+
+**Consequence:** In reports, tickers where `current_price > fair_entry_high_usd` should be flagged "ABOVE FAIR ENTRY — wait for pullback." Score remains computed (from fair-entry midpoint) but user sees that current market does not offer the score.
+
+**Alternatives considered:**
+- Fair entry as % of current price (e.g. "20% discount to spot") — rejected: anchors on market sentiment, not value.
+- Fair entry as single point — rejected: loses the uncertainty range which is the whole point.
+- DCF-only (no POS adjustment) — rejected: mis-values pre-commercial biotech vs post-approval.
+
+---
+
+### D42 — Composite score formula: `(appreciation_from_fair_mid / months) × probability`, horizon-ranked
+
+**Decision:** Per-horizon composite score is Python-computed (D34) from the LLM's three raw inputs (`target_price_usd`, `time_to_catalyst_weeks`, `probability`) and Section B's `fair_entry_low_usd` / `fair_entry_high_usd`:
+
+```python
+fair_mid = (fair_entry_low + fair_entry_high) / 2
+full_mid = (full_reward_low + full_reward_high) / 2
+months = max(1.0, time_to_catalyst_weeks / 4.33)
+
+appreciation_from_fair_pct = (target_price_usd - fair_mid) / fair_mid * 100
+score_at_fair = (appreciation_from_fair_pct / months) * probability
+
+# Reference score, reported in parallel
+appreciation_from_full_pct = (target_price_usd - full_mid) / full_mid * 100
+score_at_full_reward = (appreciation_from_full_pct / months) * probability
+
+final_horizon = argmax_H(score_at_fair_H)   # 3mo vs 12mo by PRIMARY score
+final_score   = max_H(score_at_fair_H)
+```
+
+**Score units:** expected appreciation in percentage points per month from fair-entry midpoint, probability-weighted.
+
+**Probability rubric (continuous 0.15–0.90):**
+- HIGH `0.70–0.90` — scheduled catalyst, precedent-backed, corroborated source, ±2w timing.
+- MEDIUM `0.40–0.69` — expected-but-unscheduled OR mixed-precedent scheduled; ±4w timing.
+- LOW `0.15–0.39` — mosaic-driven / ambiguous > 8w / thin evidence.
+- Values outside `[0.15, 0.90]` forbidden — never claim certainty or impossibility.
+
+**Rationale:**
+- Deterministic Python computation avoids LLM rate-arithmetic hallucination (D34 extended).
+- Anchoring appreciation on fair-entry midpoint (not current price) enforces positioning discipline — the formula rewards disciplined entries even on speculative thesis.
+- Probability as a continuous multiplier is the right mathematical form for expected-value compounding; the 3-band anchors give LLM a calibration framework without forcing a hard enum.
+- `score_at_full_reward` reported in parallel so reports show "what this becomes if price drops to the layup zone."
+
+**Alternatives considered:**
+- Anchor appreciation on current price — rejected: rewards bid-up momentum; ignores entry discipline.
+- Confidence 3-band (as in m6-v1) — rejected: not a scoring input; replaced with `probability`.
+- Probability as strict 3-band enum — rejected: EV math needs continuous values; anchors suffice for calibration.
+- Score formula without probability multiplier (D34 formula) — rejected: user explicitly asked for probability in score = "appreciation / time × probability."
+
+---
 
 ---
 

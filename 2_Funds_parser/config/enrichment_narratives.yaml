@@ -1,0 +1,77 @@
+# Module 5 — Per-archetype, per-horizon narrative templates.
+# Each template is a short 2-4 sentence prose string the LLM reads in the pack's
+# `near_term_3mo.narrative_summary` / `long_term_12mo.narrative_summary` fields.
+#
+# Placeholders (all optional; unresolved ones render as "n/a"):
+#   {ticker} {archetype} {horizon_months} {sector} {industry}
+#   {fund_count} {qoq_fund_count_change} {new_positions} {increased_positions}
+#   {composite_best} {score_3mo} {score_12mo} {match_confidence}
+#   {pct_off_52w_low} {pct_off_52w_high} {pct_off_anchor}
+#   {R_4} {R_12} {R_26} {R_52}
+#
+# Missing archetypes fall back to `default`.
+
+templates:
+  fresh_awakening:
+    "3mo": "Flat or mildly down across the full year but awakening in the last 12 weeks ({R_12} × over 12w, {R_4} × over 4w). Over {horizon_months} months, validate whether this is the first leg of a sustained move: volume confirmation, follow-through on dips, and whether specialist funds ({fund_count} holders, QoQ {qoq_fund_count_change:+d}) continue to accumulate. Any upcoming catalyst — earnings, readout, regulatory decision — could convert the awakening into a breakout."
+    "12mo": "A year-long base that is just beginning to move. Over {horizon_months} months, the investable thesis is whether this marks a Stage 1→2 transition per Weinstein: assess pipeline milestones, competitive moat in {industry}, institutional sponsorship depth, and whether the fund footprint keeps growing across the next two or three filings."
+
+  deep_base_breakout:
+    "3mo": "Deep intra-year crash ({R_26} × over 26w), multi-month base, now breaking out ({R_4} × over 4w). Over {horizon_months} months, confirm the breakout: does price hold above base resistance on rising volume, do funds ({fund_count} holders, QoQ {qoq_fund_count_change:+d}) keep adding, and does any near-term catalyst trigger follow-through? Bull-trap risk if volume fails."
+    "12mo": "Base-to-breakout after a sharp crash is the classic Minervini VCP / Weinstein Stage 2 setup. Over {horizon_months} months, assess the durability: pipeline / moat / approval milestones in {industry}, whether the crash catalyst has fully resolved, and whether fund holders keep accumulating through the next two filings. Full recovery trajectory typically plays out over 6-18 months."
+
+  post_crash_rebase:
+    "3mo": "Down sharply over the year ({R_52} × ytd) and stabilising in the last quarter. Over {horizon_months} months, the near-term question is whether this is a true bottom: has selling pressure exhausted, are {fund_count} fund holders (QoQ {qoq_fund_count_change:+d}) defending the level, and is there a visible catalyst to start the next leg up? Still early — patience required."
+    "12mo": "Post-crash rebasing often precedes full recovery over 6-18 months per Minervini. Over {horizon_months} months, assess whether the crash catalyst has fully resolved, whether {sector} / {industry} is in a favourable phase, and whether the fund base is stable-to-growing. The 12mo thesis is recovery, not just stabilisation."
+
+  early_breakout:
+    "3mo": "Recent move starting ({R_4} × over 4w) off a flat-to-mildly-positive year ({R_52}). Over {horizon_months} months, validate breakout quality: volume pattern, follow-through on first pullback, whether funds ({fund_count}, QoQ {qoq_fund_count_change:+d}) continue to support. Best-case is the first 20-30% of a longer move; worst-case is a failed breakout."
+    "12mo": "Early breakouts that resolve become Stage 2 uptrends. Over {horizon_months} months, investigate what's driving the change of character — catalyst, sector rotation, fundamental inflection — and whether the setup in {industry} supports 12-month follow-through."
+
+  v_recovery:
+    "3mo": "Year overall positive but with a mid-period dip; recent strength ({R_4} × over 4w). Over {horizon_months} months, assess whether the V has completed or whether it re-tests: near-term momentum, volume on the recovery leg, and whether fund holders ({fund_count}, QoQ {qoq_fund_count_change:+d}) are adding on the way up."
+    "12mo": "V-recoveries that succeed tend to resume the prior uptrend with renewed strength. Over {horizon_months} months, the long-term thesis is whether the pre-dip driver (product cycle, pipeline, sector tailwind in {industry}) is intact and whether the dip was a reset rather than a regime change."
+
+  mature_uptrend:
+    "3mo": "Sustained uptrend across all windows; near-term headroom limited at this horizon. Over {horizon_months} months, watch for consolidation or shallow pullback; entry timing matters more than conviction. {fund_count} fund holders (QoQ {qoq_fund_count_change:+d}) provide support."
+    "12mo": "Mature uptrends often extend per Weinstein's 30-week data. Over {horizon_months} months, the question is compounding: does the trend keep going (trend persistence), what catalysts extend it, and how does {industry} position the stock for continuation? 12mo payoff favoured over 3mo."
+
+  stage2_pullback:
+    "3mo": "Year strong ({R_52}) with a minor recent pullback ({R_4}). Over {horizon_months} months, the pullback is the buyable setup per Weinstein Stage 2B / Livermore continuation pivotal — assess whether support holds, whether volume dries on the dip, and whether funds ({fund_count} holders, QoQ {qoq_fund_count_change:+d}) are adding."
+    "12mo": "Stage 2 pullbacks typically resolve with the trend continuing. Over {horizon_months} months, assess the structural trend: moat, pipeline, sector phase in {industry}. The pullback adds entry advantage to an already-positive long-term setup."
+
+  shallow_rebase:
+    "3mo": "Mild year-long decline turning up recently. Over {horizon_months} months, the near-term question is whether this is a durable turn or a bear-market rally: volume confirmation, fund accumulation ({fund_count} holders, QoQ {qoq_fund_count_change:+d}), and whether any catalyst validates the change in trend."
+    "12mo": "Shallow rebases sometimes become full recoveries, sometimes stall. Over {horizon_months} months, assess whether the factors behind the year-long decline are resolving and whether {industry} is positioned for a reversal."
+
+  quiet_compression:
+    "3mo": "Flat across all windows — coiled spring, no directional edge without a catalyst. Over {horizon_months} months, the setup is waiting for a trigger: earnings, pipeline news, sector rotation. {fund_count} fund holders provide a floor."
+    "12mo": "Quiet compression rarely persists over a full year; typically resolves up or down within 6-12 months. Over {horizon_months} months, investigate what might break the compression — upcoming catalysts in {industry}, sector phase, fundamental inflection. Direction uncertain without extra signal."
+
+  extended_uptrend:
+    "3mo": "Strong uptrend past the mature_uptrend cap ({R_52}) — 'train has left' territory but not yet parabolic. Over {horizon_months} months, near-term risk of mean reversion. Entering here is a momentum bet, not a value bet."
+    "12mo": "Extended uptrends can continue per Minervini's 'trends persist' guidance. Over {horizon_months} months, the question is whether momentum compounds or reverses. Fundamentals and sector health in {industry} matter more than the current price level."
+
+  late_stage_extension:
+    "3mo": "Minervini late-stage climax zone — R_52 extended AND R_4 hot, approaching (but not yet at) parabolic. Over {horizon_months} months, high near-term risk. Only justified by an acute catalyst."
+    "12mo": "Late-stage extensions typically reset within 6-12 months. Over {horizon_months} months, the thesis is partial recovery after a cooldown; assess fundamentals, pipeline / moat in {industry}, and whether the stock has a genuine Stage 2 to return to."
+
+  broken_trend:
+    "3mo": "Prior uptrend broken; recent weakness ({R_4} < 1, {R_12} < 1). Over {horizon_months} months, near-term risk of further decline. Avoid unless a specific catalyst rebuilds the thesis."
+    "12mo": "Broken trends sometimes heal — news breaks often resolve within 12 months. Over {horizon_months} months, investigate what broke the trend, whether the driver has resolved, and whether {industry} conditions favour repair."
+
+  sustained_decline:
+    "3mo": "Falling across all windows — Minervini Stage 4 'dead money'. Over {horizon_months} months, near-term continuation of the downtrend is the base case. Bottom-fishing risk is high."
+    "12mo": "Stage 4 declines typically extend 30-50% further per Weinstein. Over {horizon_months} months, assess only if there's a specific thesis that the decline ends — bankruptcy risk, buyout possibility, pipeline reset. Default view is further downside."
+
+  parabolic_blowoff:
+    "3mo": "Climax top — recent move extreme ({R_4} ≥ 1.25, {R_4_over_R_12} ≥ 1.30). Mean-reversion imminent per classic chart-pattern literature. Over {horizon_months} months, near-term reversion is the base case."
+    "12mo": "Parabolic blowoffs typically partially recover over 12 months as forced selling exhausts. Over {horizon_months} months, the thesis is recovery of a fraction of the extreme — not resumption of the parabola. Investigate real underlying value in {industry} vs. speculation-driven spike."
+
+  unclassified:
+    "3mo": "No archetype matched above confidence threshold. The ratio matrix does not conform to any known pattern — possibly because this ticker is in a transitional or unusual state. Over {horizon_months} months, lean on fund-flow signal ({fund_count} holders, QoQ {qoq_fund_count_change:+d}, {new_positions} new, {increased_positions} increased): are specialists accumulating despite the ambiguous pattern? Any near-term catalyst matters more than pattern-based reasoning here."
+    "12mo": "Unclassified means the price pattern has no strong literature precedent. Over {horizon_months} months, rely on fundamentals, pipeline / moat in {industry}, and the fund footprint. {fund_count} specialist fund holders with QoQ change of {qoq_fund_count_change:+d} is the strongest pattern-independent signal."
+
+  default:
+    "3mo": "Pattern: {archetype}. Over {horizon_months} months, evaluate near-term setup quality, any scheduled catalysts, and whether fund accumulation ({fund_count} holders, QoQ {qoq_fund_count_change:+d}) supports the thesis."
+    "12mo": "Pattern: {archetype}. Over {horizon_months} months, assess the long-run thesis in {sector} / {industry}, fundamentals, and whether the pattern setup is consistent with a 12-month return."

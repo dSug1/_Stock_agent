@@ -6,7 +6,7 @@
 
 Module 5 consumes Module 4b's dual-horizon ranked candidates and assembles a **structured context pack per ticker** (for every row Module 4b produces — 1,423 on current 2025Q4 data) that Module 6's LLM will score. The context pack contains the objective evidence the LLM cannot derive on its own — fund accumulation story, price trajectory numbers, ratio matrix, liquidity, snapshot fundamentals — organised into **two horizon-scoped sections** so the LLM can reason about 3-month and 12-month appreciation in parallel.
 
-**No shortlist gate in Module 5** — see D21, D27, and D28. The `composite_best` threshold, the sector allowlist, and the final max-market-cap filter that eventually control which packs get LLM-scored all live in Module 6 config, not here. This keeps Module 5 a pure prep step and lets all three filters be set *after* Module 6's per-ticker cost is known.
+**No shortlist gate in Module 5** — see D21, D27, D28, and D29. The `composite_best` threshold, the sector allowlist, the final max-market-cap filter, and the fund-flow rescue clause that eventually control which packs get LLM-scored all live in Module 6 config, not here. This keeps Module 5 a pure prep step and lets all four filters be set *after* Module 6's per-ticker cost is known.
 
 **Module 5 does not call any external API.** Catalyst/news research is the LLM's job in Module 6 via the Anthropic `web_search` tool. This keeps Module 5 deterministic, idempotent, and cacheable; and it sidesteps the `project_data_provider_switch` memory rule (no yfinance, no Tavily/Serper before public deploy).
 
@@ -19,7 +19,7 @@ Module 5 reads `_intermediate_outputs/ranked_candidates_{quarter}.parquet` with 
 1. **Both horizons are evaluated.** `best_horizon` is a **research-depth hint** — it biases how much narrative emphasis each section of the context pack gets — but it does **not** gate inclusion. Every ticker receives a full `near_term_3mo` section *and* a full `long_term_12mo` section.
 2. **Final ranking is by rate-of-appreciation.** Module 6 computes `rate_H = expected_appreciation_H / H_months` per ticker per horizon, then picks `final_horizon = argmax_H(rate_H)`. Module 5's job is to give the LLM enough context to estimate `expected_appreciation_H` well at both horizons.
 3. **The pattern-score delta between horizons is small.** `score_3mo` vs `score_12mo` differ by 0–2 points, always same-sign except for `extended_uptrend` (−1/+1). The pattern prior surfaces the ticker; the LLM's appreciation estimate dominates. Module 5 must not collapse the two horizons into one.
-4. **No shortlist filtering in Module 5 (D21, D27, D28).** All 1,423 ranked rows receive packs, including `unclassified`, all sectors, and every market cap up to the Module 4a fetch ceiling ($10B). The composite-score threshold (D21), sector allowlist (D27), and max-market-cap filter (D28) are all Module 6's concern, deferred until per-ticker LLM cost is known.
+4. **No shortlist filtering in Module 5 (D21, D27, D28, D29).** All 1,423 ranked rows receive packs, including `unclassified`, all sectors, and every market cap up to the Module 4a fetch ceiling ($10B). The composite-score threshold (D21), sector allowlist (D27), max-market-cap filter (D28), and fund-flow rescue clause (D29) are all Module 6's concern, deferred until per-ticker LLM cost is known.
 
 ---
 
@@ -59,6 +59,7 @@ Folder conventions follow the pipeline-wide rule (`Outputs/`, `_intermediate_out
   - `composite_best` histogram (so the user can eyeball future threshold choices — D21).
   - **Sector + industry histogram** (so the user can choose the Module 6 allowlist — D27). Clickable bars that show the ticker list per sector.
   - **Market-cap histogram** (so the user can choose the Module 6 cap — D28). Same buckets as Module 4a's prompt: `<$100M`, `$100M–$500M`, `$500M–$1B`, `$1B–$2B`, `$2B–$3.7B`, `$3.7B–$5B`, `$5B–$7.5B`, `$7.5B–$10B`.
+  - **Fund-flow rescue pool preview** (D29). Counts under the default rule (`archetype NOT IN train_has_left AND (new_positions >= 1 OR qoq_fund_count_change >= 1)`) at three illustrative D21 thresholds (5, 6, 7): how many tickers pass D21 outright, how many are rescued, total. Broken down by archetype. Helps size the pool before committing to thresholds.
   - Cache efficiency (% `cache_hit` vs `refreshed` vs `built`).
   - First 10 packs rendered as collapsible previews (default — see `reports.preview_count`).
 
@@ -174,6 +175,65 @@ Module 4a enforces two caps: a hard **fetch ceiling** ($10B, governing what ente
 
 **Visibility.** The HTML enrichment report adds a market-cap histogram (same buckets as Module 4a's prompt: `<$100M`, `$100M–$500M`, `$500M–$1B`, `$1B–$2B`, `$2B–$3.7B`, `$3.7B–$5B`, `$5B–$7.5B`, `$7.5B–$10B`) so the user can choose the Module 6 cap from real numbers.
 
+### D29 — Fund-flow rescue clause (applied after D21; subject to D27 and D28)
+
+**Rule.** After D21's composite-score gate, re-include tickers that would have been excluded **if and only if**:
+
+```
+composite_best < D21_threshold
+AND archetype NOT IN ("train has left" set)
+AND (new_positions >= 1 OR qoq_fund_count_change >= 1)
+```
+
+**"Train has left" archetype set.** Five archetypes where the pattern itself says the opportunity has already passed:
+
+- `extended_uptrend` (scores −1/+1) — description: "train has left but not parabolic"
+- `late_stage_extension` (−2/−1) — Minervini late-stage climax
+- `broken_trend` (−4/−3)
+- `sustained_decline` (−5/−6) — Stage 4 "dead money"
+- `parabolic_blowoff` (−10/−7) — description: "train has left"
+
+Tickers in these archetypes are excluded from rescue regardless of fund flow — the project's founding premise is that a strong fund inflow into a broken or topped pattern is more likely a bull trap than an opportunity. The list is a tunable config field (`rescue.train_has_left_archetypes`), not hard-coded.
+
+**Subject to D27 and D28.** A rescued ticker that fails sector allowlist (D27) or max-market-cap (D28) is still excluded. Those filters are outer `AND` clauses; D29 is an inner `OR` leg inside the D21 gate. The full query shape is:
+
+```sql
+SELECT ... FROM context_packs
+WHERE quarter = ? AND pack_version = ?
+  AND (
+        composite_best >= :composite_threshold                -- D21 main path
+     OR (
+          archetype NOT IN ('extended_uptrend', 'late_stage_extension',
+                            'broken_trend', 'sustained_decline', 'parabolic_blowoff')
+          AND (new_positions >= 1 OR qoq_fund_count_change >= 1)
+        )                                                     -- D29 rescue path
+      )
+  AND sector IN (:allowlist)                                  -- D27
+  AND market_cap_usd <= :market_cap_max                       -- D28
+```
+
+The rescue clause does not re-check `composite_best < threshold` explicitly; anything with `composite_best >= threshold` already matches the first leg, so the OR is equivalent.
+
+**DEFERRED alongside D21.** Rescue thresholds (`new_positions` minimum, whether to also require `qoq_fund_count_change >= 1`, the exact "train has left" list) will be finalised when Module 6 cost lands. The rule above is the user's stated starting point (2026-04-24); lock it in when the threshold is set.
+
+**Hooks reserved in `enrichment.yaml`** (see § Config schema):
+```yaml
+rescue:
+  enabled: null                       # DEFERRED — turn on with D21 decision
+  new_positions_min: 1                # D29 default rule
+  qoq_fund_count_change_min: 1        # D29 default rule — OR logic with new_positions_min
+  train_has_left_archetypes:
+    - extended_uptrend
+    - late_stage_extension
+    - broken_trend
+    - sustained_decline
+    - parabolic_blowoff
+```
+
+**Current count at an illustrative `D21_threshold = 6`:** 413 tickers pass D21 outright, **89 tickers are rescued by D29**, total LLM-scoring pool = 502 before D27/D28 are applied. Rescue archetypes break down as `v_recovery` 32, `mature_uptrend` 21, `stage2_pullback` 19, `unclassified` 16, `shallow_rebase` 1 — all "train still here" patterns. PALI (5 new funds opened positions, unclassified pattern) is the archetypal rescue target.
+
+**Visibility.** The HTML enrichment report adds a "rescue pool preview" section: how many tickers *would* be rescued under the default rule at three illustrative thresholds (5, 6, 7), broken down by archetype and signal type (new-positions-only vs both-signals). Helps you size the pool before committing to a threshold.
+
 ---
 
 ## Algorithm
@@ -239,6 +299,10 @@ CREATE TABLE IF NOT EXISTS context_packs (
     sector            TEXT,                   -- D27: Module 6 filters with WHERE sector IN (...)
     industry          TEXT,                   -- D27: finer-grained filter if needed
     market_cap_usd    INTEGER,                -- D28: Module 6 filters with WHERE market_cap_usd <= ?
+    fund_count        INTEGER,                -- D29 (audit): number of tracked funds holding this ticker
+    new_positions     INTEGER,                -- D29: funds that opened a position this quarter
+    increased_positions INTEGER,              -- D29 (future use): funds that added to positions
+    qoq_fund_count_change INTEGER,            -- D29: net fund-count change quarter-over-quarter
 
     -- The full structured pack (JSON TEXT)
     pack_json         TEXT NOT NULL,
@@ -262,27 +326,43 @@ CREATE INDEX IF NOT EXISTS idx_packs_quarter_sector
 CREATE INDEX IF NOT EXISTS idx_packs_quarter_mcap
     ON context_packs(quarter, market_cap_usd);
 
+CREATE INDEX IF NOT EXISTS idx_packs_quarter_newpos
+    ON context_packs(quarter, new_positions DESC);
+
+CREATE INDEX IF NOT EXISTS idx_packs_quarter_qoq
+    ON context_packs(quarter, qoq_fund_count_change DESC);
+
 PRAGMA journal_mode = WAL;
 ```
 
 Module 6 reads via SQL:
 
 ```python
-# Module 6 applies all three gates (D21 threshold + D27 sector + D28 market cap) in one query.
+# Module 6 applies all four gates (D21 threshold + D27 sector + D28 market cap + D29 rescue)
+# in one query. D21 is the main path; D29 is an OR rescue leg; D27 and D28 are outer AND filters.
 rows = conn.execute("""
-    SELECT ticker, archetype, best_horizon, composite_best, sector, market_cap_usd, pack_json
+    SELECT ticker, archetype, best_horizon, composite_best, sector, market_cap_usd,
+           new_positions, qoq_fund_count_change, pack_json
     FROM context_packs
     WHERE quarter = ?
       AND pack_version = ?
-      AND composite_best >= ?
-      AND sector IN ('Healthcare', 'Biotechnology')
-      AND market_cap_usd <= ?
-    ORDER BY composite_best DESC
+      AND (
+            composite_best >= ?                             -- D21 main path
+         OR (
+              archetype NOT IN ('extended_uptrend', 'late_stage_extension',
+                                'broken_trend', 'sustained_decline', 'parabolic_blowoff')
+              AND (new_positions >= 1 OR qoq_fund_count_change >= 1)
+            )                                               -- D29 rescue path
+          )
+      AND sector IN ('Healthcare', 'Biotechnology')         -- D27
+      AND market_cap_usd <= ?                               -- D28
+    ORDER BY composite_best DESC, new_positions DESC
 """, (quarter, "m5-v1", 6.0, 3_700_000_000)).fetchall()
 
-for ticker, archetype, best_horizon, composite_best, sector, market_cap, pack_json in rows:
-    pack = json.loads(pack_json)
-    # build prompt from pack...
+for row in rows:
+    pack = json.loads(row[-1])
+    # build prompt from pack; the row's columns tell Module 6 whether this is a D21-pass
+    # or a D29-rescue ticker, so the LLM prompt can frame the thesis accordingly.
 ```
 
 ---
@@ -395,7 +475,7 @@ Field stability guarantees:
 # config/enrichment.yaml — Module 5 knobs. All tunable; no code changes needed.
 
 selection:
-  # v1 enriches every Module 4b row (D21 + D27 + D28). The filter knobs below are stubs
+  # v1 enriches every Module 4b row (D21 + D27 + D28 + D29). The filter knobs below are stubs
   # reserved for when Module 6 cost estimates land and the investable universe is finalised.
   # Leave null / empty for now.
   composite_best_min: null         # DEFERRED — set once Module 6 per-ticker cost is known (D21)
@@ -408,6 +488,19 @@ selection:
   market_cap_min_usd: null         # DEFERRED — optional tighter floor above Module 4a's $50M (D28)
   include_unclassified: true       # v1 includes unclassified; Module 6 filters at query time
   denylist_tickers: []             # explicit list to exclude; usually empty
+
+rescue:
+  # D29 — fund-flow rescue clause. Applied AFTER D21's composite gate; subject to D27 and D28.
+  # Activated at the same time as D21's threshold decision (once Module 6 cost is known).
+  enabled: null                    # DEFERRED — true/false set alongside composite_best_min (D29)
+  new_positions_min: 1             # default rule: rescue if >= 1 fund opened a new position
+  qoq_fund_count_change_min: 1     # OR: rescue if net fund count grew by >= 1
+  train_has_left_archetypes:       # rescue does NOT apply to these patterns (D29)
+    - extended_uptrend
+    - late_stage_extension
+    - broken_trend
+    - sustained_decline
+    - parabolic_blowoff
 
 pack:
   pack_version: "m5-v1"            # bumped on any schema change; invalidates cache
@@ -504,7 +597,8 @@ def upsert_pack(
     cache_status: str,
 ) -> None:
     """INSERT OR REPLACE. Lifts filter columns (archetype, best_horizon, composite_*,
-    score_*, sector, industry, market_cap_usd) from the pack into indexed columns."""
+    score_*, sector, industry, market_cap_usd, fund_count, new_positions,
+    increased_positions, qoq_fund_count_change) from the pack into indexed columns."""
 
 
 def query_packs_for_quarter(
@@ -517,9 +611,14 @@ def query_packs_for_quarter(
     industry_allowlist: list[str] | None = None,
     market_cap_max_usd: int | None = None,
     market_cap_min_usd: int | None = None,
+    rescue_enabled: bool = False,
+    rescue_new_positions_min: int = 1,
+    rescue_qoq_fund_count_change_min: int = 1,
+    rescue_train_has_left_archetypes: list[str] | None = None,
 ) -> list[dict]:
     """Convenience for Module 6 and the HTML report. Applies D21 (composite) + D27
-    (sector/industry) + D28 (market cap) filters at SQL level — no JSON parsing needed."""
+    (sector/industry) + D28 (market cap) + D29 (fund-flow rescue) filters at SQL level
+    — no JSON parsing needed. D29 is an OR leg inside the D21 gate; D27/D28 are outer ANDs."""
 
 
 # src/module_5/reports.py
@@ -628,6 +727,7 @@ All failure paths are logged structured-line to `logs/module_5_{quarter}.log`.
 - **🟡 Shortlist threshold (D21, deferred explicitly).** The `composite_best`-based gate that controls which packs feed Module 6's paid LLM runs. Decision depends on Module 6's per-ticker cost estimate (token count × price). When Module 6 is designed and its cost model exists, the user will pick a threshold — either as a Module 5 gate (so prep also skips weak tickers) or as a Module 6 query-time filter. Hook already reserved in `enrichment.yaml` (`selection.composite_best_min`, currently `null`).
 - **🟡 Sector allowlist (D27, deferred explicitly).** The `sector` / `industry` filter that narrows Module 6 scope to the user's actual investment universe. Decision is user-driven: although the pipeline sources from 21 biotech/healthcare specialist funds, those funds do hold adjacent and occasional non-healthcare names, and the user will choose which slices to LLM-score. Hooks reserved in `enrichment.yaml` (`selection.sector_allowlist`, `selection.industry_allowlist`, plus `_blocklist` companions). The HTML enrichment report surfaces the sector/industry histogram so the decision is informed. Module 6 applies the filter at query time via the indexed `sector`/`industry` columns.
 - **🟡 Final max market cap (D28, deferred explicitly).** The current cache covers everything up to Module 4a's $10B fetch ceiling. Before the first Module 6 run the user will set the final max market cap that defines the investable universe (historically $3.7B, but this is a per-run decision post-cost-estimate). Hook reserved in `enrichment.yaml` (`selection.market_cap_max_usd`, plus a symmetric `market_cap_min_usd` for tightening the $50M floor). The HTML report includes the market-cap histogram so the choice is informed. Module 6 filters via the indexed `market_cap_usd` column — no Module 4a re-run required to tighten.
+- **🟡 Fund-flow rescue (D29, deferred explicitly, activates with D21).** Rescues tickers that fall below the D21 composite threshold but show specialist-fund accumulation in the current filing. Rule locked (2026-04-24) as: `composite_best < D21_threshold AND archetype NOT IN train_has_left AND (new_positions >= 1 OR qoq_fund_count_change >= 1)`. Subject to D27 (sector) and D28 (market cap) as outer AND filters. At illustrative D21 threshold = 6, D29 adds 89 tickers on top of 413 (total 502 pre-D27/D28). Hooks reserved in `enrichment.yaml` (`rescue.enabled`, `rescue.new_positions_min`, `rescue.qoq_fund_count_change_min`, `rescue.train_has_left_archetypes`). Activate at the same time as the D21 threshold decision.
 - **🟡 Adaptive shortlist width / per-archetype quotas.** If any single archetype (e.g. `v_recovery` with 395 rows) dominates a future shortlist, consider "top-N per archetype bucket" so rare-but-strong patterns (fresh_awakening, post_crash_rebase) are never drowned out. Tied to the D21 decision above.
 - **🟡 Fundamentals enrichment** (forward EPS, analyst targets, next earnings date, FDA catalyst calendar). Requires an external data source. Path: pluggable `src/module_5/fundamentals.py` adapter when Twelve Data (or similar licensed provider) replaces yfinance pre-public-deploy (memory `project_data_provider_switch`).
 - **🟡 Per-ticker peer snapshots** (5–10 sector+archetype peers with R_52 / R_12 distributions so the LLM sees relative positioning). Needs a peer-selection heuristic. Defer until v1 shows whether the LLM actually needs this context.
@@ -643,3 +743,4 @@ All failure paths are logged structured-line to `logs/module_5_{quarter}.log`.
 - **2026-04-24 (rev 3)** — D21 reversed: Module 5 no longer shortlists. All 1,423 Module 4b rows get packs. The `composite_best` threshold that controls Module 6 LLM cost is **deferred** until Module 6's per-ticker cost is estimated. Hooks kept in `enrichment.yaml` (`selection.composite_best_min: null`, `selection.shortlist_top_n: null`) so the gate can be reintroduced as a one-line config change later. Unclassified (65 tickers) now included by default; Module 6 can filter at query time. Wall-time estimates revised up (30 s cold / 3 s warm). Motivation (from user): "prepare data for all tickers now; set threshold after Module 6 cost is known."
 - **2026-04-24 (rev 4)** — Added D27: **sector selection deferred to Module 6**, same pattern as D21. `sector` and `industry` now lifted into indexed columns of the `context_packs` table (with an `idx_packs_quarter_sector` index) so Module 6 can filter with a native SQL `WHERE sector IN (...)`. `enrichment.yaml` gains four stub knobs (`sector_allowlist`, `industry_allowlist`, `sector_blocklist`, `industry_blocklist`) — all null/empty in v1. Enrichment HTML report now includes a clickable sector+industry histogram so the user can make an informed allowlist choice before Module 6 runs. Motivation (from user): "I want to select specific sectors before running module 6."
 - **2026-04-24 (rev 5)** — Added D28: **final max market cap deferred to Module 6**, same pattern as D21/D27. Current cache holds everything up to Module 4a's $10B fetch ceiling; user will set the final cap before the first Module 6 run. `market_cap_usd` lifted into an indexed column (new `idx_packs_quarter_mcap` index) so Module 6 filters via `WHERE market_cap_usd <= ?`. `enrichment.yaml` gains `market_cap_max_usd` + `market_cap_min_usd` stubs (both null). HTML report gains a market-cap histogram using the same buckets as Module 4a's interactive prompt. Interaction with Module 4a preserved: if the user wants Module 4a survivors to also respect the new cap, they re-run 4a with `--market-cap-max-usd`; D28 is strictly the Module 5 → Module 6 boundary. Motivation (from user): "flag that I shall define the max market cap before I run module 6."
+- **2026-04-24 (rev 6)** — Added D29: **fund-flow rescue clause**, applied after D21, subject to D27 and D28. Rule (user-locked 2026-04-24): rescue tickers where `composite_best < D21_threshold AND archetype NOT IN ('extended_uptrend', 'late_stage_extension', 'broken_trend', 'sustained_decline', 'parabolic_blowoff') AND (new_positions >= 1 OR qoq_fund_count_change >= 1)`. Lifts `fund_count`, `new_positions`, `increased_positions`, `qoq_fund_count_change` into indexed columns (`idx_packs_quarter_newpos`, `idx_packs_quarter_qoq`) so Module 6 expresses D21+D29 as a clean OR inside the main gate. `enrichment.yaml` gains a `rescue:` block with thresholds and the "train has left" archetype list. HTML report gains a rescue-pool preview (under the default rule at D21 thresholds 5/6/7, broken down by archetype). Motivation (from user): rescue tickers with current-quarter fund-flow momentum that composite-pattern scoring misses alone — validated against 2025Q4 data showing 89 rescues at threshold 6, concentrated in v_recovery (32), mature_uptrend (21), stage2_pullback (19), unclassified (16), shallow_rebase (1).

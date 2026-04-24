@@ -1,0 +1,46 @@
+# Module 5 — Market Data Enrichment knobs.
+# Every tunable parameter surfaces here; no code changes needed to calibrate.
+# See spec/module_5_spec.md for the full rationale behind each field.
+
+selection:
+  # v1 enriches every Module 4b row (D21 + D27 + D28 + D29). The filter knobs below
+  # are stubs reserved for when Module 6 cost estimates land. Leave null / empty for now.
+  composite_best_min: null           # DEFERRED — Module 6 decides once per-ticker cost is known (D21)
+  shortlist_top_n: null              # DEFERRED (D21)
+  sector_allowlist: null             # DEFERRED — user-chosen sectors for Module 6 scope (D27)
+  industry_allowlist: null           # DEFERRED — optional finer-grained filter (D27)
+  sector_blocklist: []               # DEFERRED — opt-out for specific mismatched sectors (D27)
+  industry_blocklist: []             # DEFERRED (D27)
+  market_cap_max_usd: null           # DEFERRED — final max market cap before Module 6 (D28)
+  market_cap_min_usd: null           # DEFERRED — optional tighter floor above Module 4a's $50M (D28)
+  include_unclassified: true         # v1 includes unclassified; Module 6 filters at query time
+  denylist_tickers: []               # explicit list to exclude; usually empty
+
+rescue:
+  # D29 — fund-flow rescue clause. Applied AFTER D21's composite gate; subject to D27 and D28.
+  # Activates at the same time as D21's threshold decision (once Module 6 cost is known).
+  enabled: null                      # DEFERRED — true/false set alongside composite_best_min (D29)
+  new_positions_min: 1               # default rule: rescue if >= 1 fund opened a new position
+  qoq_fund_count_change_min: 1       # OR: rescue if net fund count grew by >= 1
+  train_has_left_archetypes:         # rescue does NOT apply to these patterns (D29)
+    - extended_uptrend
+    - late_stage_extension
+    - broken_trend
+    - sustained_decline
+    - parabolic_blowoff
+
+pack:
+  pack_version: "m5-v1"              # bumped on any blob-schema change; invalidates stale rows
+  emphasis_weights:                  # D25 — research emphasis per horizon
+    best: 0.7                        # weight on the best horizon
+    other: 0.3                       # weight on the non-best horizon
+    equal: 0.5                       # split when best_horizon == "equal"
+  narrative_templates_path: "config/enrichment_narratives.yaml"
+
+store:
+  db_path: "context_packs.db"        # relative to 2_Funds_parser/; primary store + cache
+  enable_cache: true                 # --no-cache on CLI forces off (rebuild + skip upsert)
+
+reports:
+  preview_count: 10                  # how many packs to inline into the HTML report
+  rescue_threshold_samples: [5, 6, 7]  # D29 preview — counts at these illustrative D21 thresholds

@@ -92,6 +92,20 @@ if /i "%RUN_M3%"=="y" (
             )
             echo.
             echo [2_Funds_parser] Open Outputs\ranking_report_*.html
+
+            REM --- Module 5: build context packs (user-gated) ---
+            echo.
+            set /p RUN_M5="Proceed to Module 5 (build context packs)? [y/N]: "
+            if /i "%RUN_M5%"=="y" (
+                echo [2_Funds_parser] Module 5: building context packs...
+                python scripts\5_build_context_packs.py -v
+                if errorlevel 1 (
+                    echo [FATAL] Module 5 failed.
+                    endlocal ^& exit /b 1
+                )
+                echo.
+                echo [2_Funds_parser] Open Outputs\enrichment_report_*.html
+            )
         )
     )
 )
