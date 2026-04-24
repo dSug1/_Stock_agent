@@ -1,6 +1,4 @@
-- & and or filter a la Blender modifier
-
-
+- CSS update for mobile/tablet format
 
 License:
 - Use licensable data provider instead of yahoofinance. License:
