@@ -1077,6 +1077,22 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D53 — Module 7 outcome tracking + per-component calibration feedback loop
+
+**Status: 📋 Draft specification (2026-04-25). Not implemented.**
+Spec: [module_7_spec.md](module_7_spec.md). Three-phase build: M7-α (snapshot + forward-price collection), M7-β (outcome classification + per-archetype/decile reports), M7-γ (per-component calibration with co-firing-aware regression). New `data/outcomes.db` with three tables (`predictions`, `forward_prices`, `outcomes`). Snapshot hook in `scripts/6_score.py` Step 10 + `6b_apply_modifiers.py` + `6_recompute_scores.py`. Periodic runner `scripts/7_track_outcomes.py`. On-demand report `scripts/7_calibration_report.py`. Per D12, M7 is **advisory only** — emits suggested YAML edits in the report; never auto-modifies `scoring_modifier.yaml` or `archetypes.yaml`.
+
+**Why this design:**
+- **Snapshot first, report later.** Without snapshots starting NOW, future reports have nothing to chew on. The 1-day cost of M7-α is the price of admission for any future calibration work.
+- **`score_modifier_json` snapshot is the canonical record** of what factors fired with what values AT THE TIME of the prediction. Essential because YAML edits + `6b_apply_modifiers.py` reruns can retroactively change current `llm_scores.score_modifier_json`. Without M7's snapshot the audit trail is overwritten.
+- **Decoupled phases.** M7-β/γ add only read-side code. Schema doesn't change between phases. M7-α can ship months before β/γ even start, with no rework.
+- **Per-component analysis honestly handles co-firing.** Naïve per-(component, band) grouping in v1 is intentionally simple but flagged as biased. OLS regression with archetype indicators in v2 (requires N ≥ 200, ≈ 4 quarters of data) disentangles components when the data supports it.
+- **Advisory only (D12 reaffirmed).** Auto-tuning weights from small samples risks fitting noise. User sees evidence + suggestions, retains editorial control.
+
+**Build trigger:** M7-α should be built **next** (independent of M7-β/γ timing) so historical predictions start being snapshotted and forward-prices start collecting. Without M7-α data, M7-β/γ are not possible regardless of effort spent.
+
+---
+
 ### D52 — 5 additional Module 6b modifier components (big-pharma validation, catalyst density, tech uniqueness, dilution overhang, cash floor) + slider drawer category grouping
 
 **Status: ✅ Implemented 2026-04-25.** Triggered by review of the 5 newly-scored tickers (BCYC, GLUE, GRAL, LEGN, ABEO) in the run-7/8/9 m6-v3 dispatch — research_briefs carried rich structured signals (`partnerships`, `clinical_trials`, `technology.uniqueness_score`, `financials.shelf_registration_usd_capacity`, `financials.cash_and_equivalents_usd`) that were emitted by the LLM but invisible to the existing 9-component modifier. BCYC trading at 2.6× cash discount + GLUE's $5.7B Novartis option deal + LEGN's J&J partnership were the canonical missed signals.
