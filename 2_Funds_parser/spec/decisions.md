@@ -1077,7 +1077,47 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D50 — Per-component user weight sliders for the Module 6b modifier (HTML-side, persisted in sidecar JSON)
+
+**Status: ✅ Implemented 2026-04-25.** Hamburger menu in the report toolbar opens a slide-out drawer with one slider per component (range `[0, 2]`, default `1.0`, step `0.05`), per-slider reset, and a global "Reset all to 1.00". Slider changes recompute every row's modifier + adjusted score in JS, re-sort by adjusted desc, re-rank, and debounce-PUT to `/selection/<quarter>` so the weights ride along on the same sidecar JSON as the selection state (schema bumped v1 → v2). Pipeline re-renders preserve user weights via `merge_modifier_weights`. The DB always stores the model baseline (weights = 1.0) — user state lives only in the sidecar JSON. Files: `src/module_6b/modifiers.py::apply_weights`, `src/module_6b/selection_io.py::{default_modifier_weights, read_modifier_weights, merge_modifier_weights}`, `src/module_6/reports.py` (hamburger panel + JS recompute), `scripts/6_score.py` (passes weights + ticker_factors to renderer), `scripts/6_recompute_scores.py` (same).
+
+**Effective factor formula:** `1 + weight × (model_factor − 1)`. Weight `0` disables the component (effective factor = 1.0); weight `1.0` uses the model value as-is; weight `2.0` doubles the deviation from neutral. Mirrored bit-identically in Python (`module_6b.modifiers.apply_weights`) and JS (`modifierFor` in the rendered HTML) — server-side and client-side products are guaranteed equal for the same `(factors, weights, bounds)` triple.
+
+**Sidecar JSON schema bumped to v2** to add the `modifier_weights` block:
+
+```json
+{
+  "schema_version":   2,
+  "quarter":          "2025Q4",
+  "all_tickers":      ["NTLA", "TCRX"],
+  "selected_tickers": ["TCRX"],
+  "modifier_weights": {
+    "crowding": 1.0, "financing": 1.0, "dilution": 1.0,
+    "insider":  1.0, "mgmt":      1.0, "acquisition": 1.0,
+    "moat":     1.0, "failures":  1.0, "concentration": 1.0
+  }
+}
+```
+
+Schema v1 (no `modifier_weights`) still parses; missing block defaults to all-1.0.
+
+**Persistence policy (per user, 2026-04-25):** weights survive pipeline runs. Only the JS-side per-slider reset or "Reset all" clears them. Rationale: tuning effort isn't lost when running a small selective re-score.
+
+**Trade-offs accepted:**
+- Sliders are global, not per-ticker. The hamburger menu is a single set of 9 controls applied to every row; per-ticker overrides are deferred (would need 9 × N sliders or per-detail-panel sliders — UI-heavy).
+- DB doesn't carry per-user state. Re-renders are deterministic; reproducing a user's view requires the sidecar JSON. Acceptable trade-off given the sidecar is right next to the HTML on disk.
+- File:// loads see the slider drawer but PUT fails (toast says "Auto-save disabled"). State is lost on reload. Same UX as selection state in `file://`.
+
+**Alternatives reconsidered:**
+- **Per-ticker sliders** (#3 / #4 in the design discussion): deferred. High UX cost; no current driver.
+- **Direct factor override (not weight)** (#4): rejected — would discard the per-ticker context the model computed.
+- **Band-tuning sliders** (#2): deferred to YAML editing + `6b_apply_modifiers.py` re-run.
+
+---
+
 ### D47 — Module 6b composite score_modifier — 9 deterministic components from `research_brief`
+
+**Status: ✅ Implemented 2026-04-25.** Files: `src/module_6b/modifiers.py` (9 component fns + `compute_modifier` + `apply_weights`), `src/module_6b/apply.py` (writes back to `llm_scores` + `final_rankings`), `src/module_6b/__init__.py` (re-exports), `config/scoring_modifier.yaml` (factor maps + bounds + `weights_ui`), `scripts/6b_apply_modifiers.py` (standalone CLI), `scripts/6_score.py` + `scripts/6_recompute_scores.py` (wired to call `apply_modifiers_to_run` after `write_final_rankings`), `src/module_6/scores_db.py` (6 additive migrations: `score_modifier`, `score_modifier_json`, `score_at_current_adjusted_pct_per_month` on `llm_scores`; `score_modifier`, `score_modifier_json`, `final_score_adjusted` on `final_rankings`). HTML/XLSX rendering extended in `src/module_6/reports.py` with `× Modifier` + `= Adjusted (%/mo)` columns. **Validated against the spec's worked examples:** NTLA modifier = 0.6747 (spec said 0.674), TCRX modifier = 0.8122 (spec said 0.811), NTLA `final_score_adjusted = 30.148` (spec 30.11), TCRX `final_score_adjusted = 10.584` (spec 10.57) — all within rounding. **Spec correction:** the rNPV concentration component must exclude `Platform optionality` rows from BOTH numerator AND denominator (spec text said "skip max only", but worked-example math required excluding from total too). Implemented via `concentration.exclude_indication_substrings` in the YAML. **Per-component user weight sliders** (D50) layered on top — see D50 above.
 
 **Decision (2026-04-25):** Spec a new sub-module **Module 6b** that applies a deterministic composite multiplier to the M6 primary score so that material signals already present in the LLM's `research_brief` actually move the ranking. The D46 score formula uses only 4 LLM-emitted fields (`target_price_usd`, `time_to_catalyst_weeks`, `probability`, plus pack-sourced `current_price_usd`); the remaining ~15 structured fields the LLM produces (competitive landscape, partnerships, insider activity, runway, dilution, past failures, mgmt track record, acquisition probability, moat, technology uniqueness, FDA hurdles, rNPV breakdown, …) are stored for audit but invisible to ranking.
 

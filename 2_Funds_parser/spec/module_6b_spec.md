@@ -2,7 +2,7 @@
 
 **Status:**
 - **Part (b)** — User-driven selective dispatch + mandatory gate: ✅ **Implemented 2026-04-25.** Storage architecture revised same day from "HTML `checked`-attribute as truth + File System Access save" (D48) to "**local HTTP server + sidecar JSON file as truth**" (D49). See [Implementation notes](#implementation-notes-part-b) at the end.
-- **Part (a)** — Composite score modifier: 📋 Draft specification, not yet implemented (next session).
+- **Part (a)** — Composite score modifier: ✅ **Implemented 2026-04-25.** Per-component user weight sliders + live JS recompute + re-rank in the HTML report (D50). Weights persist to the same sidecar JSON as the selection state (schema v2). See [Implementation notes — Part (a)](#implementation-notes-part-a) at the end.
 
 **Last updated:** 2026-04-25
 **Runtime:** Two parts.
@@ -844,3 +844,50 @@ What was deliberately *not* changed:
 - `scripts/6_recompute_scores.py` — still per-run rendering. The selective-dispatch flow is the only place where the merged-view re-render makes sense.
 - `final_rankings` table schema — selection state lives in HTML, not SQL, per D48.
 - The standalone `llm_responses_<quarter>.html` viewer — already deleted in M6 step 7; the merged HTML supersedes it.
+
+---
+
+## Implementation notes — Part (a) (2026-04-25)
+
+What landed beyond the original spec, plus deviations:
+
+1. **9 components implemented per the spec table.** Each component is a pure function `(rb, cfg, now) → (factor, evidence_dict)` in `src/module_6b/modifiers.py`. Component order is fixed across Python, JSON, and JS (`modifiers.COMPONENT_NAMES`) so server- and client-side products are bit-identical. Validation against the spec's worked examples: NTLA modifier = **0.6747** (spec said 0.674), TCRX modifier = **0.8122** (spec said 0.811). NTLA `final_score_adjusted = 30.148` (spec said 30.11). TCRX `final_score_adjusted = 10.584` (spec said 10.57). All within rounding.
+
+2. **Concentration component — spec correction.** The original spec said "skip the Platform optionality row from the **max** calculation". The worked-example math required excluding it from **both** max and total (sum). Implementation excludes from both, controlled by `concentration.exclude_indication_substrings` in the YAML (case-insensitive substring match, defaults: `["platform", "optionality", "residual"]`). Without this fix, NTLA's concentration computes to 40.5% (factor 1.00) instead of the spec's expected 86.0% (factor 0.85).
+
+3. **Schema migrations applied via the existing `_ADDITIVE_MIGRATIONS` framework** in `src/module_6/scores_db.py`. Six new columns: `llm_scores.{score_modifier, score_modifier_json, score_at_current_adjusted_pct_per_month}` and `final_rankings.{score_modifier, score_modifier_json, final_score_adjusted}`. No changes to the create-table statements — additive-only migrations, idempotent.
+
+4. **Pipeline writes baseline (weights = 1.0); HTML re-applies user weights live.** `scripts/6_score.py` step 10 calls `apply_modifiers_to_run` after `write_final_rankings`. The DB rows always reflect the model's "neutral" modifier so re-runs and re-rendering are deterministic; the user's slider tweaks live only in the sidecar JSON + the JS-recomputed DOM. This is the simplest split — DB doesn't carry per-user state.
+
+5. **Standalone CLI** at `scripts/6b_apply_modifiers.py` — same flag shape as `6_recompute_scores.py` (`--run-id`, `--quarter`, `--dry-run`, `--no-render`, `-v`). Pure offline. Useful for retroactive application after a YAML tuning change.
+
+6. **`6_recompute_scores.py` also re-applies modifiers** after the D46 score recompute, so historical runs benefit from any factor-map changes immediately.
+
+---
+
+## Implementation notes — D50 (per-component user weight sliders, 2026-04-25)
+
+The hamburger-menu UI for live per-component weight tuning. Built atop Part (a) + Part (b) infrastructure.
+
+1. **Slider semantics.** 9 sliders, one per component. Range `[0.0, 2.0]`, step `0.05`, default `1.0`. Effective factor = `1 + weight × (model_factor − 1)`. Weight `0` disables the component (effective factor = 1.0); weight `1.0` uses the model value as-is; weight `2.0` doubles the deviation from neutral. Mirrored bit-identically in Python (`module_6b.modifiers.apply_weights`) and JS (`modifierFor` in the rendered HTML) — server-side and client-side products are guaranteed equal for the same `(factors, weights, bounds)` triple.
+
+2. **UI: hamburger button + slide-out drawer.** A `≡` button appears at the left of the toolbar (only when `ticker_factors` is provided to the renderer). Click opens a `position: fixed` right-side drawer (380 px wide, scrollable, with a translucent overlay click-to-close). Inside: a "Reset all to 1.00" button at top, then 9 rows — each with the component label, a `<input type="range">`, the current numeric value (tabular-nums), and a `↺` per-slider reset button. Rows whose weight differs from `1.0` get a yellow `dirty` outline so the user can see at a glance what's overridden.
+
+3. **Live recompute.** Every slider `input` event triggers `recomputeAndRerank()` synchronously: walks every `.main-row`, recomputes its modifier from `MODIFIER_DATA.ticker_factors[ticker]` × `CURRENT_WEIGHTS`, updates `data-adjusted` + the `.modifier-cell` text + colour class + `.adjusted-cell` text, sorts rows by `data-adjusted` desc, rewrites `.rank-cell`, and re-places main+detail row pairs in the DOM. Cost: O(N) per tick; trivial for our 50–100 ticker scale. No network round-trip on each tick.
+
+4. **Persistence.** Slider `change` events (fired on release after dragging) trigger `scheduleAutoSave` — same 300 ms debounced PUT to `/selection/<quarter>` that already saves selection state. The schema-v2 sidecar JSON includes a `modifier_weights` block. On page load, the renderer (Python-side) reads the prior sidecar and seeds initial slider values + initial modifier-cell renders in the HTML; the JS picks up the same state from the embedded `MODIFIER_DATA.weights` const.
+
+5. **Pipeline preservation.** `merge_modifier_weights(prior=...)` carries the prior sidecar's weights forward unchanged on every pipeline re-render (D49 round-trip semantic for selection state, extended to weights). Tested: PUT `crowding=0.0, failures=2.0` → run `scripts/6b_apply_modifiers.py` → sidecar weights unchanged; rendered HTML still seeds `crowding=0.0, failures=2.0` and the initial NTLA modifier displays as 0.750 (vs 0.6747 with all-1.0 weights), matching the manual computation. This satisfies the user's "preserve" policy: only explicit per-slider or "reset all" clears overrides.
+
+6. **Embedded JSON for JS recompute.** The renderer emits a `MODIFIER_DATA` const with `{components, labels, weights, weights_ui, bounds, ticker_factors}`. `ticker_factors` is `{ticker: {comp: model_factor}}` from `module_6b.collect_ticker_factors`, which queries the LATEST `llm_scores.research_brief_json` per ticker (across all runs in the quarter) and re-runs `compute_modifier` with weights=1.0 to extract the model factors. Embedding (vs another fetch round-trip) keeps the report self-contained for `file://` viewing and avoids a second server request per page load.
+
+7. **Modifier cell colour bands.** `<0.85` red, `0.85–0.95` orange, `0.95–1.05` neutral grey, `1.05–1.20` green, `>1.20` bright green. Same scale Python uses on initial render and JS uses on live recompute.
+
+7a. **On-load sync from sidecar (added 2026-04-25 after stale-HTML bug).** When `SERVER_MODE`, the JS calls `syncFromSidecar()` once at page load: `fetch('/selection/<quarter>', {cache: 'no-store'})`, then reconciles both `CURRENT_WEIGHTS` and the per-row checkbox state against whatever the sidecar has *right now*. The embedded `MODIFIER_DATA.weights` and the per-row `checked` HTML attributes become render-time *snapshots* that only seed initial display before the fetch resolves; the sidecar is the runtime source of truth. **Why this exists:** without it, an HTML rendered at time T1 with weights W1 would PUT W1 back to the sidecar on the user's first slider tick at time T2, even if the sidecar had been updated to W2 in between (e.g., another tab, a Python re-render that didn't trigger an HTML re-render). Reproduced as a real bug — slider state regressed to a smoke-test value after every page reload because `apply_modifiers_to_run` had baked the old state into the HTML, then a sidecar-only reset went undetected. The on-load sync makes the HTML self-healing in `SERVER_MODE`. `file://` loads still rely on the embedded snapshot; user must re-render manually.
+
+8. **`file://` mode.** When the report is opened directly from disk (no server in front), the slider drawer still works — sliders move, modifier cells update, table re-sorts — but `scheduleAutoSave` shows the existing "Auto-save disabled" toast and no PUT happens. State is lost on page reload. Same UX as selection-state in `file://` mode.
+
+9. **What was deliberately *not* built:**
+   - **Per-ticker sliders** (option #3 / #4 from the design discussion). The hamburger menu is global; the spec's "per-ticker per-component override" power-user feature is deferred. The current global sliders cover the high-leverage use case ("crowding hits everyone too hard, halve it").
+   - **Band-tuning sliders** (option #2). Tuning the YAML factor maps live in the browser would need 30+ sliders and per-component custom logic. Editing `config/scoring_modifier.yaml` and re-running `6b_apply_modifiers.py` covers this case.
+   - **Saving slider presets** ("aggressive bear", "default", "bull"). Manual: copy/paste the JSON sidecar to keep snapshots.

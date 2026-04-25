@@ -1,13 +1,34 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "quarter": "2025Q4",
+  "rendered_at": "2026-04-25T15:55:24+00:00",
   "all_tickers": [
+    "ABEO",
+    "BCYC",
+    "GLUE",
+    "GRAL",
+    "LEGN",
     "NTLA",
     "TCRX"
   ],
   "selected_tickers": [
+    "ABEO",
+    "BCYC",
+    "GLUE",
+    "GRAL",
+    "LEGN",
     "NTLA",
     "TCRX"
   ],
-  "updated_at": "2026-04-25T14:20:44+00:00"
+  "modifier_weights": {
+    "crowding": 1.9,
+    "financing": 0.0,
+    "dilution": 0.0,
+    "insider": 0.0,
+    "mgmt": 0.0,
+    "acquisition": 0.0,
+    "moat": 0.0,
+    "failures": 0.0,
+    "concentration": 0.0
+  }
 }

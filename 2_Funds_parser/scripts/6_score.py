@@ -60,7 +60,11 @@ if str(SRC) not in sys.path:
 
 from module_5 import query_packs_for_quarter  # noqa: E402
 from module_6b import (  # noqa: E402
+    apply_modifiers_to_run,
+    collect_ticker_factors,
+    load_modifier_config,
     load_selection_json,
+    merge_modifier_weights,
     merge_selection,
     parse_all_tickers,
     parse_selected_tickers,
@@ -978,24 +982,56 @@ def main() -> int:
         ranking_rows = _build_final_rankings_rows(scores_conn, quarter, run_id, pack_lookup)
         write_final_rankings(scores_conn, run_id=run_id, quarter=quarter, rows=ranking_rows)
 
-        # Build the rows that actually feed the rendered HTML/XLSX. For
-        # selective dispatch, this is the LATEST score per ticker across the
-        # quarter (so unselected tickers stay visible with their stale scores
-        # while newly-dispatched tickers show fresh scores). For the regular
-        # full-feed path, it's just this run's rows.
-        if selection_html_path:
-            extra_tickers = [t for t in (all_input_tickers or [])
-                             if t and t not in pack_lookup]
-            if extra_tickers:
-                pack_lookup.update(_load_packs_for_tickers(
-                    context_packs_db, quarter, extra_tickers,
-                ))
-            render_tickers = list(all_input_tickers or explicit_ticker_list or [])
-            rendering_rows = _build_merged_ranking_rows(
-                scores_conn, quarter, run_id, pack_lookup, tickers=render_tickers,
+        # D47 — composite score modifier. Compute + persist baseline
+        # (model values, weights=1.0). The HTML re-applies user weights live
+        # in JS without touching the DB.
+        modifier_cfg = load_modifier_config()
+        try:
+            mod_summary = apply_modifiers_to_run(
+                scores_conn, run_id=run_id, quarter=quarter, cfg=modifier_cfg,
             )
-        else:
-            rendering_rows = ranking_rows
+            if mod_summary:
+                _LOG.info("Modifier applied to %d ticker(s) in run %d",
+                          len(mod_summary), run_id)
+        except Exception as e:
+            _LOG.warning("apply_modifiers_to_run failed (run=%s): %s", run_id, e)
+
+        # Build the rows that actually feed the rendered HTML/XLSX.
+        # ALWAYS use the merged latest-per-ticker view across the whole
+        # quarter, never just this run. Reasons:
+        #   - --tickers / --ticker dispatches a small subset; the report
+        #     should still show every ticker that has been scored in the
+        #     quarter, not collapse to the dispatched subset (bug 2026-04-25).
+        #   - --selection-from-html should preserve the unselected (Tier-A)
+        #     tickers in the rendered view (D49 round-trip semantic).
+        #   - Full-feed dispatch refreshes every ticker, so merged view
+        #     and per-run view are equivalent — no harm.
+        # Per-run rows still go to final_rankings (audit trail above);
+        # only the rendering scope changes.
+        scores_conn.row_factory = sqlite3.Row
+        all_quarter_tickers = sorted({
+            row[0] for row in scores_conn.execute(
+                "SELECT DISTINCT ticker FROM llm_scores WHERE quarter=?",
+                (quarter,),
+            ).fetchall()
+        })
+        # Union with the input HTML's pool when --selection-from-html is in
+        # play (so a brand-new ticker the user added to the HTML survives
+        # even before its first score lands).
+        if selection_html_path and all_input_tickers:
+            all_quarter_tickers = sorted(set(all_quarter_tickers)
+                                         | set(all_input_tickers))
+        # Ensure pack_lookup covers all rendering tickers (loaded only the
+        # dispatched subset earlier).
+        missing_packs = [t for t in all_quarter_tickers if t not in pack_lookup]
+        if missing_packs:
+            pack_lookup.update(_load_packs_for_tickers(
+                context_packs_db, quarter, missing_packs,
+            ))
+        rendering_rows = _build_merged_ranking_rows(
+            scores_conn, quarter, run_id, pack_lookup,
+            tickers=all_quarter_tickers,
+        )
 
         list_price_total = _usd_cost_per_call(
             pricing=scoring["pricing"],
@@ -1017,20 +1053,10 @@ def main() -> int:
         scores_conn.commit()
 
         # Reload llm_scores rows for the detail-panel response viewer.
-        # Mirror the rendering_rows scope: latest-per-ticker for selection
-        # mode, this run only for the regular path.
-        scores_conn.row_factory = sqlite3.Row
-        if selection_html_path:
-            score_rows_for_viewer = _latest_score_rows(
-                scores_conn, quarter, list(all_input_tickers or []),
-            )
-        else:
-            score_rows_for_viewer = [
-                dict(r) for r in scores_conn.execute(
-                    "SELECT * FROM llm_scores WHERE quarter=? AND run_id=? ORDER BY ticker, horizon",
-                    (quarter, run_id),
-                ).fetchall()
-            ]
+        # Match rendering_rows scope: latest-per-ticker across the quarter.
+        score_rows_for_viewer = _latest_score_rows(
+            scores_conn, quarter, all_quarter_tickers,
+        )
 
     outputs_dir = PROJECT_ROOT / "Outputs"
     rank_html = outputs_dir / f"final_ranking_{quarter}.html"
@@ -1044,22 +1070,28 @@ def main() -> int:
     rank_json = selection_json_path(rank_html)
     new_pool = sorted({(r.get("ticker") or "") for r in rendering_rows
                        if r.get("ticker")})
-    if prior_selection is not None:
-        # User came in via --selection-from-html; the merge against the prior
-        # sidecar (loaded earlier as `sidecar`) is what `prior_selection`
-        # already represents — but re-merge against the on-disk JSON now in
-        # case the server received another PUT between read and dispatch.
-        live_prior = load_selection_json(rank_json)
-        sidecar_selection = merge_selection(new_pool=new_pool, prior=live_prior)
-    else:
-        sidecar_selection = merge_selection(
-            new_pool=new_pool, prior=load_selection_json(rank_json),
+    # Re-read the on-disk sidecar so we don't clobber a slider tweak the
+    # server received between dispatch start and now.
+    live_prior = load_selection_json(rank_json)
+    sidecar_selection = merge_selection(new_pool=new_pool, prior=live_prior)
+    # D50 — preserve the user's slider weights across pipeline runs.
+    sidecar_weights = merge_modifier_weights(prior=live_prior)
+
+    # Per-ticker model factors for the JS slider recompute (D50).
+    with sqlite3.connect(llm_scores_db) as _scores_conn_for_factors:
+        ticker_factors_export = collect_ticker_factors(
+            _scores_conn_for_factors,
+            quarter=quarter,
+            tickers=new_pool,
+            cfg=modifier_cfg,
         )
+
     write_selection_json(
         rank_json,
         quarter=quarter,
         all_tickers=new_pool,
         selected_tickers=sorted(sidecar_selection),
+        modifier_weights=sidecar_weights,
     )
 
     # Merged single HTML: ranking table with arrow-expand LLM-response panels
@@ -1071,6 +1103,9 @@ def main() -> int:
         quarter=quarter, run_id=run_id,
         score_rows=score_rows_for_viewer,
         prior_selection=sidecar_selection,
+        modifier_weights=sidecar_weights,
+        ticker_factors=ticker_factors_export,
+        modifier_cfg=modifier_cfg,
     )
     render_final_ranking_xlsx(rendering_rows, rank_xlsx, quarter=quarter, run_id=run_id)
 

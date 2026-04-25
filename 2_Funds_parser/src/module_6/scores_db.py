@@ -218,6 +218,13 @@ _ADDITIVE_MIGRATIONS = (
     ("final_rankings", "appreciation_from_current_3mo_pct",    "REAL"),
     ("final_rankings", "appreciation_from_current_12mo_pct",   "REAL"),
     ("final_rankings", "current_vs_fair_mid_pct",              "REAL"),
+    # D47 — Module 6b composite score modifier (added 2026-04-25)
+    ("llm_scores",     "score_modifier",                              "REAL"),
+    ("llm_scores",     "score_modifier_json",                         "TEXT"),
+    ("llm_scores",     "score_at_current_adjusted_pct_per_month",     "REAL"),
+    ("final_rankings", "score_modifier",                              "REAL"),
+    ("final_rankings", "score_modifier_json",                         "TEXT"),
+    ("final_rankings", "final_score_adjusted",                        "REAL"),
 )
 
 

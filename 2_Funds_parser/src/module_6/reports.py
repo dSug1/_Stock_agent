@@ -148,6 +148,15 @@ def _build_detail_row(
     )
 
 
+# D47 / D50 — composite score modifier component order. Mirrored in
+# module_6b.modifiers.COMPONENT_NAMES and in the JS embedded below.
+_COMPONENT_NAMES: tuple[str, ...] = (
+    "crowding", "financing", "dilution", "insider", "mgmt",
+    "acquisition", "moat", "failures", "concentration",
+)
+_DEFAULT_WEIGHTS: dict[str, float] = {n: 1.0 for n in _COMPONENT_NAMES}
+
+
 def render_final_ranking_html(
     rows: list[dict],
     output_path: Path,
@@ -156,6 +165,9 @@ def render_final_ranking_html(
     run_id: int,
     score_rows: list[dict] | None = None,
     prior_selection: set[str] | None = None,
+    modifier_weights: dict[str, float] | None = None,
+    ticker_factors: dict[str, dict] | None = None,
+    modifier_cfg: dict | None = None,
 ) -> None:
     """Self-contained HTML.
 
@@ -168,6 +180,13 @@ def render_final_ranking_html(
       When ``prior_selection`` is provided (re-render after a selective
       dispatch), only tickers in that set are emitted with ``checked`` so
       the user's selection survives round-trips.
+    - D47 / D50 — composite score modifier with per-component user weight
+      sliders. ``ticker_factors`` is ``{ticker: {"factors": {comp: model_factor}, ...}}``
+      from ``module_6b.collect_ticker_factors``. ``modifier_weights`` is the
+      initial slider state (defaults to all-1.0). ``modifier_cfg`` is the
+      parsed ``config/scoring_modifier.yaml`` (used for slider UI bounds +
+      component labels). When all three are None, the modifier columns
+      still render with neutral 1.0 values and the slider menu is omitted.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -177,6 +196,42 @@ def render_final_ranking_html(
     if score_rows:
         for sr in score_rows:
             by_ticker_horizon[(sr["ticker"], sr["horizon"])] = sr
+
+    # ── D47 / D50 — modifier setup ──────────────────────────────────────
+    # `ticker_factors` is the per-ticker MODEL factors blob. Treat None
+    # as empty so legacy callers still produce a valid HTML.
+    tf_map: dict[str, dict] = ticker_factors or {}
+    weights = dict(_DEFAULT_WEIGHTS)
+    if modifier_weights:
+        for k in _COMPONENT_NAMES:
+            v = modifier_weights.get(k)
+            if isinstance(v, (int, float)):
+                weights[k] = float(v)
+    cfg = modifier_cfg or {}
+    bounds = cfg.get("bounds") or {"min": 0.5, "max": 1.5}
+    weights_ui = cfg.get("weights_ui") or {
+        "min": 0.0, "max": 2.0, "step": 0.05, "default": 1.0,
+    }
+    component_labels = {
+        c: (cfg.get("components", {}).get(c, {}).get("label") or c.title())
+        for c in _COMPONENT_NAMES
+    }
+
+    def _initial_modifier(ticker: str) -> float:
+        """Return the initial weighted modifier for this row.
+
+        Mirrors the JS-side compute exactly so server- and client-side
+        modifiers are bit-identical for any given (factors, weights, bounds).
+        """
+        info = tf_map.get(ticker) or {}
+        factors = info.get("factors") or {}
+        prod = 1.0
+        for c in _COMPONENT_NAMES:
+            f = float(factors.get(c, 1.0))
+            w = float(weights.get(c, 1.0))
+            prod *= 1.0 + w * (f - 1.0)
+        return max(float(bounds.get("min", 0.5)),
+                   min(float(bounds.get("max", 1.5)), prod))
 
     body_rows = []
     for r in rows:
@@ -217,17 +272,34 @@ def render_final_ranking_html(
             arrow_cell = "<td class='no-sort'></td>"
 
         months = _months_to_catalyst(r)
+        # D47 / D50 — modifier + adjusted score (initial values; JS recomputes
+        # live as the user moves sliders). Stamped on data-* attrs so the
+        # JS can re-sort by adjusted score without re-parsing cells.
+        base_score = r.get("final_score") or 0.0
+        modifier_val = _initial_modifier(ticker)
+        adjusted_val = float(base_score) * modifier_val
+        mod_class = (
+            "mod_strong_neg" if modifier_val < 0.85 else
+            "mod_neg"        if modifier_val < 0.95 else
+            "mod_pos"        if modifier_val > 1.20 else
+            "mod_mild_pos"   if modifier_val > 1.05 else
+            "mod_neutral"
+        )
         body_rows.append(
-            f"<tr class='main-row' data-ticker='{html.escape(ticker)}'>"
+            f"<tr class='main-row' data-ticker='{html.escape(ticker)}' "
+            f"data-base-score='{float(base_score):.6f}' "
+            f"data-adjusted='{adjusted_val:.6f}'>"
             f"{checkbox_cell}"
             f"{arrow_cell}"
-            f"<td>{r.get('final_rank','')}</td>"
+            f"<td class='rank-cell'>{r.get('final_rank','')}</td>"
             f"<td><b>{html.escape(ticker)}</b></td>"
             f"<td>{_fmt_usd(r.get('current_price_at_scoring_usd'))}</td>"
             f"<td>{_fmt_usd(r.get('fair_entry_low_usd'))} – {_fmt_usd(r.get('fair_entry_high_usd'))}</td>"
             f"<td class='{gap_class}'>{_fmt_num(gap, 1) + '%' if gap is not None else ''}</td>"
             f"<td class='{h_class}'>{h}</td>"
             f"<td style='color:{score_color}; font-weight:600'>{_fmt_num(r.get('final_score'))}</td>"
+            f"<td class='modifier-cell {mod_class}'>{modifier_val:.3f}</td>"
+            f"<td class='adjusted-cell' style='font-weight:600'>{adjusted_val:.2f}</td>"
             f"<td>{_fmt_num(months) if months is not None else ''}</td>"
             f"<td>{_fmt_num(r.get('score_at_current_3mo'))}</td>"
             f"<td>{_fmt_num(r.get('score_at_current_12mo'))}</td>"
@@ -249,11 +321,11 @@ def render_final_ranking_html(
             body_rows.append(
                 _build_detail_row(
                     ticker, by_ticker_horizon,
-                    colspan=20, final_horizon=h or "either",
+                    colspan=22, final_horizon=h or "either",
                 )
             )
 
-    table_rows = "\n".join(body_rows) or "<tr><td colspan=20>(empty)</td></tr>"
+    table_rows = "\n".join(body_rows) or "<tr><td colspan=22>(empty)</td></tr>"
     headers = (
         "__checkbox__",                                       # D48 — selection column
         "",                                                    # arrow column
@@ -263,6 +335,8 @@ def render_final_ranking_html(
         "Current vs fair-mid %",                              # D46 — positioning gap
         "Horizon",
         "Score (PRIMARY, %/mo)",                              # D46 — score_at_current at final_horizon
+        "× Modifier",                                         # D47 / D50
+        "= Adjusted (%/mo)",                                  # D47 / D50 — ranking key
         "Months to catalyst",                                 # max(1.0, weeks/4.33) at final_horizon
         "Score 3mo @current", "Score 12mo @current",          # D46 — primary
         "Target 3mo $", "Target 12mo $",
@@ -303,6 +377,82 @@ def render_final_ranking_html(
     )
     serve_command_js = json.dumps(serve_command)
 
+    # D47 / D50 — embed the per-ticker model factors + initial weights +
+    # bounds + component metadata. The JS reads this on load and on every
+    # slider change to recompute modifier × base_score per row, then re-sort.
+    show_modifier_panel = bool(tf_map)
+    factors_for_js: dict[str, dict[str, float]] = {}
+    for tk, info in tf_map.items():
+        f = (info or {}).get("factors") or {}
+        factors_for_js[tk] = {c: float(f.get(c, 1.0)) for c in _COMPONENT_NAMES}
+    modifier_data_js = json.dumps({
+        "components": list(_COMPONENT_NAMES),
+        "labels":     component_labels,
+        "weights":    {c: float(weights.get(c, 1.0)) for c in _COMPONENT_NAMES},
+        "weights_ui": {
+            "min":     float(weights_ui.get("min", 0.0)),
+            "max":     float(weights_ui.get("max", 2.0)),
+            "step":    float(weights_ui.get("step", 0.05)),
+            "default": float(weights_ui.get("default", 1.0)),
+        },
+        "bounds": {
+            "min": float(bounds.get("min", 0.5)),
+            "max": float(bounds.get("max", 1.5)),
+        },
+        "ticker_factors": factors_for_js,
+    })
+
+    # Hamburger button + slide-out panel HTML, only when we have factors.
+    if show_modifier_panel:
+        slider_rows: list[str] = []
+        for c in _COMPONENT_NAMES:
+            label = html.escape(component_labels[c])
+            init = float(weights.get(c, 1.0))
+            slider_rows.append(
+                f"<div class='mw-row' data-component='{html.escape(c)}'>"
+                f"  <label class='mw-label' title='{html.escape(c)}'>{label}</label>"
+                f"  <input type='range' class='mw-slider' "
+                f"         min='{float(weights_ui.get('min', 0.0))}' "
+                f"         max='{float(weights_ui.get('max', 2.0))}' "
+                f"         step='{float(weights_ui.get('step', 0.05))}' "
+                f"         value='{init:.2f}' />"
+                f"  <span class='mw-value' aria-label='Current weight'>{init:.2f}</span>"
+                f"  <button type='button' class='mw-reset' title='Reset to 1.0'>↺</button>"
+                f"</div>"
+            )
+        modifier_panel_html = (
+            "<div id='mw-overlay' class='mw-overlay' style='display:none' aria-hidden='true'></div>"
+            "<aside id='mw-drawer' class='mw-drawer' style='display:none' aria-hidden='true' "
+            "       aria-label='Score modifier weights'>"
+            "  <div class='mw-header'>"
+            "    <h3>Modifier weights</h3>"
+            "    <button type='button' id='mw-close' class='mw-x' aria-label='Close'>×</button>"
+            "  </div>"
+            "  <p class='mw-help'>"
+            "    Per-component weights applied to the model's modifier. "
+            "    <b>1.00</b> = use model factor as-is &middot; "
+            "    <b>0</b> = disable that component &middot; "
+            "    <b>2.00</b> = double its deviation from neutral. "
+            "    Effective factor = 1 + weight × (model − 1)."
+            "  </p>"
+            "  <div class='mw-actions'>"
+            "    <button type='button' id='mw-reset-all' class='mw-reset-all'>Reset all to 1.00</button>"
+            "    <button type='button' id='mw-disable-all' class='mw-disable-all' "
+            "            title='Set every weight to 0 — disables all components (ranking reverts to raw score)'>Disable all (0.00)</button>"
+            "  </div>"
+            "  <div class='mw-rows'>"
+            + "".join(slider_rows) +
+            "  </div>"
+            "</aside>"
+        )
+        hamburger_button = (
+            "<button id='mw-toggle' class='mw-toggle' "
+            "        title='Open modifier weights' aria-label='Open modifier weights'>≡</button>"
+        )
+    else:
+        modifier_panel_html = ""
+        hamburger_button = ""
+
     html_doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><title>M6 final ranking {html.escape(quarter)}</title>
@@ -341,6 +491,62 @@ def render_final_ranking_html(
  .serve-banner code {{ background: #fff; padding: 1px 6px; border-radius: 3px;
                         border: 1px solid #d4a25c; font-size: 0.85em; }}
  .serve-banner a {{ color: #1565c0; }}
+
+ /* D47 / D50 — modifier cell colour bands + slider drawer */
+ td.modifier-cell {{ font-weight: 600; }}
+ .mod_strong_neg {{ background: #ffcdd2; color: #b71c1c; }}      /* < 0.85 */
+ .mod_neg        {{ background: #ffe0b2; color: #b25500; }}      /* 0.85–0.95 */
+ .mod_neutral    {{ background: #fafafa; color: #555; }}         /* 0.95–1.05 */
+ .mod_mild_pos   {{ background: #c8e6c9; color: #1b5e20; }}      /* 1.05–1.20 */
+ .mod_pos        {{ background: #66bb6a; color: #fff; }}         /* > 1.20 */
+
+ /* Hamburger button (in toolbar). */
+ .mw-toggle {{ background: #1976d2; color: #fff; border: 1px solid #1976d2;
+               border-radius: 4px; padding: 2px 12px; font-size: 1.15em;
+               line-height: 1.1; cursor: pointer; }}
+ .mw-toggle:hover {{ background: #1565c0; }}
+
+ /* Slide-out drawer */
+ .mw-overlay {{ position: fixed; inset: 0; background: rgba(0,0,0,0.18);
+                z-index: 90; }}
+ .mw-drawer  {{ position: fixed; top: 0; right: 0; height: 100vh;
+                width: 380px; max-width: 95vw; background: #fff;
+                border-left: 1px solid #c4d4e6;
+                box-shadow: -4px 0 18px rgba(0,0,0,0.10);
+                padding: 1em 1.2em 1.5em; overflow-y: auto;
+                z-index: 100; font-size: 0.92em; box-sizing: border-box; }}
+ .mw-header  {{ display: flex; align-items: center; justify-content: space-between;
+                margin-bottom: 0.4em; }}
+ .mw-header h3 {{ margin: 0; font-size: 1.05em; color: #1a4fa0; }}
+ .mw-x {{ background: none; border: none; cursor: pointer; font-size: 1.4em;
+          color: #555; padding: 0 6px; }}
+ .mw-x:hover {{ color: #000; }}
+ .mw-help {{ font-size: 0.83em; color: #555; margin: 0.4em 0 0.8em;
+             line-height: 1.4; }}
+ .mw-actions {{ margin-bottom: 0.6em; }}
+ .mw-actions {{ display: flex; gap: 0.4em; flex-wrap: wrap; }}
+ .mw-reset-all, .mw-disable-all {{ border-radius: 4px; padding: 4px 10px;
+                                    cursor: pointer; font-size: 0.9em; }}
+ .mw-reset-all {{ background: #fff; border: 1px solid #999; color: #333; }}
+ .mw-reset-all:hover {{ background: #f0f0f0; }}
+ .mw-disable-all {{ background: #fff; border: 1px solid #c62828; color: #b71c1c; }}
+ .mw-disable-all:hover {{ background: #ffebee; }}
+ .mw-rows {{ display: flex; flex-direction: column; gap: 0.4em; }}
+ .mw-row  {{ display: grid;
+             grid-template-columns: 1fr 130px 44px 28px;
+             align-items: center; gap: 0.4em;
+             padding: 0.3em 0.4em; border: 1px solid #eee;
+             border-radius: 4px; background: #fafafa; }}
+ .mw-row.dirty {{ background: #fff8e1; border-color: #f4c542; }}
+ .mw-label {{ font-size: 0.88em; color: #333; }}
+ .mw-slider {{ width: 100%; }}
+ .mw-value  {{ font-variant-numeric: tabular-nums; text-align: right;
+               font-weight: 600; color: #1a4fa0; }}
+ .mw-row.dirty .mw-value {{ color: #b25500; }}
+ .mw-reset {{ background: none; border: 1px solid #aaa; border-radius: 3px;
+              cursor: pointer; color: #555; font-size: 0.95em;
+              line-height: 1; padding: 1px 5px; }}
+ .mw-reset:hover {{ background: #f0f0f0; color: #000; }}
 
  table {{ border-collapse: collapse; font-size: 0.85em; width: 100%; }}
  th, td {{ border: 1px solid #ddd; padding: 4px 8px; text-align: right;
@@ -395,12 +601,14 @@ def render_final_ranking_html(
   <a id="serve-banner-link" href="#">http://127.0.0.1:4609/{html.escape(quarter)}</a>.
 </div>
 <div class="toolbar" id="selection-toolbar">
+  {hamburger_button}
   <span>Selected: <span id="selected-count" class="badge">{initial_checked} of {total_count}</span></span>
   <button id="copy-cli" title="Copy the python command that re-scores from this file">Copy CLI command</button>
   <button id="copy-serve" title="Copy the command that starts the local selection editor server">Copy serve command</button>
   <span class="hint">Tip: uncheck any tickers you don't want re-scored — saves automatically.</span>
   <span id="toolbar-toast" class="toast"></span>
 </div>
+{modifier_panel_html}
 
 <table id="rank">
 <thead><tr>{th_html}</tr></thead>
@@ -410,6 +618,10 @@ def render_final_ranking_html(
 const QUARTER = {quarter_js};
 const CLI_COMMAND = {cli_command_js};
 const SERVE_COMMAND = {serve_command_js};
+// D47 / D50 — modifier configuration + per-ticker model factors. Driven
+// by the hamburger panel; recomputes table cells on every slider tick.
+const MODIFIER_DATA = {modifier_data_js};
+const CURRENT_WEIGHTS = Object.assign({{}}, MODIFIER_DATA.weights || {{}});
 
 // ─────────────────────────────────────────────────────────────────
 // Expand-arrow click handler: toggle the matching detail row.
@@ -480,10 +692,13 @@ const SAVE_DEBOUNCE_MS = 300;
 function selectionPayload() {{
   const cbs = rowCheckboxes();
   return {{
-    schema_version: 1,
+    schema_version: 2,
     quarter: QUARTER,
     all_tickers:      cbs.map(c => c.value),
     selected_tickers: cbs.filter(c => c.checked).map(c => c.value),
+    // D50 — slider state. Server preserves verbatim into the sidecar JSON;
+    // the renderer reads it back on next load.
+    modifier_weights: typeof CURRENT_WEIGHTS === 'undefined' ? {{}} : CURRENT_WEIGHTS,
   }};
 }}
 
@@ -559,6 +774,218 @@ document.getElementById('copy-serve').addEventListener('click', async () => {{
 if (!SERVER_MODE) {{
   const banner = document.getElementById('serve-banner');
   if (banner) banner.style.display = '';
+}}
+
+// ─────────────────────────────────────────────────────────────────
+// On page load, when SERVER_MODE, fetch the live sidecar JSON and
+// reconcile both checkbox state and slider weights with whatever the
+// server has right now. The embedded MODIFIER_DATA / `checked` attrs
+// are snapshots from render time and may be stale relative to a sidecar
+// the user (or another tab) has updated since. Without this, the FIRST
+// user interaction would PUT the stale HTML state, clobbering the live
+// sidecar — bug observed 2026-04-25.
+// ─────────────────────────────────────────────────────────────────
+async function syncFromSidecar() {{
+  if (!SERVER_MODE) return;
+  let data;
+  try {{
+    const res = await fetch(SELECTION_URL, {{cache: 'no-store'}});
+    if (!res.ok) return;
+    data = await res.json();
+  }} catch (err) {{
+    console.warn('syncFromSidecar fetch failed:', err);
+    return;
+  }}
+  let weightsChanged = false;
+  if (data && data.modifier_weights && typeof MODIFIER_DATA !== 'undefined') {{
+    for (const c of MODIFIER_DATA.components) {{
+      const v = data.modifier_weights[c];
+      if (typeof v !== 'number') continue;
+      if (CURRENT_WEIGHTS[c] === v) continue;
+      CURRENT_WEIGHTS[c] = v;
+      const rowEl = document.querySelector(
+        '.mw-row[data-component="' + c + '"]'
+      );
+      if (rowEl) {{
+        const slider = rowEl.querySelector('.mw-slider');
+        const valueEl = rowEl.querySelector('.mw-value');
+        if (slider) slider.value = String(v);
+        if (valueEl) valueEl.textContent = v.toFixed(2);
+        markRowDirty(rowEl, v);
+      }}
+      weightsChanged = true;
+    }}
+  }}
+  let selectionChanged = false;
+  if (data && Array.isArray(data.selected_tickers)) {{
+    const wanted = new Set(data.selected_tickers);
+    rowCheckboxes().forEach(cb => {{
+      const want = wanted.has(cb.value);
+      if (cb.checked !== want) {{
+        cb.checked = want;
+        selectionChanged = true;
+      }}
+    }});
+    if (selectionChanged) syncMasterAndCount();
+  }}
+  if (weightsChanged) recomputeAndRerank();
+}}
+syncFromSidecar();
+
+// ─────────────────────────────────────────────────────────────────
+// D47 / D50 — modifier weight sliders + live per-row recompute + re-rank.
+// Mirrors module_6b.modifiers.apply_weights bit-identically.
+// ─────────────────────────────────────────────────────────────────
+function effectiveFactor(model, weight) {{
+  return 1.0 + weight * (model - 1.0);
+}}
+function modifierFor(ticker) {{
+  const tf = (MODIFIER_DATA.ticker_factors || {{}})[ticker];
+  if (!tf) return 1.0;
+  let p = 1.0;
+  for (const c of MODIFIER_DATA.components) {{
+    const m = (c in tf) ? tf[c] : 1.0;
+    const w = (c in CURRENT_WEIGHTS) ? CURRENT_WEIGHTS[c] : 1.0;
+    p *= effectiveFactor(m, w);
+  }}
+  const b = MODIFIER_DATA.bounds || {{min: 0.5, max: 1.5}};
+  return Math.max(b.min, Math.min(b.max, p));
+}}
+function modifierClass(m) {{
+  if (m < 0.85) return 'mod_strong_neg';
+  if (m < 0.95) return 'mod_neg';
+  if (m > 1.20) return 'mod_pos';
+  if (m > 1.05) return 'mod_mild_pos';
+  return 'mod_neutral';
+}}
+function recomputeAndRerank(opts) {{
+  opts = opts || {{}};
+  const tbody = document.querySelector('#rank tbody');
+  if (!tbody) return;
+  const mains = Array.from(tbody.querySelectorAll('.main-row'));
+  for (const row of mains) {{
+    const t = row.dataset.ticker;
+    const base = parseFloat(row.dataset.baseScore || '0');
+    const m = modifierFor(t);
+    const adj = m * base;
+    row.dataset.adjusted = adj.toFixed(6);
+    const modCell = row.querySelector('.modifier-cell');
+    const adjCell = row.querySelector('.adjusted-cell');
+    if (modCell) {{
+      modCell.textContent = m.toFixed(3);
+      modCell.className = 'modifier-cell ' + modifierClass(m);
+    }}
+    if (adjCell) {{
+      adjCell.textContent = isFinite(adj) ? adj.toFixed(2) : '';
+    }}
+  }}
+  // Re-sort by adjusted desc (the canonical ranking key now), update the
+  // rank cell, and re-place rows in the DOM keeping main+detail pairs.
+  mains.sort((a, b) => parseFloat(b.dataset.adjusted) - parseFloat(a.dataset.adjusted));
+  mains.forEach((row, idx) => {{
+    const rankCell = row.querySelector('.rank-cell');
+    if (rankCell) rankCell.textContent = (idx + 1);
+    tbody.appendChild(row);
+    const detail = tbody.querySelector(
+      '.detail-row[data-for="' + row.dataset.ticker.replace(/"/g, '\\\\"') + '"]'
+    );
+    if (detail) tbody.appendChild(detail);
+  }});
+}}
+
+// Hamburger drawer open/close (only present when modifier panel was rendered).
+const mwToggle  = document.getElementById('mw-toggle');
+const mwDrawer  = document.getElementById('mw-drawer');
+const mwOverlay = document.getElementById('mw-overlay');
+const mwClose   = document.getElementById('mw-close');
+function openDrawer() {{
+  if (!mwDrawer) return;
+  mwDrawer.style.display = '';  mwDrawer.setAttribute('aria-hidden', 'false');
+  mwOverlay.style.display = ''; mwOverlay.setAttribute('aria-hidden', 'false');
+}}
+function closeDrawer() {{
+  if (!mwDrawer) return;
+  mwDrawer.style.display = 'none';  mwDrawer.setAttribute('aria-hidden', 'true');
+  mwOverlay.style.display = 'none'; mwOverlay.setAttribute('aria-hidden', 'true');
+}}
+if (mwToggle)  mwToggle.addEventListener('click', openDrawer);
+if (mwClose)   mwClose.addEventListener('click', closeDrawer);
+if (mwOverlay) mwOverlay.addEventListener('click', closeDrawer);
+window.addEventListener('keydown', e => {{
+  if (e.key === 'Escape' && mwDrawer && mwDrawer.style.display !== 'none') closeDrawer();
+}});
+
+// Slider wiring: input → recompute → debounce-save.
+function markRowDirty(rowEl, weight) {{
+  const dft = (MODIFIER_DATA.weights_ui && MODIFIER_DATA.weights_ui.default) || 1.0;
+  const dirty = Math.abs(weight - dft) > 1e-9;
+  rowEl.classList.toggle('dirty', dirty);
+}}
+function setSliderWeight(component, weight, opts) {{
+  opts = opts || {{}};
+  CURRENT_WEIGHTS[component] = weight;
+  const rowEl = document.querySelector(
+    '.mw-row[data-component="' + component + '"]'
+  );
+  if (rowEl) {{
+    const slider = rowEl.querySelector('.mw-slider');
+    const valueEl = rowEl.querySelector('.mw-value');
+    if (slider) slider.value = String(weight);
+    if (valueEl) valueEl.textContent = weight.toFixed(2);
+    markRowDirty(rowEl, weight);
+  }}
+  if (!opts.silent) {{
+    recomputeAndRerank();
+    scheduleAutoSave();   // weights ride along on the same PUT as selection
+  }}
+}}
+document.querySelectorAll('.mw-row').forEach(rowEl => {{
+  const component = rowEl.dataset.component;
+  const slider = rowEl.querySelector('.mw-slider');
+  const valueEl = rowEl.querySelector('.mw-value');
+  const resetBtn = rowEl.querySelector('.mw-reset');
+  if (slider) {{
+    slider.addEventListener('input', () => {{
+      const w = parseFloat(slider.value);
+      if (valueEl) valueEl.textContent = w.toFixed(2);
+      markRowDirty(rowEl, w);
+      CURRENT_WEIGHTS[component] = w;
+      recomputeAndRerank();
+    }});
+    slider.addEventListener('change', scheduleAutoSave);   // commit on release
+  }}
+  if (resetBtn) {{
+    resetBtn.addEventListener('click', () => {{
+      const dft = (MODIFIER_DATA.weights_ui && MODIFIER_DATA.weights_ui.default) || 1.0;
+      setSliderWeight(component, dft);
+    }});
+  }}
+  // Initialise dirty class from the seeded weight value.
+  markRowDirty(rowEl, parseFloat(slider ? slider.value : '1.0'));
+}});
+const resetAllBtn = document.getElementById('mw-reset-all');
+if (resetAllBtn) {{
+  resetAllBtn.addEventListener('click', () => {{
+    const dft = (MODIFIER_DATA.weights_ui && MODIFIER_DATA.weights_ui.default) || 1.0;
+    for (const c of MODIFIER_DATA.components) {{
+      setSliderWeight(c, dft, {{silent: true}});
+    }}
+    recomputeAndRerank();
+    scheduleAutoSave();
+  }});
+}}
+const disableAllBtn = document.getElementById('mw-disable-all');
+if (disableAllBtn) {{
+  disableAllBtn.addEventListener('click', () => {{
+    // weight=0 → effective_factor = 1 + 0 × (model − 1) = 1.0 for every
+    // component → modifier ≡ 1.0 → ranking reverts to raw score.
+    const minW = (MODIFIER_DATA.weights_ui && MODIFIER_DATA.weights_ui.min) ?? 0.0;
+    for (const c of MODIFIER_DATA.components) {{
+      setSliderWeight(c, minW, {{silent: true}});
+    }}
+    recomputeAndRerank();
+    scheduleAutoSave();
+  }});
 }}
 
 // ─────────────────────────────────────────────────────────────────

@@ -158,29 +158,34 @@ def write_full_score_rows(
                 cache_read_tokens, cache_creation_tokens,
                 web_search_calls, usd_cost,
                 source_tier, pack_source_rank_hash, refreshed_from_row_id,
-                scored_at
+                scored_at,
+                -- D47 columns; INSERT seeds NULL, apply_modifiers_to_run fills them.
+                score_modifier, score_modifier_json,
+                score_at_current_adjusted_pct_per_month
             ) VALUES (
-                ?, ?, ?, ?, ?, ?,
-                ?, ?, ?,
-                ?, ?, ?, ?,
-                ?,
-                ?,
-                ?, ?,
-                ?,
-                ?, ?,
-                ?, ?, ?,
-                ?, ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?, ?,
-                ?
+                ?, ?, ?, ?, ?, ?,                       -- ticker..run_id (1-6)
+                ?, ?, ?,                                -- target/weeks/probability (7-9)
+                ?, ?, ?, ?,                             -- catalyst/thesis/risks (10-13)
+                ?,                                      -- current_price_at_scoring_usd (14)
+                ?,                                      -- appreciation_from_current_pct (15)
+                ?, ?,                                   -- appreciation_from_fair / from_full_reward (16-17)
+                ?,                                      -- score_at_current_pct_per_month (18)
+                ?, ?,                                   -- score_at_fair / score_at_full_reward (19-20)
+                ?, ?, ?,                                -- fair_entry_low/high/rationale (21-23)
+                ?, ?, ?,                                -- full_reward_low/high/rationale (24-26)
+                ?, ?,                                   -- fully_diluted / prefunded_warrants (27-28)
+                ?, ?,                                   -- cash_and_equivalents / runway_months (29-30)
+                ?, ?,                                   -- rnpv_total / rnpv_per_share (31-32)
+                ?, ?,                                   -- moat_score / technology_uniqueness (33-34)
+                ?, ?,                                   -- acquisition / mgmt_track_record (35-36)
+                ?, ?,                                   -- lead_indication / research_brief_json (37-38)
+                ?, ?,                                   -- raw_text / response_id (39-40)
+                ?, ?,                                   -- input_tokens / output_tokens (41-42)
+                ?, ?,                                   -- cache_read / cache_creation (43-44)
+                ?, ?,                                   -- web_search_calls / usd_cost (45-46)
+                ?, ?, ?,                                -- source_tier / pack_source_rank_hash / refreshed_from_row_id (47-49)
+                ?,                                      -- scored_at (50)
+                NULL, NULL, NULL                        -- D47 score_modifier seeds (51-53; UPDATE later)
             )
             ON CONFLICT(ticker, quarter, horizon, prompt_version, model)
             DO UPDATE SET

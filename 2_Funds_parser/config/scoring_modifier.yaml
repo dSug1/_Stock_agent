@@ -1,0 +1,156 @@
+# Module 6b Part (a) — composite score modifier configuration.
+# Spec:     2_Funds_parser/spec/module_6b_spec.md § The 9 components.
+# Decision: 2_Funds_parser/spec/decisions.md § D47, D50.
+#
+# This file is the v1 default tuning. Per-component factor maps are
+# editable here without code changes. Any structural change (add a new
+# component, change combination logic, change `bounds`) requires a spec
+# revision + a new D-number in decisions.md.
+#
+# All factors apply multiplicatively to score_at_current_pct_per_month
+# at final_horizon. The combined product is clipped to [bounds.min,
+# bounds.max] before multiplication.
+#
+# D50 — user-overridable weights. Each component's contribution to the
+# product can be re-weighted in the HTML report's hamburger menu
+# (per-component slider, range [weight_min, weight_max], default 1.0).
+# Effective factor = 1 + weight × (model_factor − 1). weight=0 disables
+# the component (effective factor = 1.0); weight=1 uses the model value;
+# weight=2 doubles the deviation. The slider's *baseline* default is
+# always 1.0 — the per-slider reset button restores it. User overrides
+# persist in the sidecar JSON (modifier_weights block).
+
+# Hard clip on the combined modifier (after multiplying all components).
+bounds:
+  min: 0.50
+  max: 1.50
+
+# Lookback windows (days) for date-based components.
+windows:
+  insider_lookback_days:   180
+  dilution_lookback_days:  180
+  failures_lookback_days:  365
+
+# UI slider configuration for the per-component user weights (D50).
+weights_ui:
+  min:  0.0     # weight = 0 disables that component (eff factor = 1.0)
+  max:  2.0     # weight = 2 doubles the model factor's deviation from neutral
+  step: 0.05
+  default: 1.0  # weight = 1 uses the model factor as-is — also the per-slider reset target
+
+# Per-component factor maps. Set `enabled: false` on any component to
+# disable it without touching the rest of the file.
+components:
+
+  # 1 — Competitive crowding.
+  # Source: research_brief.competitive_landscape[]. Count entries whose
+  # `stage` matches Approved / NDA filed / Ph3 / incumbent SOC.
+  crowding:
+    enabled: true
+    label: "Competitive crowding"
+    bands:                # ph3plus_count → factor (max_count is INCLUSIVE upper bound)
+      - {max_count: 0,   factor: 1.00}
+      - {max_count: 2,   factor: 0.95}
+      - {max_count: 4,   factor: 0.90}
+      - {max_count: 999, factor: 0.80}
+
+  # 2 — Financing risk (cash runway).
+  # Source: research_brief.financials.runway_months.
+  financing:
+    enabled: true
+    label: "Financing risk (runway)"
+    bands:                # min_months threshold (INCLUSIVE) → factor; first match wins, top to bottom
+      - {min_months: 18, factor: 1.00}
+      - {min_months: 12, factor: 0.95}
+      - {min_months:  6, factor: 0.85}
+      - {min_months:  0, factor: 0.70}
+    missing_factor: 0.85    # used when runway_months is null/0 — conservative
+
+  # 3 — Recent dilution.
+  # Source: research_brief.financials.recent_capital_raises[]. Count
+  # entries with date_iso within `windows.dilution_lookback_days`.
+  dilution:
+    enabled: true
+    label: "Recent dilution"
+    bands:                # raises_in_window → factor
+      - {max_count: 0,   factor: 1.00}
+      - {max_count: 1,   factor: 0.97}
+      - {max_count: 999, factor: 0.93}
+
+  # 4 — Insider conviction (open-market buys by qualifying insiders).
+  # Source: research_brief.insider_activity.recent_transactions[].
+  # Detect ≥1 entry where type ∈ qualifying_types AND
+  # date_iso within `windows.insider_lookback_days` AND
+  # role ∈ qualifying_roles.
+  insider:
+    enabled: true
+    label: "Insider conviction"
+    qualifying_roles: ["CEO", "CFO", "Director", "10% owner"]
+    qualifying_types: ["buy"]
+    detected_factor:  1.10
+    none_factor:      1.00
+
+  # 5 — Mgmt track record (3-band score from the LLM).
+  # Source: research_brief.mgmt_track_record_score.score.
+  mgmt:
+    enabled: true
+    label: "Mgmt track record"
+    bands:                # exact-match score → factor
+      - {score_eq: 0.9, factor: 1.05}
+      - {score_eq: 0.6, factor: 1.00}
+      - {score_eq: 0.3, factor: 0.90}
+    missing_factor: 1.00
+
+  # 6 — Acquisition optionality (3-band score). Asymmetric — never penalises.
+  # Source: research_brief.acquisition_target.score.
+  acquisition:
+    enabled: true
+    label: "Acquisition optionality"
+    bands:
+      - {score_eq: 0.9, factor: 1.10}
+      - {score_eq: 0.6, factor: 1.05}
+      - {score_eq: 0.3, factor: 1.00}
+    missing_factor: 1.00
+
+  # 7 — Moat durability (3-band score).
+  # Source: research_brief.moat.score.
+  moat:
+    enabled: true
+    label: "Moat durability"
+    bands:
+      - {score_eq: 0.9, factor: 1.05}
+      - {score_eq: 0.6, factor: 1.00}
+      - {score_eq: 0.3, factor: 0.95}
+    missing_factor: 1.00
+
+  # 8 — Recent operational failure.
+  # Source: research_brief.past_failures[]. Trigger if any entry has
+  # event ∈ qualifying_events AND date_iso within
+  # `windows.failures_lookback_days`. NOTE: event="other" does NOT
+  # trigger by design — see Open Item #1 in module_6b_spec.md.
+  failures:
+    enabled: true
+    label: "Recent operational failure"
+    qualifying_events: ["clinical_hold", "endpoint_miss", "CRL", "going_concern"]
+    detected_factor:  0.90
+    none_factor:      1.00
+
+  # 9 — rNPV concentration.
+  # Source: research_brief.rnpv_by_indication[] and rnpv_total_usd.
+  # Computes lead_pct = max(rnpv_contribution_usd of NAMED programs)
+  # divided by sum(rnpv_contribution_usd of NAMED programs), where
+  # "named" = anything whose `indication` does NOT contain (case-
+  # insensitively) any string in `exclude_indication_substrings`.
+  # Both numerator AND denominator exclude the platform / residual rows
+  # so the metric reflects "of the named programs, how concentrated is
+  # the rNPV?". (Spec text said "skip max only" but worked-example math
+  # requires excluding from total too — corrected here per D47 impl note.)
+  concentration:
+    enabled: true
+    label: "rNPV concentration"
+    exclude_indication_substrings: ["platform", "optionality", "residual"]
+    bands:                # lead_pct (0..1) → factor; first match wins
+      - {max_pct: 0.50, factor: 1.00}
+      - {max_pct: 0.75, factor: 0.95}
+      - {max_pct: 1.00, factor: 0.85}
+    missing_factor: 1.00

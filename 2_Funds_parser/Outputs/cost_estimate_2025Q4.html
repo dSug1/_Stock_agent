@@ -28,15 +28,15 @@
   Quarter: <code>2025Q4</code> &middot;
   Prompt version: <code>m6-v3</code> &middot;
   Model: <code>claude-opus-4-7</code> &middot;
-  Generated: 2026-04-25T14:15:35+00:00
+  Generated: 2026-04-25T15:49:31+00:00
 </div>
 
 <div class="summary">
   <b>Feed size:</b> 1 tickers.<br>
   <b>Production cost (cache + batch):</b>
-    $0.0000<br>
+    $0.6482<br>
   <b>Worst case if all Tier B escalate:</b>
-    <span class="worst">$0.0000</span>
+    <span class="worst">$0.6482</span>
 </div>
 
 <h2>Active gates (D21 / D27 / D28 / D29)</h2>
@@ -49,7 +49,7 @@
     <th>Avg input tokens / call</th><th>Avg output tokens / call</th>
     <th>Avg search calls / call</th>
   </tr>
-  <tr><td><b>Tier A</b></td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td><b>Tier B</b></td><td>0</td><td>0</td><td>3,987</td><td>400</td><td>2</td></tr><tr><td><b>Tier C</b></td><td>0</td><td>0</td><td>18,987</td><td>10,000</td><td>12</td></tr>
+  <tr><td><b>Tier A</b></td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td><b>Tier B</b></td><td>0</td><td>0</td><td>4,010</td><td>400</td><td>2</td></tr><tr><td><b>Tier C</b></td><td>1</td><td>1</td><td>19,010</td><td>10,000</td><td>12</td></tr>
 </table>
 
 <h2>Pricing scenarios</h2>
@@ -64,7 +64,7 @@
     <th>Web-search fee (upper bound)</th>
     <th>Total</th>
   </tr>
-  <tr><td>no-optim</td><td>0</td><td>0</td><td>0</td><td>0</td><td>$0.0000</td><td>$0.0000</td><td><b>$0.0000</b></td></tr><tr><td>cache-only</td><td>0</td><td>0</td><td>0</td><td>0</td><td>$0.0000</td><td>$0.0000</td><td><b>$0.0000</b></td></tr><tr style="background:#e8f5e9; font-weight:600"><td>cache+batch (production)</td><td>0</td><td>0</td><td>0</td><td>0</td><td>$0.0000</td><td>$0.0000</td><td><b>$0.0000</b></td></tr>
+  <tr><td>no-optim</td><td>33,215</td><td>0</td><td>0</td><td>10,000</td><td>$1.2482</td><td>$0.1200</td><td><b>$1.3682</b></td></tr><tr><td>cache-only</td><td>33,215</td><td>0</td><td>14,205</td><td>10,000</td><td>$1.0565</td><td>$0.1200</td><td><b>$1.1765</b></td></tr><tr style="background:#e8f5e9; font-weight:600"><td>cache+batch (production)</td><td>33,215</td><td>0</td><td>14,205</td><td>10,000</td><td>$0.5282</td><td>$0.1200</td><td><b>$0.6482</b></td></tr>
 </table>
 
 <h2>Token-count assumptions</h2>
@@ -72,7 +72,7 @@
   <tr><td>Cached prefix tokens (system + few-shots)</td>
       <td>14,205</td></tr>
   <tr><td>Avg pack suffix tokens</td>
-      <td>821</td></tr>
+      <td>844</td></tr>
   <tr><td>Avg search-result tokens per Tier C call</td>
       <td>18,000</td></tr>
   <tr><td>Avg search-result tokens per Tier B call</td>

@@ -38,6 +38,16 @@ from module_6 import (  # noqa: E402
     render_final_ranking_xlsx,
     write_final_rankings,
 )
+from module_6b import (  # noqa: E402
+    apply_modifiers_to_run,
+    collect_ticker_factors,
+    load_modifier_config,
+    load_selection_json,
+    merge_modifier_weights,
+    merge_selection,
+    selection_json_path,
+    write_selection_json,
+)
 
 _LOG = logging.getLogger("6_recompute_scores")
 
@@ -305,11 +315,20 @@ def main() -> int:
         if not args.dry_run:
             # Rewrite final_rankings + re-render merged HTML/XLSX per touched (run_id, quarter).
             outputs_dir = PROJECT_ROOT / "Outputs"
+            modifier_cfg = load_modifier_config()
             for (run_id, quarter), _ in run_quarters_touched.items():
                 ranking_rows = _build_final_rankings_rows(
                     conn, quarter, run_id, per_quarter_packs.get(quarter, {}),
                 )
                 write_final_rankings(conn, run_id=run_id, quarter=quarter, rows=ranking_rows)
+                # D47 — re-apply modifiers after the D46 score recompute so the
+                # adjusted columns reflect the new baseline.
+                try:
+                    apply_modifiers_to_run(
+                        conn, run_id=run_id, quarter=quarter, cfg=modifier_cfg,
+                    )
+                except Exception as e:
+                    _LOG.warning("apply_modifiers_to_run failed (run=%s): %s", run_id, e)
                 conn.commit()
                 # Re-render the merged HTML (with arrow-expand details) + XLSX.
                 conn.row_factory = sqlite3.Row
@@ -317,9 +336,30 @@ def main() -> int:
                     "SELECT * FROM llm_scores WHERE run_id=? AND quarter=? ORDER BY ticker, horizon",
                     (run_id, quarter),
                 ).fetchall()]
+                # D49/D50 — sidecar JSON: preserve user selection + slider weights.
+                rank_html = outputs_dir / f"final_ranking_{quarter}.html"
+                rank_json = selection_json_path(rank_html)
+                live_prior = load_selection_json(rank_json)
+                new_pool = sorted({(r.get("ticker") or "") for r in ranking_rows
+                                   if r.get("ticker")})
+                sidecar_selection = merge_selection(new_pool=new_pool, prior=live_prior)
+                sidecar_weights = merge_modifier_weights(prior=live_prior)
+                ticker_factors_export = collect_ticker_factors(
+                    conn, quarter=quarter, tickers=new_pool, cfg=modifier_cfg,
+                )
+                write_selection_json(
+                    rank_json, quarter=quarter,
+                    all_tickers=new_pool,
+                    selected_tickers=sorted(sidecar_selection),
+                    modifier_weights=sidecar_weights,
+                )
                 render_final_ranking_html(
-                    ranking_rows, outputs_dir / f"final_ranking_{quarter}.html",
+                    ranking_rows, rank_html,
                     quarter=quarter, run_id=run_id, score_rows=score_rows,
+                    prior_selection=sidecar_selection,
+                    modifier_weights=sidecar_weights,
+                    ticker_factors=ticker_factors_export,
+                    modifier_cfg=modifier_cfg,
                 )
                 render_final_ranking_xlsx(
                     ranking_rows, outputs_dir / f"final_ranking_{quarter}.xlsx",
