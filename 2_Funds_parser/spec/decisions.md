@@ -1077,6 +1077,52 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D51 — Dispatch resilience: per-result commit, batch resume, sync-concurrency override, large-feed sanity check (Module 6 dispatch hardening)
+
+**Status: ✅ Implemented 2026-04-25.** Triggered by two real failure modes observed in this session:
+- **Data loss on write bug**: `write_full_score_rows` had a 50-col / 48-placeholder mismatch; the SQL exception rolled back the entire `with sqlite3.connect(...) as conn:` block, nuking 5 already-billed Anthropic responses and leaving `$3.24` unrecoverable.
+- **Rate-limit thrash**: org-wide free-tier cap of 30K input tokens/min × per-call usage of 90–130K tokens (input + cache_read + cache_create) means even sync_concurrency=4 guarantees 429s on 5+ tickers; LEGN failed terminally after the SDK exhausted retries.
+
+**Five concrete changes in `scripts/6_score.py` + `src/module_6/dispatch.py` + `src/module_6/scores_db_writes.py`:**
+
+1. **Per-result commit (`scripts/6_score.py` Step 9).** The dispatch-write loop is now wrapped in `try/finally` with explicit `conn.commit()` after each row write (success OR error). A bug, disk error, or interrupt mid-loop preserves all prior writes — only the in-flight result is lost, and even that gets a `db_write_error` row so the failure is auditable. Ends the "all-or-nothing" rollback pattern.
+
+2. **Batch resume (`--resume-run N`).** `dispatch_batch` is split into `submit_batch` (returns batch_id immediately) + `poll_and_collect_batch` (idempotent — Anthropic stores results ~29 days). The script's batch path now calls `submit_batch` first, persists the run record + batch_id to `llm_runs` (committed), and only THEN starts polling. If the script crashes mid-poll, the user runs `python scripts/6_score.py --resume-run <run_id>` to recover the (already-paid) results — no re-submission, no double-billing. `update_run_batch_id` is a small helper for the patch-in case (currently unused; kept for future "submit returns delayed batch_id" patterns).
+
+3. **`--sync-concurrency N` flag.** Overrides `scoring.yaml::dispatch.sync_concurrency` for the run. Lower values (1, 2) reduce 429 pressure; `1` fully serialises. Existing SDK-level retry-with-backoff handles whatever 429s remain.
+
+4. **Sync + large-feed sanity check.** When `--mode sync` is paired with `len(per_ticker) > 5`, prints a multi-line warning explaining the per-min token math, suggests `--mode batch` (50% off, no per-min limit) or `--sync-concurrency 1`. Non-blocking: dispatch still proceeds. Threshold `5` chosen from the BCYC + 4-pack experience this session — 4 was the breaking point.
+
+5. **End-of-run rate-limit summary.** The script now collects two failure lists during the write loop: `rate_limited_tickers` (matched against `RateLimitError` / `rate_limit` in the error detail string) and `write_failed_tickers` (db-write exceptions). On completion, prints a copy-paste retry command for each list, e.g.:
+   ```
+   RATE-LIMITED (1 ticker(s) hit 429 / per-min cap):
+     LEGN
+   Retry just these (one-at-a-time, sync mode):
+     python scripts/6_score.py --tickers LEGN --mode sync --sync-concurrency 1 --yes -v
+   ```
+
+**Recommended invocations for the 100-ticker production run:**
+
+| Scenario | Command | Notes |
+|---|---|---|
+| **Full pipeline (default)** | `python scripts/6_score.py` | Picks up YAML default (`mode: batch`). 50% off; no per-min limit. Recoverable via `--resume-run` if the script dies mid-poll. |
+| **Selective re-run (≤5 tickers)** | `python scripts/6_score.py --tickers A,B,C --mode sync` | Fast iteration; rate limit unlikely with ≤5. |
+| **Selective re-run (>5 tickers, sync)** | `... --mode sync --sync-concurrency 1` | Warning fires; concurrency=1 + SDK retries handle 429s. Slower but reliable. |
+| **Recover crashed batch** | `python scripts/6_score.py --resume-run <run_id>` | No new charges. Results are billed at submit time, persisted by Anthropic for ~29 days. |
+
+**What this DOES NOT defend against:**
+- An Anthropic-side outage that loses your batch results before retrieval (very rare).
+- A hand-edit of the `scoring.yaml` mid-run.
+- Multiple concurrent invocations of `6_score.py` against the same DB (no file lock).
+
+**Files touched:**
+- `src/module_6/dispatch.py` — `submit_batch`, `poll_and_collect_batch`, refactored `dispatch_batch` wrapper with `on_submit` callback (kept for back-compat).
+- `src/module_6/scores_db_writes.py` — `update_run_batch_id` helper.
+- `src/module_6/__init__.py` — re-exports.
+- `scripts/6_score.py` — `--sync-concurrency` flag, `--resume-run` flag, sanity-check warning, Step 0 resume short-circuit, Step 8 split (submit + early-commit + poll), Step 9 per-result commit, end-of-run failure summary.
+
+---
+
 ### D50 — Per-component user weight sliders for the Module 6b modifier (HTML-side, persisted in sidecar JSON)
 
 **Status: ✅ Implemented 2026-04-25.** Hamburger menu in the report toolbar opens a slide-out drawer with one slider per component (range `[0, 2]`, default `1.0`, step `0.05`), per-slider reset, and a global "Reset all to 1.00". Slider changes recompute every row's modifier + adjusted score in JS, re-sort by adjusted desc, re-rank, and debounce-PUT to `/selection/<quarter>` so the weights ride along on the same sidecar JSON as the selection state (schema bumped v1 → v2). Pipeline re-renders preserve user weights via `merge_modifier_weights`. The DB always stores the model baseline (weights = 1.0) — user state lives only in the sidecar JSON. Files: `src/module_6b/modifiers.py::apply_weights`, `src/module_6b/selection_io.py::{default_modifier_weights, read_modifier_weights, merge_modifier_weights}`, `src/module_6/reports.py` (hamburger panel + JS recompute), `scripts/6_score.py` (passes weights + ticker_factors to renderer), `scripts/6_recompute_scores.py` (same).

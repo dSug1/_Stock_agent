@@ -19,6 +19,8 @@ from .dispatch import (
     dispatch_batch,
     dispatch_sync,
     load_allowed_domains_for_industry,
+    poll_and_collect_batch,
+    submit_batch,
 )
 from .parsing import (
     ParseError,
@@ -47,6 +49,7 @@ from .scores_db import (
 from .scores_db_writes import (
     close_run,
     open_run,
+    update_run_batch_id,
     upsert_web_search_cache_row,
     write_error_row,
     write_final_rankings,
@@ -67,6 +70,7 @@ __all__ = [
     "DispatchResult", "build_user_message_full", "build_user_message_light_refresh",
     "build_web_search_tool_def", "dispatch_batch", "dispatch_sync",
     "load_allowed_domains_for_industry",
+    "poll_and_collect_batch", "submit_batch",
     # parsing
     "ParseError", "ParsedFullScore", "ParsedLightRefresh",
     "parse_full_score", "parse_light_refresh",
@@ -82,7 +86,8 @@ __all__ = [
     "LLM_SCORES_SCHEMA_VERSION", "init_llm_scores_schema",
     "query_priors_for_ticker",
     # scores_db_writes
-    "close_run", "open_run", "upsert_web_search_cache_row",
+    "close_run", "open_run", "update_run_batch_id",
+    "upsert_web_search_cache_row",
     "write_error_row", "write_final_rankings", "write_full_score_rows",
     # scoring
     "HorizonScore", "TickerScore",

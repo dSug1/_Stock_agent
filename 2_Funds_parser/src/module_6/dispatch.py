@@ -329,19 +329,20 @@ def dispatch_sync(
 # ---------------------------------------------------------------------------
 
 
-def dispatch_batch(
+def submit_batch(
     *,
     api_key: str,
     model: str,
     max_output_tokens: int,
     system_prompt: str,
     per_ticker: list[dict],
-    poll_interval_s: int = 30,
-    timeout_s: int = 86_400,
-) -> tuple[str, list[DispatchResult]]:
-    """Submit a Message Batch, poll until complete, decode all rows.
+) -> str:
+    """Submit a Message Batch and return the ``batch_id`` *immediately*.
 
-    Returns ``(batch_id, results)``.
+    Does NOT poll — caller is responsible for `poll_and_collect_batch`.
+    Splitting submit + poll lets the script persist the batch_id to the
+    DB right after submission so it remains recoverable if the script
+    crashes mid-poll (D51 — batch resume).
     """
     from anthropic import Anthropic
     client = Anthropic(api_key=api_key)
@@ -364,8 +365,26 @@ def dispatch_batch(
         })
 
     batch = client.messages.batches.create(requests=requests)
-    batch_id = batch.id
-    _LOG.info("Submitted batch %s with %d requests", batch_id, len(requests))
+    _LOG.info("Submitted batch %s with %d requests", batch.id, len(requests))
+    return batch.id
+
+
+def poll_and_collect_batch(
+    *,
+    api_key: str,
+    batch_id: str,
+    poll_interval_s: int = 30,
+    timeout_s: int = 86_400,
+) -> list[DispatchResult]:
+    """Poll a previously-submitted batch and decode results when complete.
+
+    Idempotent: safe to call multiple times against the same `batch_id`
+    (Anthropic stores results for ~29 days). Used both by the normal
+    batch flow AND by `scripts/6_score.py --resume-run N` to recover
+    from a crashed mid-poll session.
+    """
+    from anthropic import Anthropic
+    client = Anthropic(api_key=api_key)
 
     started = time.time()
     while True:
@@ -411,4 +430,40 @@ def dispatch_batch(
             stop_reason=getattr(msg, "stop_reason", "") or "",
             server_tool_results=tool_results,
         ))
+    return results
+
+
+def dispatch_batch(
+    *,
+    api_key: str,
+    model: str,
+    max_output_tokens: int,
+    system_prompt: str,
+    per_ticker: list[dict],
+    poll_interval_s: int = 30,
+    timeout_s: int = 86_400,
+    on_submit=None,
+) -> tuple[str, list[DispatchResult]]:
+    """Submit + poll a Message Batch end-to-end. Back-compat wrapper.
+
+    `on_submit(batch_id)` fires immediately after submission so the
+    caller can persist `batch_id` to the DB before the long poll starts
+    — important for crash recovery (D51).
+
+    Returns ``(batch_id, results)``.
+    """
+    batch_id = submit_batch(
+        api_key=api_key, model=model,
+        max_output_tokens=max_output_tokens,
+        system_prompt=system_prompt, per_ticker=per_ticker,
+    )
+    if on_submit is not None:
+        try:
+            on_submit(batch_id)
+        except Exception as e:                                # never let the cb kill the batch
+            _LOG.warning("on_submit callback raised %s; continuing to poll", e)
+    results = poll_and_collect_batch(
+        api_key=api_key, batch_id=batch_id,
+        poll_interval_s=poll_interval_s, timeout_s=timeout_s,
+    )
     return batch_id, results

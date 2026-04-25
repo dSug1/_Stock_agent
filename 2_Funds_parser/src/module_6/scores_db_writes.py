@@ -50,6 +50,26 @@ def open_run(
     return int(cur.lastrowid)
 
 
+def update_run_batch_id(
+    conn: sqlite3.Connection,
+    run_id: int,
+    batch_id: str,
+) -> None:
+    """Stamp ``llm_runs.batch_id`` after a delayed batch submission.
+
+    Used by the batch dispatch flow (D51 — crash recovery): the script
+    opens the run record with ``batch_id=None`` BEFORE submitting (so the
+    run row exists and persists across crashes), then patches in the
+    actual batch_id immediately after the submit returns. Without this,
+    a script crash mid-poll would orphan an Anthropic-side batch with no
+    way to resume — the costs paid would be unrecoverable.
+    """
+    conn.execute(
+        "UPDATE llm_runs SET batch_id = ? WHERE run_id = ?",
+        (batch_id, run_id),
+    )
+
+
 def close_run(
     conn: sqlite3.Connection,
     run_id: int,

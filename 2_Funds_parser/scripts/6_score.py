@@ -88,10 +88,13 @@ from module_6 import (  # noqa: E402
     load_cacheable_prefix,
     open_run,
     parse_full_score,
+    poll_and_collect_batch,
     render_cost_html,
     render_final_ranking_html,
     render_final_ranking_xlsx,
     render_llm_responses_html,
+    submit_batch,
+    update_run_batch_id,
     upsert_web_search_cache_row,
     write_error_row,
     write_final_rankings,
@@ -595,6 +598,12 @@ def main() -> int:
     parser.add_argument("--yes", action="store_true",
                         help="D48 — single-shot bypass of the mandatory pre-dispatch "
                              "[y/N] confirmation gate. Use only when fully aware of cost.")
+    parser.add_argument("--sync-concurrency", type=int, default=None,
+                        help="D51 — override scoring.yaml::dispatch.sync_concurrency "
+                             "for this run. Lower values reduce 429 rate-limit pressure.")
+    parser.add_argument("--resume-run", type=int, default=None, metavar="RUN_ID",
+                        help="D51 — recover a half-completed batch run. Skip submit; "
+                             "look up batch_id from llm_runs and poll-collect-write only.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -611,264 +620,395 @@ def main() -> int:
     if not context_packs_db.exists():
         raise SystemExit(f"context_packs.db not found at {context_packs_db}")
 
-    quarter = _resolve_quarter(context_packs_db, args.quarter)
-
     # Load .env from repo root for ANTHROPIC_API_KEY
     load_dotenv(REPO_ROOT / ".env")
 
-    # ────────────── Step 1 — gates ──────────────
-    yaml_gates = scoring["gates"]
-    explicit_ticker_list: list[str] | None = None
-    selection_html_path: Path | None = None
-    prior_selection: set[str] | None = None
-    all_input_tickers: list[str] | None = None
-    selection_source = "gates"
-    if args.selection_from_html:
-        # D49 — derive feed from the sidecar JSON (preferred) written by the
-        # local server (scripts/6_serve_report.py). Falls back to D48 HTML
-        # `checked`-attribute parsing for back-compat with reports rendered
-        # before D49.
-        selection_html_path = Path(args.selection_from_html)
-        if not selection_html_path.exists():
+    # ────────────── Step 0 — resume an in-progress batch (D51) ──────────────
+    # Skip submit + open_run + the cost gate; just poll the prior batch and
+    # write its results. Used when an earlier `--mode batch` script crashed
+    # mid-poll (the run record + batch_id are already in llm_runs from the
+    # early-commit path in step 8). No new Anthropic charges; the batch's
+    # tokens were already paid at submit time.
+    if args.resume_run is not None:
+        if not llm_scores_db.exists():
+            raise SystemExit(f"--resume-run: llm_scores.db not found at {llm_scores_db}")
+        with sqlite3.connect(llm_scores_db) as _c:
+            _c.row_factory = sqlite3.Row
+            run_row = _c.execute(
+                "SELECT * FROM llm_runs WHERE run_id=?", (args.resume_run,),
+            ).fetchone()
+        if run_row is None:
+            raise SystemExit(f"--resume-run {args.resume_run}: not found in llm_runs")
+        if not run_row["batch_id"]:
             raise SystemExit(
-                f"--selection-from-html path not found: {selection_html_path}"
+                f"--resume-run {args.resume_run}: no batch_id (was not a batch dispatch). "
+                "Resume only applies to runs with batch mode."
             )
-        json_path = selection_json_path(selection_html_path)
-        sidecar = load_selection_json(json_path)
-        if sidecar is not None:
-            parsed_checked = list(sidecar.get("selected_tickers") or [])
-            all_input_tickers = list(sidecar.get("all_tickers") or [])
-            selection_source = "json_sidecar"
-            origin_label = json_path.name
-        else:
-            parsed_checked = parse_selected_tickers(selection_html_path)
-            all_input_tickers = parse_all_tickers(selection_html_path)
-            selection_source = "html"
-            origin_label = (selection_html_path.name
-                            + " (no sidecar JSON; fell back to HTML attrs)")
-        if not parsed_checked:
-            raise SystemExit(
-                f"No tickers selected for {selection_html_path}.\n"
-                "Start the local server (python scripts/6_serve_report.py), "
-                "edit checkboxes in your browser (auto-saves), then re-run."
-            )
-        explicit_ticker_list = parsed_checked
-        prior_selection = set(parsed_checked)
-        gates = dict(yaml_gates)  # gates ignored under selection-from-html
-        print(f"Selection-from-{selection_source}: {len(parsed_checked)} "
-              f"ticker(s) selected of {len(all_input_tickers)} in {origin_label}")
-    elif args.ticker or args.tickers:
-        names = [args.ticker] if args.ticker else [s.strip() for s in args.tickers.split(",") if s.strip()]
-        explicit_ticker_list = [n for n in names if n]
-        gates = dict(yaml_gates)  # gates ignored when explicit ticker list is given
-        selection_source = "tickers_flag"
-        print(f"Explicit ticker list: {explicit_ticker_list}")
-    elif args.non_interactive or not sys.stdin.isatty():
-        gates = dict(yaml_gates)
-        if args.composite_best_min is not None:
-            gates["composite_best_min"] = float(args.composite_best_min)
-        if args.industry_allowlist is not None:
-            gates["industry_allowlist"] = [s.strip() for s in args.industry_allowlist.split(",") if s.strip()]
-        if args.market_cap_max_usd is not None:
-            gates["market_cap_max_usd"] = float(args.market_cap_max_usd)
-        if args.no_rescue:
-            gates.setdefault("rescue", {})["enabled"] = False
-    else:
-        with sqlite3.connect(context_packs_db) as packs_conn:
-            packs_conn.row_factory = sqlite3.Row
-            gates = _interactive_gates(packs_conn, quarter, yaml_gates)
+        run_id = int(run_row["run_id"])
+        batch_id = run_row["batch_id"]
+        quarter = run_row["quarter"]
+        mode = "batch"
+        gates = json.loads(run_row["gate_config_json"] or "{}")
+        selection_source = gates.get("selection_source", "resume")
+        explicit_ticker_list = None
+        selection_html_path = None
+        all_input_tickers = None
+        prior_selection = None
+        feed_rows = []                                  # synthetic; not used in step 9
+        per_ticker = []                                 # prep_index will be empty; pack_source_rank_hash defaults to ""
+        counts = {Tier.A: int(run_row["tier_a_count"] or 0),
+                  Tier.B: int(run_row["tier_b_count"] or 0),
+                  Tier.C: int(run_row["tier_c_count"] or 0)}
+        cached_prefix = ""                              # unused in resume
 
-    # ────────────── Step 2 — feed ──────────────
-    with sqlite3.connect(context_packs_db) as packs_conn:
-        packs_conn.row_factory = sqlite3.Row
-        if explicit_ticker_list:
-            placeholders = ",".join("?" for _ in explicit_ticker_list)
-            feed_rows = packs_conn.execute(
-                f"SELECT * FROM context_packs WHERE quarter=? AND ticker IN ({placeholders})",
-                (quarter, *explicit_ticker_list),
-            ).fetchall()
-            missing = set(explicit_ticker_list) - {r["ticker"] for r in feed_rows}
-            if missing:
-                print(f"WARNING: tickers not found in context_packs: {sorted(missing)}")
-        else:
-            rescue = gates.get("rescue", {}) or {}
-            feed_rows = query_packs_for_quarter(
-                packs_conn, quarter, "m5-v1",
-                composite_best_min=float(gates["composite_best_min"]),
-                industry_allowlist=gates.get("industry_allowlist"),
-                market_cap_max_usd=float(gates["market_cap_max_usd"])
-                    if gates.get("market_cap_max_usd") else None,
-                rescue_enabled=bool(rescue.get("enabled", False)),
-                rescue_new_positions_min=int(rescue.get("new_positions_min", 1)),
-                rescue_qoq_fund_count_change_min=int(rescue.get("qoq_fund_count_change_min", 1)),
-                rescue_train_has_left_archetypes=list(
-                    rescue.get("excluded_archetypes", _TRAIN_LEFT_ARCHETYPES)
-                ),
-            )
-        if args.limit is not None:
-            feed_rows = feed_rows[: args.limit]
-    if not feed_rows:
-        raise SystemExit(f"No tickers in feed for {quarter}.")
-    print(f"Feed size: {len(feed_rows)} tickers")
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise SystemExit("ANTHROPIC_API_KEY not set in environment / .env")
 
-    # ────────────── Step 3 — tier classification ──────────────
-    refresh_3mo = scoring["cache"]["refresh_threshold_weeks_3mo"] * 7
-    refresh_12mo = scoring["cache"]["refresh_threshold_weeks_12mo"] * 7
-    feed_tiers = []
-    with sqlite3.connect(llm_scores_db) as scores_conn:
-        init_llm_scores_schema(scores_conn)
-        for r in feed_rows:
-            pack = json.loads(r["pack_json"])
-            tc = classify_ticker_tier(
-                conn=scores_conn,
-                ticker=r["ticker"],
-                current_quarter=quarter,
-                current_pack_hash=pack.get("source_rank_hash", ""),
-                prompt_version=scoring["prompt_version"],
-                model=scoring["model"],
-                refresh_threshold_days_3mo=refresh_3mo,
-                refresh_threshold_days_12mo=refresh_12mo,
-            )
-            if args.force_refresh:
-                tc = type(tc)(
-                    ticker=tc.ticker, overall_tier=Tier.C,
-                    tier_3mo=Tier.C, tier_12mo=Tier.C,
-                    days_since_3mo=tc.days_since_3mo, days_since_12mo=tc.days_since_12mo,
-                    pack_hash_match_3mo=False, pack_hash_match_12mo=False,
-                )
-            feed_tiers.append(tc)
-
-    counts = {Tier.A: 0, Tier.B: 0, Tier.C: 0}
-    for tc in feed_tiers:
-        counts[tc.overall_tier] += 1
-    print(f"Tier breakdown: A={counts[Tier.A]}  B={counts[Tier.B]}  C={counts[Tier.C]}")
-
-    # ────────────── Step 4 — print-prompt mode ──────────────
-    if args.print_prompt:
-        with sqlite3.connect(llm_scores_db) as scores_conn:
-            init_llm_scores_schema(scores_conn)
-            for row in feed_rows:
-                if row["ticker"] != args.print_prompt:
-                    continue
-                pack = json.loads(row["pack_json"])
-                user_msg = build_user_message_full(
-                    pack=pack, scores_conn=scores_conn,
-                    ticker=row["ticker"],
-                    prompt_version=scoring["prompt_version"],
-                    model=scoring["model"],
-                    web_search_lookback_days=int(scoring["cache"]["web_search_lookback_days"]),
-                    prior_thesis_max_per_horizon=int(scoring["cache"]["prior_thesis_max_per_horizon"]),
-                )
-                print("\n" + "=" * 70)
-                print(f"USER MESSAGE for {row['ticker']} (length: {len(user_msg)} chars)")
-                print("=" * 70)
-                print(user_msg)
-                return 0
-            print(f"Ticker {args.print_prompt} not in feed.")
-            return 1
-
-    # ────────────── Step 5 — cost estimate ──────────────
-    cached_prefix = load_cacheable_prefix(
-        config_dir / Path(scoring["system_prompt_path"]).name,
-        config_dir / Path(scoring["few_shot_examples_path"]).name,
-    )
-    sample_packs = [feed_rows[i]["pack_json"] for i in range(min(5, len(feed_rows)))]
-    estimate = estimate_cost(EstimateInputs(
-        quarter=quarter,
-        prompt_version=scoring["prompt_version"],
-        model=scoring["model"],
-        cached_prefix_text=cached_prefix,
-        pack_jsons_sample=sample_packs,
-        feed_tiers=feed_tiers,
-        max_output_tokens_full=int(scoring["max_output_tokens"]),
-        max_output_tokens_tier_b=int(scoring["cache"]["tier_b_max_output_tokens"]),
-        max_uses_full=int(scoring["web_search"]["max_uses"]),
-        max_uses_tier_b=int(scoring["web_search"]["max_uses_tier_b"]),
-        pricing=scoring["pricing"],
-    ))
-    cost_html = PROJECT_ROOT / "Outputs" / f"cost_estimate_{quarter}.html"
-    render_cost_html(estimate, gates, cost_html)
-    print(f"Wrote {cost_html}")
-    print(f"Estimated production cost: ${estimate.scenarios[2].total_usd:,.2f}  "
-          f"(worst-case: ${estimate.worst_case_if_all_b_escalate_usd:,.2f})")
-
-    if args.dry_run:
-        return 0
-
-    # ────────────── Step 6 — mandatory approval gate (D48) ──────────────
-    # The gate ALWAYS prompts regardless of TTY state. Only `--yes` bypasses,
-    # and only as an explicit single-shot flag — never config-driven.
-    # When zero calls are scheduled (all-Tier-A), the gate is skipped — there
-    # is nothing to confirm and the run still proceeds to re-render reports.
-    n_dispatch = counts[Tier.C] + counts[Tier.B]
-    if n_dispatch == 0:
-        print("\nAll selected tickers are Tier-A cache hits — no API calls; "
-              "skipping confirmation gate and proceeding to report re-render.")
-    elif args.yes:
-        print(f"\n--yes specified: dispatching {n_dispatch} API call(s) "
-              f"for ~${estimate.scenarios[2].total_usd:,.2f} without confirmation.")
-    else:
+        print()
+        print("=" * 64)
+        print(f"  RESUME mode (D51)")
+        print(f"    run_id:    {run_id}")
+        print(f"    batch_id:  {batch_id}")
+        print(f"    quarter:   {quarter}")
+        print(f"    polling for results (no new Anthropic charges)…")
+        print("=" * 64)
+        started = time.time()
         try:
-            prompt = (
-                f"\nProceed to dispatch {n_dispatch} API call(s) "
-                f"for ~${estimate.scenarios[2].total_usd:,.2f}? [y/N] "
-            )
-            answer = input(prompt).strip().lower() or "n"
-        except EOFError:
-            print("\n[stdin closed] aborting. Re-run with --yes to bypass the gate.")
-            answer = "n"
-        if answer != "y":
-            print("Aborted.")
-            return 0
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise SystemExit("ANTHROPIC_API_KEY not set in environment / .env")
-
-    # ────────────── Step 7 — prepare per-ticker payloads ──────────────
-    pack_lookup: dict[str, dict] = {}
-    with sqlite3.connect(llm_scores_db) as scores_conn:
-        scores_conn.row_factory = sqlite3.Row
-        per_ticker = _prepare_per_ticker(
-            feed_rows, feed_tiers,
-            scores_conn=scores_conn,
-            scoring=scoring,
-            config_dir=config_dir,
-            only_tier_c=True,  # step C: dispatch any non-Tier-A as full call
-        )
-        for r in feed_rows:
-            pack_lookup[r["ticker"]] = json.loads(r["pack_json"])
-
-    if not per_ticker:
-        print("All tickers Tier-A cache hits — no API calls needed. Refreshing reports only.")
-
-    mode = args.mode or scoring["dispatch"]["mode"]
-    print(f"\nDispatching {len(per_ticker)} calls in mode={mode}...")
-
-    # ────────────── Step 8 — dispatch ──────────────
-    started = time.time()
-    batch_id: str | None = None
-    if per_ticker:
-        if mode == "sync":
-            results = dispatch_sync(
-                api_key=api_key, model=scoring["model"],
-                max_output_tokens=int(scoring["max_output_tokens"]),
-                system_prompt=cached_prefix,
-                per_ticker=per_ticker,
-                sync_concurrency=int(scoring["dispatch"]["sync_concurrency"]),
-            )
-        else:
-            batch_id, results = dispatch_batch(
-                api_key=api_key, model=scoring["model"],
-                max_output_tokens=int(scoring["max_output_tokens"]),
-                system_prompt=cached_prefix,
-                per_ticker=per_ticker,
+            results = poll_and_collect_batch(
+                api_key=api_key, batch_id=batch_id,
                 poll_interval_s=int(scoring["dispatch"]["poll_interval_s"]),
                 timeout_s=int(scoring["dispatch"]["timeout_s"]),
             )
+        except Exception as e:
+            raise SystemExit(
+                f"poll_and_collect_batch failed: {e}\n"
+                "If the batch is still processing, just rerun this command later."
+            )
+        elapsed = time.time() - started
+        result_tickers = sorted({r.ticker for r in results})
+        pack_lookup = _load_packs_for_tickers(context_packs_db, quarter, result_tickers)
+        # Fall through to step 9 with run_id, results, pack_lookup all set.
     else:
-        results = []
-    elapsed = time.time() - started
+        run_id = None                                   # opened later in step 9
+        quarter = _resolve_quarter(context_packs_db, args.quarter)
+        explicit_ticker_list = None
+        selection_html_path = None
+        prior_selection = None
+        all_input_tickers = None
+        selection_source = "gates"
+
+    # In resume mode (D51), Steps 1-8 are skipped entirely — every variable
+    # they would set is already populated from the Step 0 short-circuit
+    # at the top of main(). The body below is indented 4 more spaces.
+    if args.resume_run is None:
+        # ────────────── Step 1 — gates ──────────────
+        yaml_gates = scoring["gates"]
+        explicit_ticker_list: list[str] | None = None
+        selection_html_path: Path | None = None
+        prior_selection: set[str] | None = None
+        all_input_tickers: list[str] | None = None
+        selection_source = "gates"
+        if args.selection_from_html:
+            # D49 — derive feed from the sidecar JSON (preferred) written by the
+            # local server (scripts/6_serve_report.py). Falls back to D48 HTML
+            # `checked`-attribute parsing for back-compat with reports rendered
+            # before D49.
+            selection_html_path = Path(args.selection_from_html)
+            if not selection_html_path.exists():
+                raise SystemExit(
+                    f"--selection-from-html path not found: {selection_html_path}"
+                )
+            json_path = selection_json_path(selection_html_path)
+            sidecar = load_selection_json(json_path)
+            if sidecar is not None:
+                parsed_checked = list(sidecar.get("selected_tickers") or [])
+                all_input_tickers = list(sidecar.get("all_tickers") or [])
+                selection_source = "json_sidecar"
+                origin_label = json_path.name
+            else:
+                parsed_checked = parse_selected_tickers(selection_html_path)
+                all_input_tickers = parse_all_tickers(selection_html_path)
+                selection_source = "html"
+                origin_label = (selection_html_path.name
+                                + " (no sidecar JSON; fell back to HTML attrs)")
+            if not parsed_checked:
+                raise SystemExit(
+                    f"No tickers selected for {selection_html_path}.\n"
+                    "Start the local server (python scripts/6_serve_report.py), "
+                    "edit checkboxes in your browser (auto-saves), then re-run."
+                )
+            explicit_ticker_list = parsed_checked
+            prior_selection = set(parsed_checked)
+            gates = dict(yaml_gates)  # gates ignored under selection-from-html
+            print(f"Selection-from-{selection_source}: {len(parsed_checked)} "
+                  f"ticker(s) selected of {len(all_input_tickers)} in {origin_label}")
+        elif args.ticker or args.tickers:
+            names = [args.ticker] if args.ticker else [s.strip() for s in args.tickers.split(",") if s.strip()]
+            explicit_ticker_list = [n for n in names if n]
+            gates = dict(yaml_gates)  # gates ignored when explicit ticker list is given
+            selection_source = "tickers_flag"
+            print(f"Explicit ticker list: {explicit_ticker_list}")
+        elif args.non_interactive or not sys.stdin.isatty():
+            gates = dict(yaml_gates)
+            if args.composite_best_min is not None:
+                gates["composite_best_min"] = float(args.composite_best_min)
+            if args.industry_allowlist is not None:
+                gates["industry_allowlist"] = [s.strip() for s in args.industry_allowlist.split(",") if s.strip()]
+            if args.market_cap_max_usd is not None:
+                gates["market_cap_max_usd"] = float(args.market_cap_max_usd)
+            if args.no_rescue:
+                gates.setdefault("rescue", {})["enabled"] = False
+        else:
+            with sqlite3.connect(context_packs_db) as packs_conn:
+                packs_conn.row_factory = sqlite3.Row
+                gates = _interactive_gates(packs_conn, quarter, yaml_gates)
+
+        # ────────────── Step 2 — feed ──────────────
+        with sqlite3.connect(context_packs_db) as packs_conn:
+            packs_conn.row_factory = sqlite3.Row
+            if explicit_ticker_list:
+                placeholders = ",".join("?" for _ in explicit_ticker_list)
+                feed_rows = packs_conn.execute(
+                    f"SELECT * FROM context_packs WHERE quarter=? AND ticker IN ({placeholders})",
+                    (quarter, *explicit_ticker_list),
+                ).fetchall()
+                missing = set(explicit_ticker_list) - {r["ticker"] for r in feed_rows}
+                if missing:
+                    print(f"WARNING: tickers not found in context_packs: {sorted(missing)}")
+            else:
+                rescue = gates.get("rescue", {}) or {}
+                feed_rows = query_packs_for_quarter(
+                    packs_conn, quarter, "m5-v1",
+                    composite_best_min=float(gates["composite_best_min"]),
+                    industry_allowlist=gates.get("industry_allowlist"),
+                    market_cap_max_usd=float(gates["market_cap_max_usd"])
+                        if gates.get("market_cap_max_usd") else None,
+                    rescue_enabled=bool(rescue.get("enabled", False)),
+                    rescue_new_positions_min=int(rescue.get("new_positions_min", 1)),
+                    rescue_qoq_fund_count_change_min=int(rescue.get("qoq_fund_count_change_min", 1)),
+                    rescue_train_has_left_archetypes=list(
+                        rescue.get("excluded_archetypes", _TRAIN_LEFT_ARCHETYPES)
+                    ),
+                )
+            if args.limit is not None:
+                feed_rows = feed_rows[: args.limit]
+        if not feed_rows:
+            raise SystemExit(f"No tickers in feed for {quarter}.")
+        print(f"Feed size: {len(feed_rows)} tickers")
+
+        # ────────────── Step 3 — tier classification ──────────────
+        refresh_3mo = scoring["cache"]["refresh_threshold_weeks_3mo"] * 7
+        refresh_12mo = scoring["cache"]["refresh_threshold_weeks_12mo"] * 7
+        feed_tiers = []
+        with sqlite3.connect(llm_scores_db) as scores_conn:
+            init_llm_scores_schema(scores_conn)
+            for r in feed_rows:
+                pack = json.loads(r["pack_json"])
+                tc = classify_ticker_tier(
+                    conn=scores_conn,
+                    ticker=r["ticker"],
+                    current_quarter=quarter,
+                    current_pack_hash=pack.get("source_rank_hash", ""),
+                    prompt_version=scoring["prompt_version"],
+                    model=scoring["model"],
+                    refresh_threshold_days_3mo=refresh_3mo,
+                    refresh_threshold_days_12mo=refresh_12mo,
+                )
+                if args.force_refresh:
+                    tc = type(tc)(
+                        ticker=tc.ticker, overall_tier=Tier.C,
+                        tier_3mo=Tier.C, tier_12mo=Tier.C,
+                        days_since_3mo=tc.days_since_3mo, days_since_12mo=tc.days_since_12mo,
+                        pack_hash_match_3mo=False, pack_hash_match_12mo=False,
+                    )
+                feed_tiers.append(tc)
+
+        counts = {Tier.A: 0, Tier.B: 0, Tier.C: 0}
+        for tc in feed_tiers:
+            counts[tc.overall_tier] += 1
+        print(f"Tier breakdown: A={counts[Tier.A]}  B={counts[Tier.B]}  C={counts[Tier.C]}")
+
+        # ────────────── Step 4 — print-prompt mode ──────────────
+        if args.print_prompt:
+            with sqlite3.connect(llm_scores_db) as scores_conn:
+                init_llm_scores_schema(scores_conn)
+                for row in feed_rows:
+                    if row["ticker"] != args.print_prompt:
+                        continue
+                    pack = json.loads(row["pack_json"])
+                    user_msg = build_user_message_full(
+                        pack=pack, scores_conn=scores_conn,
+                        ticker=row["ticker"],
+                        prompt_version=scoring["prompt_version"],
+                        model=scoring["model"],
+                        web_search_lookback_days=int(scoring["cache"]["web_search_lookback_days"]),
+                        prior_thesis_max_per_horizon=int(scoring["cache"]["prior_thesis_max_per_horizon"]),
+                    )
+                    print("\n" + "=" * 70)
+                    print(f"USER MESSAGE for {row['ticker']} (length: {len(user_msg)} chars)")
+                    print("=" * 70)
+                    print(user_msg)
+                    return 0
+                print(f"Ticker {args.print_prompt} not in feed.")
+                return 1
+
+        # ────────────── Step 5 — cost estimate ──────────────
+        cached_prefix = load_cacheable_prefix(
+            config_dir / Path(scoring["system_prompt_path"]).name,
+            config_dir / Path(scoring["few_shot_examples_path"]).name,
+        )
+        sample_packs = [feed_rows[i]["pack_json"] for i in range(min(5, len(feed_rows)))]
+        estimate = estimate_cost(EstimateInputs(
+            quarter=quarter,
+            prompt_version=scoring["prompt_version"],
+            model=scoring["model"],
+            cached_prefix_text=cached_prefix,
+            pack_jsons_sample=sample_packs,
+            feed_tiers=feed_tiers,
+            max_output_tokens_full=int(scoring["max_output_tokens"]),
+            max_output_tokens_tier_b=int(scoring["cache"]["tier_b_max_output_tokens"]),
+            max_uses_full=int(scoring["web_search"]["max_uses"]),
+            max_uses_tier_b=int(scoring["web_search"]["max_uses_tier_b"]),
+            pricing=scoring["pricing"],
+        ))
+        cost_html = PROJECT_ROOT / "Outputs" / f"cost_estimate_{quarter}.html"
+        render_cost_html(estimate, gates, cost_html)
+        print(f"Wrote {cost_html}")
+        print(f"Estimated production cost: ${estimate.scenarios[2].total_usd:,.2f}  "
+              f"(worst-case: ${estimate.worst_case_if_all_b_escalate_usd:,.2f})")
+
+        if args.dry_run:
+            return 0
+
+        # ────────────── Step 6 — mandatory approval gate (D48) ──────────────
+        # The gate ALWAYS prompts regardless of TTY state. Only `--yes` bypasses,
+        # and only as an explicit single-shot flag — never config-driven.
+        # When zero calls are scheduled (all-Tier-A), the gate is skipped — there
+        # is nothing to confirm and the run still proceeds to re-render reports.
+        n_dispatch = counts[Tier.C] + counts[Tier.B]
+        if n_dispatch == 0:
+            print("\nAll selected tickers are Tier-A cache hits — no API calls; "
+                  "skipping confirmation gate and proceeding to report re-render.")
+        elif args.yes:
+            print(f"\n--yes specified: dispatching {n_dispatch} API call(s) "
+                  f"for ~${estimate.scenarios[2].total_usd:,.2f} without confirmation.")
+        else:
+            try:
+                prompt = (
+                    f"\nProceed to dispatch {n_dispatch} API call(s) "
+                    f"for ~${estimate.scenarios[2].total_usd:,.2f}? [y/N] "
+                )
+                answer = input(prompt).strip().lower() or "n"
+            except EOFError:
+                print("\n[stdin closed] aborting. Re-run with --yes to bypass the gate.")
+                answer = "n"
+            if answer != "y":
+                print("Aborted.")
+                return 0
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise SystemExit("ANTHROPIC_API_KEY not set in environment / .env")
+
+        # ────────────── Step 7 — prepare per-ticker payloads ──────────────
+        pack_lookup: dict[str, dict] = {}
+        with sqlite3.connect(llm_scores_db) as scores_conn:
+            scores_conn.row_factory = sqlite3.Row
+            per_ticker = _prepare_per_ticker(
+                feed_rows, feed_tiers,
+                scores_conn=scores_conn,
+                scoring=scoring,
+                config_dir=config_dir,
+                only_tier_c=True,  # step C: dispatch any non-Tier-A as full call
+            )
+            for r in feed_rows:
+                pack_lookup[r["ticker"]] = json.loads(r["pack_json"])
+
+        if not per_ticker:
+            print("All tickers Tier-A cache hits — no API calls needed. Refreshing reports only.")
+
+        mode = args.mode or scoring["dispatch"]["mode"]
+        # D51 — sync-concurrency override + sync+large-feed sanity check.
+        sync_concurrency = (
+            int(args.sync_concurrency) if args.sync_concurrency is not None
+            else int(scoring["dispatch"]["sync_concurrency"])
+        )
+        SYNC_FEED_WARN_THRESHOLD = 5
+        if mode == "sync" and len(per_ticker) > SYNC_FEED_WARN_THRESHOLD:
+            print()
+            print("=" * 64)
+            print(f"  WARNING: --mode sync with {len(per_ticker)} tickers may hit")
+            print(f"  Anthropic's per-minute input-token rate limit (~30K tok/min on")
+            print(f"  free tier). Each m6-v3 call burns ~90-130K tokens (input +")
+            print(f"  cache_read + cache_create), so concurrent fan-out will trigger")
+            print(f"  429s. Per-ticker failures will land in llm_errors and the run")
+            print(f"  will continue, but consider:")
+            print(f"    --mode batch          (50% off, no per-min limit, async)")
+            print(f"    --sync-concurrency 1  (serialise sync; SDK still retries 429s)")
+            print(f"  Current sync_concurrency = {sync_concurrency}.")
+            print("=" * 64)
+            print()
+        print(f"\nDispatching {len(per_ticker)} calls in mode={mode}...")
+
+        # ────────────── Step 8 — dispatch ──────────────
+        started = time.time()
+        batch_id: str | None = None
+        run_id: int | None = None                              # set early for batch mode (D51)
+        if per_ticker:
+            if mode == "sync":
+                results = dispatch_sync(
+                    api_key=api_key, model=scoring["model"],
+                    max_output_tokens=int(scoring["max_output_tokens"]),
+                    system_prompt=cached_prefix,
+                    per_ticker=per_ticker,
+                    sync_concurrency=sync_concurrency,
+                )
+            else:
+                # D51 — split submit + poll so the run record (with batch_id)
+                # can be persisted to the DB BEFORE the long poll begins.
+                # Without this, a script crash mid-poll orphans the batch
+                # on Anthropic's side with no way to recover the costs paid.
+                batch_id = submit_batch(
+                    api_key=api_key, model=scoring["model"],
+                    max_output_tokens=int(scoring["max_output_tokens"]),
+                    system_prompt=cached_prefix,
+                    per_ticker=per_ticker,
+                )
+                # Open the run record IMMEDIATELY with the batch_id and commit.
+                audit_gates_early = dict(gates)
+                audit_gates_early["selection_source"] = selection_source
+                audit_gates_early["selection_count"] = (len(explicit_ticker_list)
+                    if explicit_ticker_list else len(feed_rows))
+                if selection_html_path:
+                    audit_gates_early["selection_html_path"] = str(selection_html_path)
+                    audit_gates_early["selection_pool_size"] = len(all_input_tickers or [])
+                _early_conn = sqlite3.connect(llm_scores_db)
+                try:
+                    init_llm_scores_schema(_early_conn)
+                    run_id = open_run(
+                        _early_conn,
+                        quarter=quarter, prompt_version=scoring["prompt_version"],
+                        model=scoring["model"], mode=mode,
+                        feed_size=len(feed_rows),
+                        tier_a_count=counts[Tier.A], tier_b_count=counts[Tier.B], tier_c_count=counts[Tier.C],
+                        gate_config=audit_gates_early, batch_id=batch_id,
+                    )
+                    _early_conn.commit()
+                finally:
+                    _early_conn.close()
+                print(f"\nBatch submitted: batch_id={batch_id}  run_id={run_id}")
+                print(f"  → if this script crashes during poll, recover with:")
+                print(f"    python scripts/6_score.py --resume-run {run_id}")
+                print()
+                results = poll_and_collect_batch(
+                    api_key=api_key, batch_id=batch_id,
+                    poll_interval_s=int(scoring["dispatch"]["poll_interval_s"]),
+                    timeout_s=int(scoring["dispatch"]["timeout_s"]),
+                )
+        else:
+            results = []
+        elapsed = time.time() - started
 
     # ────────────── Step 9 — parse + write ──────────────
     # D48 — record how the feed was assembled (audit-only, schema unchanged).
@@ -879,20 +1019,30 @@ def main() -> int:
         audit_gates["selection_html_path"] = str(selection_html_path)
         audit_gates["selection_pool_size"] = len(all_input_tickers or [])
 
-    with sqlite3.connect(llm_scores_db) as scores_conn:
+    # D51 — per-result commit so a crash mid-loop never nukes already-written
+    # results. Use an explicit connection with autocommit-style flow rather
+    # than a single `with` block (which rolls back the entire batch on any
+    # exception). Each result lands in its own transaction.
+    scores_conn = sqlite3.connect(llm_scores_db)
+    scores_conn.row_factory = sqlite3.Row
+    try:
         init_llm_scores_schema(scores_conn)
-        run_id = open_run(
-            scores_conn,
-            quarter=quarter, prompt_version=scoring["prompt_version"],
-            model=scoring["model"], mode=mode,
-            feed_size=len(feed_rows),
-            tier_a_count=counts[Tier.A], tier_b_count=counts[Tier.B], tier_c_count=counts[Tier.C],
-            gate_config=audit_gates, batch_id=batch_id,
-        )
+        if run_id is None:                                 # first-time path (not resume)
+            run_id = open_run(
+                scores_conn,
+                quarter=quarter, prompt_version=scoring["prompt_version"],
+                model=scoring["model"], mode=mode,
+                feed_size=len(feed_rows),
+                tier_a_count=counts[Tier.A], tier_b_count=counts[Tier.B], tier_c_count=counts[Tier.C],
+                gate_config=audit_gates, batch_id=batch_id,
+            )
+            scores_conn.commit()                           # persist run record immediately
 
         # Index per-ticker entries for hash + tier lookup.
         prep_index = {p["ticker"]: p for p in per_ticker}
         success_count = 0
+        rate_limited_tickers: list[str] = []           # D51 — for end-of-run retry summary
+        write_failed_tickers: list[str] = []
         token_totals = dict(
             input=0, output=0, cache_read=0, cache_create=0, search_calls=0, usd=0.0,
         )
@@ -915,67 +1065,89 @@ def main() -> int:
             )
             token_totals["usd"] += res_usd
 
-            if not res.success:
-                detail = res.error_detail
-                if res.stop_reason:
-                    detail = f"[stop_reason={res.stop_reason}] {detail}"
-                write_error_row(
-                    scores_conn, run_id=run_id, ticker=res.ticker, quarter=quarter,
-                    horizon=None, error_kind=res.error_kind,
-                    error_detail=detail, raw_text=res.raw_text,
-                )
-                continue
             try:
-                parsed = parse_full_score(res.raw_text)
-            except ParseError as e:
-                detail = e.detail
-                if res.stop_reason:
-                    detail = f"[stop_reason={res.stop_reason}] {detail}"
-                write_error_row(
-                    scores_conn, run_id=run_id, ticker=res.ticker, quarter=quarter,
-                    horizon=None, error_kind=e.kind, error_detail=detail,
-                    raw_text=res.raw_text,
-                )
-                continue
-            # D46 — primary score is anchored on current market price from the M5 pack.
-            current_price_usd = float(
-                (pack_lookup.get(res.ticker, {}).get("market_snapshot") or {})
-                .get("last_close_usd") or 0.0
-            )
-            score = compute_ticker_score(
-                ticker=parsed.ticker,
-                current_price_usd=current_price_usd,
-                entry_price_ranges=parsed.entry_price_ranges,
-                near_term_3mo=parsed.near_term_3mo,
-                long_term_12mo=parsed.long_term_12mo,
-                tie_tolerance=float(scoring["rate"]["tie_tolerance"]),
-            )
-            write_full_score_rows(
-                scores_conn,
-                parsed=parsed, score=score, quarter=quarter,
-                prompt_version=scoring["prompt_version"], model=scoring["model"],
-                run_id=run_id,
-                raw_text=res.raw_text, response_id=res.response_id,
-                input_tokens=res.input_tokens, output_tokens=res.output_tokens,
-                cache_read_tokens=res.cache_read_tokens,
-                cache_creation_tokens=res.cache_creation_tokens,
-                web_search_calls=res.web_search_calls, usd_cost=res_usd,
-                pack_source_rank_hash=prep["pack_source_rank_hash"] if prep else "",
-                source_tier="C",
-            )
-            for r in (res.server_tool_results or []):
-                url = r.get("url") or ""
-                if not url:
+                if not res.success:
+                    detail = res.error_detail or ""
+                    if res.stop_reason:
+                        detail = f"[stop_reason={res.stop_reason}] {detail}"
+                    if "RateLimitError" in detail or "rate_limit" in detail.lower():
+                        rate_limited_tickers.append(res.ticker)
+                    write_error_row(
+                        scores_conn, run_id=run_id, ticker=res.ticker, quarter=quarter,
+                        horizon=None, error_kind=res.error_kind,
+                        error_detail=detail, raw_text=res.raw_text,
+                    )
+                    scores_conn.commit()
                     continue
-                upsert_web_search_cache_row(
-                    scores_conn, url=url, ticker=res.ticker, quarter=quarter,
-                    run_id=run_id, search_query=r.get("query") or "",
-                    title=r.get("title") or "",
-                    content=r.get("text") or "",
-                    domain=_domain_of(url),
-                    published_date=r.get("page_age"),
+                try:
+                    parsed = parse_full_score(res.raw_text)
+                except ParseError as e:
+                    detail = e.detail
+                    if res.stop_reason:
+                        detail = f"[stop_reason={res.stop_reason}] {detail}"
+                    write_error_row(
+                        scores_conn, run_id=run_id, ticker=res.ticker, quarter=quarter,
+                        horizon=None, error_kind=e.kind, error_detail=detail,
+                        raw_text=res.raw_text,
+                    )
+                    scores_conn.commit()
+                    continue
+                # D46 — primary score is anchored on current market price from the M5 pack.
+                current_price_usd = float(
+                    (pack_lookup.get(res.ticker, {}).get("market_snapshot") or {})
+                    .get("last_close_usd") or 0.0
                 )
-            success_count += 1
+                score = compute_ticker_score(
+                    ticker=parsed.ticker,
+                    current_price_usd=current_price_usd,
+                    entry_price_ranges=parsed.entry_price_ranges,
+                    near_term_3mo=parsed.near_term_3mo,
+                    long_term_12mo=parsed.long_term_12mo,
+                    tie_tolerance=float(scoring["rate"]["tie_tolerance"]),
+                )
+                write_full_score_rows(
+                    scores_conn,
+                    parsed=parsed, score=score, quarter=quarter,
+                    prompt_version=scoring["prompt_version"], model=scoring["model"],
+                    run_id=run_id,
+                    raw_text=res.raw_text, response_id=res.response_id,
+                    input_tokens=res.input_tokens, output_tokens=res.output_tokens,
+                    cache_read_tokens=res.cache_read_tokens,
+                    cache_creation_tokens=res.cache_creation_tokens,
+                    web_search_calls=res.web_search_calls, usd_cost=res_usd,
+                    pack_source_rank_hash=prep["pack_source_rank_hash"] if prep else "",
+                    source_tier="C",
+                )
+                for r in (res.server_tool_results or []):
+                    url = r.get("url") or ""
+                    if not url:
+                        continue
+                    upsert_web_search_cache_row(
+                        scores_conn, url=url, ticker=res.ticker, quarter=quarter,
+                        run_id=run_id, search_query=r.get("query") or "",
+                        title=r.get("title") or "",
+                        content=r.get("text") or "",
+                        domain=_domain_of(url),
+                        published_date=r.get("page_age"),
+                    )
+                scores_conn.commit()                       # D51 — persist this result before moving on
+                success_count += 1
+            except Exception as e:                         # never lose subsequent results to one bad write
+                _LOG.exception("Failed to write result for %s; continuing", res.ticker)
+                try: scores_conn.rollback()
+                except sqlite3.Error: pass
+                write_failed_tickers.append(res.ticker)
+                # Best-effort error-row write (separate try so a write failure here
+                # doesn't bubble out and stop the loop).
+                try:
+                    write_error_row(
+                        scores_conn, run_id=run_id, ticker=res.ticker, quarter=quarter,
+                        horizon=None, error_kind="db_write_error",
+                        error_detail=str(e)[:500], raw_text=res.raw_text or "",
+                    )
+                    scores_conn.commit()
+                except Exception:
+                    pass
 
         # ────────────── Step 10 — final rankings + reports ──────────────
         # Per-run rows persist to final_rankings (audit trail).
@@ -1057,6 +1229,8 @@ def main() -> int:
         score_rows_for_viewer = _latest_score_rows(
             scores_conn, quarter, all_quarter_tickers,
         )
+    finally:
+        scores_conn.close()
 
     outputs_dir = PROJECT_ROOT / "Outputs"
     rank_html = outputs_dir / f"final_ranking_{quarter}.html"
@@ -1124,6 +1298,22 @@ def main() -> int:
     print(f"  Reports:              {rank_html}")
     print(f"                        {rank_xlsx}")
     print("-" * 70)
+    # D51 — surface failure modes that need a follow-up retry.
+    if rate_limited_tickers:
+        print()
+        print(f"  RATE-LIMITED ({len(rate_limited_tickers)} ticker(s) hit 429 / per-min cap):")
+        print(f"    {','.join(rate_limited_tickers)}")
+        print(f"  Retry just these (one-at-a-time, sync mode):")
+        print(f"    python scripts/6_score.py --tickers {','.join(rate_limited_tickers)} "
+              f"--mode sync --sync-concurrency 1 --yes -v")
+        print(f"  Or wait until your tier upgrade kicks in and use --mode batch.")
+    if write_failed_tickers:
+        print()
+        print(f"  DB-WRITE FAILED ({len(write_failed_tickers)} ticker(s); responses still in llm_errors):")
+        print(f"    {','.join(write_failed_tickers)}")
+        print(f"  These were billed but couldn't be written. Investigate llm_errors then retry:")
+        print(f"    python scripts/6_score.py --tickers {','.join(write_failed_tickers)} "
+              f"--mode sync --yes -v")
     return 0
 
 
