@@ -59,6 +59,33 @@ def _fmt_num(x, decimals: int = 2) -> str:
 _WEEKS_PER_MONTH = 4.33
 
 
+def _fully_diluted_market_cap(r: dict) -> float | None:
+    """Compute the fully-diluted market cap = current_price × fully_diluted_shares.
+
+    The basic ``market_cap_usd`` carried through M4a → M5 comes from
+    yfinance's ``FastInfo.market_cap`` which is ``shares_out × last_close``
+    — i.e. *basic* shares only. For biotechs with material pre-funded
+    warrants (PFWs) this can understate the true cap by 2× or more
+    (e.g. TCRX: $72M basic vs $161M fully diluted).
+
+    The LLM-emitted ``fully_diluted_shares_count`` already includes PFWs
+    per D40 HARD RULE #4, and is the same denominator used for
+    ``rnpv_per_share_usd``. Using it here keeps the displayed cap
+    consistent with the per-share math the report is built on.
+
+    Falls back to the basic ``market_cap_usd`` for legacy rows that
+    don't yet carry ``fully_diluted_shares_count``.
+    """
+    cp = r.get("current_price_at_scoring_usd")
+    fd = r.get("fully_diluted_shares_count")
+    try:
+        if cp is not None and fd is not None and float(cp) > 0 and float(fd) > 0:
+            return float(cp) * float(fd)
+    except (TypeError, ValueError):
+        pass
+    return r.get("market_cap_usd")
+
+
 def _months_to_catalyst(r: dict) -> float | None:
     """Return the months value used by the score formula at the row's
     final_horizon: ``max(1.0, time_to_catalyst_weeks / 4.33)``.
@@ -310,7 +337,9 @@ def render_final_ranking_html(
             f"<td>{_fmt_usd(r.get('rnpv_per_share_usd'))}</td>"
             f"<td>{_fmt_num(r.get('moat_score'))}</td>"
             f"<td>{_fmt_num(r.get('fda_pos_adjusted_lead'))}</td>"
-            f"<td>{_fmt_usd(r.get('market_cap_usd'))}</td>"
+            f"<td title='Fully-diluted: current_price × fully_diluted_shares_count "
+            f"(includes PFWs per D40 HARD RULE #4). Differs from yfinance basic mkt cap.'>"
+            f"{_fmt_usd(_fully_diluted_market_cap(r))}</td>"
             f"</tr>"
         )
 
@@ -341,7 +370,7 @@ def render_final_ranking_html(
         "Score 3mo @current", "Score 12mo @current",          # D46 — primary
         "Target 3mo $", "Target 12mo $",
         "Prob 3mo", "Prob 12mo",
-        "rNPV/share $", "Moat", "FDA POS lead", "Market cap",
+        "rNPV/share $", "Moat", "FDA POS lead", "Mkt cap (FD)",   # D40 — fully diluted (incl PFWs)
     )
     th_parts = []
     for i, h in enumerate(headers):
@@ -1059,7 +1088,7 @@ def render_final_ranking_xlsx(
         "target_price_3mo_usd", "target_price_12mo_usd",  # L, M
         "probability_3mo", "probability_12mo",            # N, O
         "rnpv_per_share_usd", "moat_score",               # P, Q
-        "fda_pos_adjusted_lead", "market_cap_usd", "fund_count",  # R, S, T
+        "fda_pos_adjusted_lead", "fully_diluted_market_cap_usd", "fund_count",  # R, S, T (D40 — FD includes PFWs)
     )
     ws.append(headers)
     for cell in ws[1]:
@@ -1078,7 +1107,7 @@ def render_final_ranking_xlsx(
             r.get("target_price_3mo_usd"), r.get("target_price_12mo_usd"),
             r.get("probability_3mo"), r.get("probability_12mo"),
             r.get("rnpv_per_share_usd"), r.get("moat_score"),
-            r.get("fda_pos_adjusted_lead"), r.get("market_cap_usd"),
+            r.get("fda_pos_adjusted_lead"), _fully_diluted_market_cap(r),
             r.get("fund_count"),
         ])
     ws.freeze_panes = "C2"
