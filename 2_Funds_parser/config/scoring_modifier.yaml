@@ -48,6 +48,7 @@ components:
   crowding:
     enabled: true
     label: "Competitive crowding"
+    category: penalty
     bands:                # ph3plus_count → factor (max_count is INCLUSIVE upper bound)
       - {max_count: 0,   factor: 1.00}
       - {max_count: 2,   factor: 0.95}
@@ -59,6 +60,7 @@ components:
   financing:
     enabled: true
     label: "Financing risk (runway)"
+    category: penalty
     bands:                # min_months threshold (INCLUSIVE) → factor; first match wins, top to bottom
       - {min_months: 18, factor: 1.00}
       - {min_months: 12, factor: 0.95}
@@ -72,6 +74,7 @@ components:
   dilution:
     enabled: true
     label: "Recent dilution"
+    category: penalty
     bands:                # raises_in_window → factor
       - {max_count: 0,   factor: 1.00}
       - {max_count: 1,   factor: 0.97}
@@ -85,6 +88,7 @@ components:
   insider:
     enabled: true
     label: "Insider conviction"
+    category: tailwind
     qualifying_roles: ["CEO", "CFO", "Director", "10% owner"]
     qualifying_types: ["buy"]
     detected_factor:  1.10
@@ -95,6 +99,7 @@ components:
   mgmt:
     enabled: true
     label: "Mgmt track record"
+    category: penalty           # symmetric but the 0.3 → 0.90 penalty is the more common signal
     bands:                # exact-match score → factor
       - {score_eq: 0.9, factor: 1.05}
       - {score_eq: 0.6, factor: 1.00}
@@ -106,6 +111,7 @@ components:
   acquisition:
     enabled: true
     label: "Acquisition optionality"
+    category: tailwind
     bands:
       - {score_eq: 0.9, factor: 1.10}
       - {score_eq: 0.6, factor: 1.05}
@@ -117,6 +123,7 @@ components:
   moat:
     enabled: true
     label: "Moat durability"
+    category: tailwind          # symmetric but the 0.9 → 1.05 boost is the more common signal
     bands:
       - {score_eq: 0.9, factor: 1.05}
       - {score_eq: 0.6, factor: 1.00}
@@ -131,6 +138,7 @@ components:
   failures:
     enabled: true
     label: "Recent operational failure"
+    category: penalty
     qualifying_events: ["clinical_hold", "endpoint_miss", "CRL", "going_concern"]
     detected_factor:  0.90
     none_factor:      1.00
@@ -148,9 +156,97 @@ components:
   concentration:
     enabled: true
     label: "rNPV concentration"
+    category: penalty
     exclude_indication_substrings: ["platform", "optionality", "residual"]
     bands:                # lead_pct (0..1) → factor; first match wins
       - {max_pct: 0.50, factor: 1.00}
       - {max_pct: 0.75, factor: 0.95}
       - {max_pct: 1.00, factor: 0.85}
+    missing_factor: 1.00
+
+  # ── 5 new components added 2026-04-25 (D52) ──────────────────────────
+
+  # 10 — Big-pharma validation.
+  # Source: research_brief.partnerships[].partner matched against the
+  # curated big-pharma allowlist below. A non-trivial deal with a tier-1
+  # pharma signals sophisticated counterparty validation of the science.
+  # Asymmetric: presence boosts; absence neutral (penalty case is already
+  # captured implicitly via lower acquisition_target.score).
+  big_pharma_validation:
+    enabled: true
+    label: "Big-pharma validation"
+    category: tailwind
+    big_pharma_substrings:
+      ["novartis", "roche", "genentech", "j&j", "janssen",
+       "pfizer", "merck", "astrazeneca", "bristol", "bms",
+       "eli lilly", "lilly", "gsk", "glaxosmithkline",
+       "abbvie", "sanofi", "takeda", "bayer", "amgen",
+       "regeneron", "boehringer", "vertex", "biogen", "gilead"]
+    bands:                # matched_count → factor
+      - {max_count: 0,   factor: 1.00}
+      - {max_count: 1,   factor: 1.05}
+      - {max_count: 999, factor: 1.10}
+
+  # 11 — Catalyst density (next 12 months).
+  # Source: research_brief.clinical_trials.{interim_readouts_expected,
+  # final_readouts_expected}. Count entries whose expected_date_iso is
+  # within the rolling forward window. Multiple shots-on-goal increase
+  # EV at fixed time_to_catalyst by diversifying binary catalyst risk.
+  # Symmetric: 0 readouts pending = mild penalty.
+  catalyst_density:
+    enabled: true
+    label: "Catalyst density (12mo)"
+    category: tailwind
+    horizon_days: 365
+    bands:                # in_window_count → factor
+      - {max_count: 0,   factor: 0.95}
+      - {max_count: 1,   factor: 1.00}
+      - {max_count: 2,   factor: 1.05}
+      - {max_count: 999, factor: 1.10}
+
+  # 12 — Tech uniqueness.
+  # Source: research_brief.technology.uniqueness_score (3-band: 0.3 / 0.6 / 0.9).
+  # Already collected by the LLM under D40; this just composes it into
+  # the modifier. Higher uniqueness = harder for competitors to replicate.
+  tech_uniqueness:
+    enabled: true
+    label: "Tech uniqueness"
+    category: tailwind
+    bands:                # exact-match score → factor
+      - {score_eq: 0.9, factor: 1.05}
+      - {score_eq: 0.6, factor: 1.00}
+      - {score_eq: 0.3, factor: 0.95}
+    missing_factor: 1.00
+
+  # 13 — Dilution overhang.
+  # Source: research_brief.financials.shelf_registration_usd_capacity
+  # divided by fully_diluted_market_cap_usd (price × FD shares).
+  # Big shelf relative to mcap = the next raise can dilute meaningfully.
+  # Independent of the `dilution` component (which counts CLOSED raises
+  # in the trailing 180d). This is the FORWARD risk.
+  dilution_overhang:
+    enabled: true
+    label: "Dilution overhang"
+    category: penalty
+    bands:                # shelf / fd_mcap → factor (max_pct INCLUSIVE upper bound)
+      - {max_pct: 0.25, factor: 1.00}
+      - {max_pct: 0.50, factor: 0.97}
+      - {max_pct: 1.00, factor: 0.93}
+      - {max_pct: 99.0, factor: 0.88}
+    missing_factor: 1.00
+
+  # 14 — Cash floor / asymmetric setup.
+  # Source: research_brief.financials.cash_and_equivalents_usd divided
+  # by fully_diluted_market_cap_usd. When cash > mcap, downside is bounded
+  # by cash (less near-term burn). BCYC at 2.6× cash discount is the
+  # canonical signal. Asymmetric: presence boosts; absence neutral.
+  cash_floor:
+    enabled: true
+    label: "Cash floor / asymm setup"
+    category: tailwind
+    bands:                # cash / fd_mcap → factor (max_pct INCLUSIVE upper bound)
+      - {max_pct: 0.50, factor: 1.00}
+      - {max_pct: 1.00, factor: 1.03}
+      - {max_pct: 1.50, factor: 1.08}
+      - {max_pct: 99.0, factor: 1.15}
     missing_factor: 1.00

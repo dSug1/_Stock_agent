@@ -57,6 +57,9 @@ def load_modifier_config(path: Path | str | None = None) -> dict:
 _ISO_FULL_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 _ISO_MONTH_RE = re.compile(r"^(\d{4})-(\d{2})$")
 _ISO_YEAR_RE = re.compile(r"^(\d{4})$")
+# D52 — half / quarter notation used by the LLM for forward catalysts:
+# "2026-H1", "2027-H2", "2027-Q1", "2026-Q2 (estimated)" …
+_ISO_HALF_QTR_RE = re.compile(r"^(\d{4})-([HQ])(\d)", re.IGNORECASE)
 
 
 def parse_iso_date(s: str | None) -> datetime | None:
@@ -90,6 +93,41 @@ def parse_iso_date(s: str | None) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def parse_loose_date(s: str | None) -> datetime | None:
+    """Like ``parse_iso_date`` but also accepts ``YYYY-H1`` / ``YYYY-Q3``
+    style fuzzy quarter-/half-year dates the LLM emits for forward-looking
+    catalyst readouts. Trailing parentheticals (``(estimated)``) are
+    stripped. Returns the *middle* of the named period.
+
+    - ``YYYY-H1`` → Mar 15, YYYY  (mid-H1)
+    - ``YYYY-H2`` → Sep 15, YYYY  (mid-H2)
+    - ``YYYY-Q1`` → Feb 15, YYYY  (mid-Q1)
+    - ``YYYY-Q2`` → May 15, YYYY  (mid-Q2)
+    - ``YYYY-Q3`` → Aug 15, YYYY  (mid-Q3)
+    - ``YYYY-Q4`` → Nov 15, YYYY  (mid-Q4)
+    """
+    if not isinstance(s, str) or not s:
+        return None
+    s = s.split("(")[0].strip()                          # drop "(estimated)" trailers
+    d = parse_iso_date(s)
+    if d is not None:
+        return d
+    m = _ISO_HALF_QTR_RE.match(s)
+    if not m:
+        return None
+    year, kind, n = int(m.group(1)), m.group(2).upper(), int(m.group(3))
+    if kind == "H":
+        month = {1: 3, 2: 9}.get(n)
+    else:                                                 # 'Q'
+        month = {1: 2, 2: 5, 3: 8, 4: 11}.get(n)
+    if month is None:
+        return None
+    try:
+        return datetime(year, month, 15, tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _within_lookback(d: datetime | None, now: datetime, days: int) -> bool:
@@ -164,7 +202,7 @@ _PH3_PLUS_NEEDLES = (
 )
 
 
-def _component_crowding(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_crowding(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("crowding", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -188,7 +226,7 @@ def _component_crowding(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict
     }
 
 
-def _component_financing(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_financing(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("financing", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -201,7 +239,7 @@ def _component_financing(rb: dict, cfg: dict, now: datetime) -> tuple[float, dic
     return factor, {"factor": factor, "runway_months": float(runway)}
 
 
-def _component_dilution(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_dilution(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("dilution", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -225,7 +263,7 @@ def _component_dilution(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict
     }
 
 
-def _component_insider(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_insider(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("insider", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -260,7 +298,7 @@ def _component_insider(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]
     }
 
 
-def _component_mgmt(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_mgmt(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("mgmt", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -272,7 +310,7 @@ def _component_mgmt(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
     return factor, {"factor": factor, "score": float(score)}
 
 
-def _component_acquisition(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_acquisition(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("acquisition", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -284,7 +322,7 @@ def _component_acquisition(rb: dict, cfg: dict, now: datetime) -> tuple[float, d
     return factor, {"factor": factor, "score": float(score)}
 
 
-def _component_moat(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_moat(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("moat", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -296,7 +334,7 @@ def _component_moat(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
     return factor, {"factor": factor, "score": float(score)}
 
 
-def _component_failures(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_failures(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("failures", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -326,7 +364,7 @@ def _component_failures(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict
     }
 
 
-def _component_concentration(rb: dict, cfg: dict, now: datetime) -> tuple[float, dict]:
+def _component_concentration(rb: dict, cfg: dict, now: datetime, ctx: dict) -> tuple[float, dict]:
     ccfg = cfg.get("components", {}).get("concentration", {})
     if not ccfg.get("enabled", True):
         return _disabled_result()
@@ -376,18 +414,147 @@ def _component_concentration(rb: dict, cfg: dict, now: datetime) -> tuple[float,
     }
 
 
-# Component registry — order doesn't matter for the product but is fixed
-# for stable JSON / report rendering / slider order in the UI.
-_COMPONENTS: dict[str, Callable[[dict, dict, datetime], tuple[float, dict]]] = {
-    "crowding":      _component_crowding,
-    "financing":     _component_financing,
-    "dilution":      _component_dilution,
-    "insider":       _component_insider,
-    "mgmt":          _component_mgmt,
-    "acquisition":   _component_acquisition,
-    "moat":          _component_moat,
-    "failures":      _component_failures,
-    "concentration": _component_concentration,
+# ── 5 new components (D52) ───────────────────────────────────────────────
+
+
+def _component_big_pharma_validation(
+    rb: dict, cfg: dict, now: datetime, ctx: dict,
+) -> tuple[float, dict]:
+    ccfg = cfg.get("components", {}).get("big_pharma_validation", {})
+    if not ccfg.get("enabled", True):
+        return _disabled_result()
+    needles = [n.lower() for n in ccfg.get("big_pharma_substrings", [])]
+    matched: list[dict] = []
+    seen_partners: set[str] = set()
+    for p in (rb.get("partnerships") or []):
+        if not isinstance(p, dict):
+            continue
+        partner = (p.get("partner") or "").lower()
+        if not partner:
+            continue
+        if any(needle in partner for needle in needles):
+            # Dedupe by partner name (e.g., GLUE has 2 separate Novartis deals;
+            # both still count as "1 big-pharma partner").
+            key = next((n for n in needles if n in partner), partner)
+            if key in seen_partners:
+                continue
+            seen_partners.add(key)
+            matched.append(p)
+    factor = _band_lookup_count(len(matched), ccfg["bands"])
+    return factor, {
+        "factor": factor,
+        "matched_count": len(matched),
+        "matched_partners": [p.get("partner") for p in matched][:5],
+    }
+
+
+def _component_catalyst_density(
+    rb: dict, cfg: dict, now: datetime, ctx: dict,
+) -> tuple[float, dict]:
+    ccfg = cfg.get("components", {}).get("catalyst_density", {})
+    if not ccfg.get("enabled", True):
+        return _disabled_result()
+    horizon_days = int(ccfg.get("horizon_days", 365))
+    cutoff = now + timedelta(days=horizon_days)
+    ct = rb.get("clinical_trials") or {}
+    candidates: list[dict] = []
+    for key in ("interim_readouts_expected", "final_readouts_expected"):
+        for r in (ct.get(key) or []):
+            if isinstance(r, dict):
+                candidates.append({**r, "_kind": key.split("_")[0]})
+    in_window: list[dict] = []
+    for r in candidates:
+        d = parse_loose_date(r.get("expected_date_iso"))
+        if d is None:
+            continue                                     # undated entries don't count
+        if now <= d <= cutoff:
+            in_window.append(r)
+    factor = _band_lookup_count(len(in_window), ccfg["bands"])
+    return factor, {
+        "factor": factor,
+        "in_window_count": len(in_window),
+        "horizon_days": horizon_days,
+        "readouts": [{"program": (r.get("program") or "")[:40],
+                      "kind":    r.get("_kind"),
+                      "expected_date_iso": r.get("expected_date_iso")}
+                     for r in in_window][:6],
+    }
+
+
+def _component_tech_uniqueness(
+    rb: dict, cfg: dict, now: datetime, ctx: dict,
+) -> tuple[float, dict]:
+    ccfg = cfg.get("components", {}).get("tech_uniqueness", {})
+    if not ccfg.get("enabled", True):
+        return _disabled_result()
+    score = (rb.get("technology") or {}).get("uniqueness_score")
+    if score is None:
+        f = float(ccfg.get("missing_factor", 1.00))
+        return f, {"factor": f, "score": None, "fallback": True}
+    factor = _band_lookup_score_eq(float(score), ccfg["bands"])
+    return factor, {"factor": factor, "score": float(score)}
+
+
+def _component_dilution_overhang(
+    rb: dict, cfg: dict, now: datetime, ctx: dict,
+) -> tuple[float, dict]:
+    ccfg = cfg.get("components", {}).get("dilution_overhang", {})
+    if not ccfg.get("enabled", True):
+        return _disabled_result()
+    fin = rb.get("financials") or {}
+    shelf = fin.get("shelf_registration_usd_capacity")
+    fd_mcap = ctx.get("fully_diluted_market_cap_usd")
+    if (shelf is None or fd_mcap is None
+            or float(fd_mcap) <= 0):
+        f = float(ccfg.get("missing_factor", 1.00))
+        return f, {"factor": f, "shelf_usd": shelf,
+                   "fd_mcap_usd": fd_mcap, "fallback": True}
+    ratio = float(shelf) / float(fd_mcap)
+    factor = _band_lookup_max_pct(ratio, ccfg["bands"])
+    return factor, {"factor": factor, "shelf_usd": float(shelf),
+                    "fd_mcap_usd": float(fd_mcap),
+                    "shelf_to_fd_mcap_ratio": ratio}
+
+
+def _component_cash_floor(
+    rb: dict, cfg: dict, now: datetime, ctx: dict,
+) -> tuple[float, dict]:
+    ccfg = cfg.get("components", {}).get("cash_floor", {})
+    if not ccfg.get("enabled", True):
+        return _disabled_result()
+    fin = rb.get("financials") or {}
+    cash = fin.get("cash_and_equivalents_usd")
+    fd_mcap = ctx.get("fully_diluted_market_cap_usd")
+    if (cash is None or fd_mcap is None
+            or float(fd_mcap) <= 0):
+        f = float(ccfg.get("missing_factor", 1.00))
+        return f, {"factor": f, "cash_usd": cash,
+                   "fd_mcap_usd": fd_mcap, "fallback": True}
+    ratio = float(cash) / float(fd_mcap)
+    factor = _band_lookup_max_pct(ratio, ccfg["bands"])
+    return factor, {"factor": factor, "cash_usd": float(cash),
+                    "fd_mcap_usd": float(fd_mcap),
+                    "cash_to_fd_mcap_ratio": ratio}
+
+
+# Component registry — order is the slider drawer order. New components (D52)
+# appended at the end. Slider grouping (penalty / tailwind) is driven by the
+# `category` field in the YAML, applied at renderer level.
+_COMPONENTS: dict[str, Callable[[dict, dict, datetime, dict], tuple[float, dict]]] = {
+    "crowding":               _component_crowding,
+    "financing":              _component_financing,
+    "dilution":               _component_dilution,
+    "insider":                _component_insider,
+    "mgmt":                   _component_mgmt,
+    "acquisition":            _component_acquisition,
+    "moat":                   _component_moat,
+    "failures":               _component_failures,
+    "concentration":          _component_concentration,
+    "big_pharma_validation":  _component_big_pharma_validation,   # D52
+    "catalyst_density":       _component_catalyst_density,        # D52
+    "tech_uniqueness":        _component_tech_uniqueness,         # D52
+    "dilution_overhang":      _component_dilution_overhang,       # D52
+    "cash_floor":             _component_cash_floor,              # D52
 }
 
 COMPONENT_NAMES: tuple[str, ...] = tuple(_COMPONENTS.keys())
@@ -445,8 +612,9 @@ def compute_modifier(
     *,
     now: datetime | None = None,
     weights: dict[str, float] | None = None,
+    current_price_usd: float | None = None,
 ) -> dict:
-    """Run all 9 components, multiply, clip, return the audit payload.
+    """Run all components, multiply, clip, return the audit payload.
 
     Returns::
 
@@ -465,6 +633,11 @@ def compute_modifier(
     and persists those to ``llm_scores`` / ``final_rankings``. The HTML
     re-applies user weights live in JS without touching the DB.
 
+    ``current_price_usd`` is optional but required by the D52 ratio
+    components (`dilution_overhang`, `cash_floor`) which need
+    ``fully_diluted_market_cap_usd = current_price_usd × fully_diluted_shares_count``.
+    Components that don't have it fall back to their `missing_factor`.
+
     Empty / missing research_brief → returns a 1.0 neutral modifier with all
     components in their `missing` / `none` state. Caller decides whether to
     skip writing the row.
@@ -473,11 +646,26 @@ def compute_modifier(
     rb = research_brief or {}
     bounds = cfg.get("bounds", {}) or {}
 
+    # D52 — context dict passed to every component. The pre-computed
+    # fully_diluted_market_cap_usd lets the ratio components avoid
+    # re-deriving it (and stays consistent with the renderer's mkt-cap cell).
+    ctx: dict = {"current_price_usd": current_price_usd}
+    fin = rb.get("financials") or {}
+    fd_shares = fin.get("fully_diluted_shares_count")
+    try:
+        if (current_price_usd is not None and fd_shares is not None
+                and float(current_price_usd) > 0 and float(fd_shares) > 0):
+            ctx["fully_diluted_market_cap_usd"] = (
+                float(current_price_usd) * float(fd_shares)
+            )
+    except (TypeError, ValueError):
+        pass
+
     components: dict[str, dict] = {}
     factors_by_component: dict[str, float] = {}
     for name, fn in _COMPONENTS.items():
         try:
-            factor, evidence = fn(rb, cfg, now)
+            factor, evidence = fn(rb, cfg, now, ctx)
         except Exception as e:                           # one bad component shouldn't kill all
             factor, evidence = 1.0, {"factor": 1.0, "error": str(e)}
         evidence = dict(evidence)

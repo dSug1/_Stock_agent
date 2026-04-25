@@ -1077,6 +1077,60 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D52 — 5 additional Module 6b modifier components (big-pharma validation, catalyst density, tech uniqueness, dilution overhang, cash floor) + slider drawer category grouping
+
+**Status: ✅ Implemented 2026-04-25.** Triggered by review of the 5 newly-scored tickers (BCYC, GLUE, GRAL, LEGN, ABEO) in the run-7/8/9 m6-v3 dispatch — research_briefs carried rich structured signals (`partnerships`, `clinical_trials`, `technology.uniqueness_score`, `financials.shelf_registration_usd_capacity`, `financials.cash_and_equivalents_usd`) that were emitted by the LLM but invisible to the existing 9-component modifier. BCYC trading at 2.6× cash discount + GLUE's $5.7B Novartis option deal + LEGN's J&J partnership were the canonical missed signals.
+
+**The 5 new components (extends D47's 9 → 14 components, all with `category: penalty | tailwind` for slider grouping):**
+
+| # | Name | Source field(s) | Default factor map | Category |
+|---:|---|---|---|---|
+| 10 | `big_pharma_validation` | `partnerships[].partner` matched against curated allowlist (Novartis, Roche, J&J, Pfizer, Merck, AZ, BMS, Lilly, GSK, AbbVie, Sanofi, Takeda, Bayer, Amgen, Regeneron, etc.) | 0 → 1.00 · 1 → 1.05 · 2+ → 1.10 (asymmetric) | tailwind |
+| 11 | `catalyst_density` | `clinical_trials.{interim,final}_readouts_expected[]` filtered to `expected_date_iso ≤ now+12mo` | 0 → 0.95 · 1 → 1.00 · 2 → 1.05 · 3+ → 1.10 | tailwind |
+| 12 | `tech_uniqueness` | `technology.uniqueness_score` (0.3 / 0.6 / 0.9, already in DB) | 0.9 → 1.05 · 0.6 → 1.00 · 0.3 → 0.95 | tailwind |
+| 13 | `dilution_overhang` | `financials.shelf_registration_usd_capacity / fully_diluted_market_cap_usd` | <25% → 1.00 · 25–50% → 0.97 · 50–100% → 0.93 · >100% → 0.88 (downside-only) | penalty |
+| 14 | `cash_floor` | `financials.cash_and_equivalents_usd / fully_diluted_market_cap_usd` | <50% → 1.00 · 50–100% → 1.03 · 100–150% → 1.08 · >150% → 1.15 (asymmetric) | tailwind |
+
+**Three structural changes that came with this:**
+
+1. **Component fn signature bumped** from `(rb, cfg, now)` to `(rb, cfg, now, ctx)`. The `ctx` dict carries `current_price_usd` + the pre-computed `fully_diluted_market_cap_usd` (= price × `fully_diluted_shares_count`). Required by the two ratio components (`dilution_overhang`, `cash_floor`). Existing 9 components ignore `ctx` — pure additive change. Threaded through `compute_modifier`, `compute_for_row`, `apply_modifiers_to_run`, `collect_ticker_factors`. JS-side recompute is unaffected (it only re-weights model factors that Python already produced).
+
+2. **Loose date parser** (`parse_loose_date`) added to handle the LLM's forward-looking `expected_date_iso` formats: `YYYY-H1`, `YYYY-H2`, `YYYY-Q1`–`Q4`, with optional `(estimated)` trailers. Returns the *middle* of the named period (H1 → Mar 15, H2 → Sep 15, Q1 → Feb 15, etc.). `parse_iso_date` is unchanged for strict ISO dates.
+
+3. **Slider drawer category grouping (HTML).** Each component's YAML now has a `category: penalty | tailwind` field. The renderer reads it and emits two `<h4>` sections in the slider drawer: "Penalties (7)" and "Tailwinds (7)". Within each section, order matches `COMPONENT_NAMES`. Mgmt is classified `penalty` (the 0.3 → 0.90 hit is the more memorable signal); Moat is classified `tailwind` (0.9 → 1.05 boost is the more common signal).
+
+**Validation against the 5 new tickers (run 4 + 7/8/9, weights all 1.0):**
+
+| Ticker | crowding | mgmt | acq | moat | failures | conc | bigpharm | density | tech | dil_over | cash_fl | **modifier** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ABEO | 0.95 | 0.90 | 1.05 | — | — | 0.85 | — | — | 1.05 | 0.93 | 1.03 | **0.768** |
+| BCYC | 0.95 | 0.90 | 1.05 | — | — | 0.85 | **1.10** | — | 1.05 | 0.88 | **1.15** | **0.892** |
+| GLUE | 0.95 | 1.05 | 1.05 | 1.05 | 0.90 | 0.95 | **1.10** | 1.05 | 1.05 | — | — | **1.106** |
+| GRAL | 0.95 | 0.90 | 1.05 | — | 0.90 | 0.85 | — | **1.10** | — | — | — | **0.755** |
+| LEGN | 0.90 | 1.05 | 1.10 | 1.05 | — | 0.85 | **1.10** | 1.05 | 1.05 | — | — | **1.125** |
+| NTLA | 0.80 | — | 1.05 | 1.05 | 0.90 | 0.85 | 1.05 | — | 1.05 | — | — | **0.744** |
+| TCRX | 0.95 | 0.90 | — | — | — | 0.95 | 1.05 | **1.10** | — | 0.88 | 1.03 | **0.850** |
+
+(`—` = factor exactly 1.00 = no impact.) Highlights: BCYC's `cash_floor=1.15` captures the 2.31× cash-discount asymmetric setup; LEGN's `big_pharma=1.10` reflects J&J + Novartis; GLUE rises above 1.0 (best-in-class signals across the board); TCRX's `dilution_overhang=0.88` flags the $200M shelf vs $161M FD mcap.
+
+**Reranking effect:** NTLA stays #1 (44.68 → 33.24 adjusted; modifier rose modestly from 0.6747 to 0.7439), GLUE jumps from prior position to a strong #3 with 14.52 adjusted (was 11.43 under the 9-component modifier), LEGN now scores 7.76 (was 6.40). The new components moved meaningful tickers without distorting the overall ranking shape.
+
+**What was deliberately deferred (per the proposal):**
+
+- **FDA designation tailwind** (Breakthrough/RMAT/Fast Track/PRIME/Orphan): signal lives in `fda.regulatory_hurdles` as free text. Deferred until prompt v4 adds a structured `regulatory_designations: [...]` array.
+- **Insider buy at premium > 25%**: same — needs structured `discount_to_market_pct` field.
+- **`event="other"` failures**: same — needs `program_discontinued` enum value in the prompt.
+- **Royalty stack penalty**: already implicitly baked into the LLM's `rnpv_total_usd`. Adding a separate modifier would double-penalize.
+
+**Files touched:**
+- `config/scoring_modifier.yaml` — 5 new component blocks, `category` field on all 14, `weights_ui.default = 1.0`.
+- `src/module_6b/modifiers.py` — `parse_loose_date`, 5 new `_component_*` functions, `_COMPONENTS` registry extended, `compute_modifier` accepts `current_price_usd`, all component fns now take `(rb, cfg, now, ctx)`.
+- `src/module_6b/apply.py` — `compute_for_row`, `apply_modifiers_to_run`, `collect_ticker_factors` all thread `current_price_usd` from `llm_scores.current_price_at_scoring_usd`.
+- `src/module_6b/selection_io.py` — `COMPONENT_NAMES` extended.
+- `src/module_6/reports.py` — `_COMPONENT_NAMES` mirror; reads `category` from cfg; renders two `<h4>` sections in slider drawer; new CSS for `.mw-section-h`.
+
+---
+
 ### D51 — Dispatch resilience: per-result commit, batch resume, sync-concurrency override, large-feed sanity check (Module 6 dispatch hardening)
 
 **Status: ✅ Implemented 2026-04-25.** Triggered by two real failure modes observed in this session:

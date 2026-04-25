@@ -41,9 +41,13 @@ SCHEMA_VERSION = 2
 
 # Component name order is fixed across the system (Python, JSON, JS)
 # so server- and client-side modifier products are bit-identical.
+# D52 — appended big_pharma_validation, catalyst_density, tech_uniqueness,
+# dilution_overhang, cash_floor.
 COMPONENT_NAMES: tuple[str, ...] = (
     "crowding", "financing", "dilution", "insider", "mgmt",
     "acquisition", "moat", "failures", "concentration",
+    "big_pharma_validation", "catalyst_density", "tech_uniqueness",
+    "dilution_overhang", "cash_floor",
 )
 DEFAULT_WEIGHT = 1.0
 

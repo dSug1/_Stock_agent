@@ -175,11 +175,13 @@ def _build_detail_row(
     )
 
 
-# D47 / D50 — composite score modifier component order. Mirrored in
+# D47 / D50 / D52 — composite score modifier component order. Mirrored in
 # module_6b.modifiers.COMPONENT_NAMES and in the JS embedded below.
 _COMPONENT_NAMES: tuple[str, ...] = (
     "crowding", "financing", "dilution", "insider", "mgmt",
     "acquisition", "moat", "failures", "concentration",
+    "big_pharma_validation", "catalyst_density", "tech_uniqueness",
+    "dilution_overhang", "cash_floor",
 )
 _DEFAULT_WEIGHTS: dict[str, float] = {n: 1.0 for n in _COMPONENT_NAMES}
 
@@ -241,6 +243,13 @@ def render_final_ranking_html(
     }
     component_labels = {
         c: (cfg.get("components", {}).get(c, {}).get("label") or c.title())
+        for c in _COMPONENT_NAMES
+    }
+    # D52 — read each component's category (penalty/tailwind) from YAML.
+    # Used by the slider drawer to group rows under <h4> headers. Defaults
+    # to "tailwind" so legacy components without a category still render.
+    component_categories = {
+        c: (cfg.get("components", {}).get(c, {}).get("category") or "tailwind")
         for c in _COMPONENT_NAMES
     }
 
@@ -433,11 +442,10 @@ def render_final_ranking_html(
 
     # Hamburger button + slide-out panel HTML, only when we have factors.
     if show_modifier_panel:
-        slider_rows: list[str] = []
-        for c in _COMPONENT_NAMES:
+        def _slider_row_html(c: str) -> str:
             label = html.escape(component_labels[c])
             init = float(weights.get(c, 1.0))
-            slider_rows.append(
+            return (
                 f"<div class='mw-row' data-component='{html.escape(c)}'>"
                 f"  <label class='mw-label' title='{html.escape(c)}'>{label}</label>"
                 f"  <input type='range' class='mw-slider' "
@@ -449,6 +457,14 @@ def render_final_ranking_html(
                 f"  <button type='button' class='mw-reset' title='Reset to 1.0'>↺</button>"
                 f"</div>"
             )
+        # D52 — group by category. Penalties first (the more memorable use
+        # case is "tone down a too-aggressive penalty"), tailwinds second.
+        # Within each category, order matches _COMPONENT_NAMES.
+        penalty_rows  = [_slider_row_html(c) for c in _COMPONENT_NAMES
+                         if component_categories.get(c) == "penalty"]
+        tailwind_rows = [_slider_row_html(c) for c in _COMPONENT_NAMES
+                         if component_categories.get(c) != "penalty"]
+        n_pen, n_tw = len(penalty_rows), len(tailwind_rows)
         modifier_panel_html = (
             "<div id='mw-overlay' class='mw-overlay' style='display:none' aria-hidden='true'></div>"
             "<aside id='mw-drawer' class='mw-drawer' style='display:none' aria-hidden='true' "
@@ -469,8 +485,13 @@ def render_final_ranking_html(
             "    <button type='button' id='mw-disable-all' class='mw-disable-all' "
             "            title='Set every weight to 0 — disables all components (ranking reverts to raw score)'>Disable all (0.00)</button>"
             "  </div>"
+            f"  <h4 class='mw-section-h'>Penalties <span class='mw-section-count'>({n_pen})</span></h4>"
             "  <div class='mw-rows'>"
-            + "".join(slider_rows) +
+            + "".join(penalty_rows) +
+            "  </div>"
+            f"  <h4 class='mw-section-h'>Tailwinds <span class='mw-section-count'>({n_tw})</span></h4>"
+            "  <div class='mw-rows'>"
+            + "".join(tailwind_rows) +
             "  </div>"
             "</aside>"
         )
@@ -560,6 +581,11 @@ def render_final_ranking_html(
  .mw-reset-all:hover {{ background: #f0f0f0; }}
  .mw-disable-all {{ background: #fff; border: 1px solid #c62828; color: #b71c1c; }}
  .mw-disable-all:hover {{ background: #ffebee; }}
+ .mw-section-h {{ margin: 1em 0 0.3em; font-size: 0.92em; color: #1a4fa0;
+                   text-transform: uppercase; letter-spacing: 0.5px;
+                   border-bottom: 1px solid #cfe0f2; padding-bottom: 0.2em; }}
+ .mw-section-h:first-of-type {{ margin-top: 0.6em; }}
+ .mw-section-count {{ color: #888; font-weight: 400; font-size: 0.9em; }}
  .mw-rows {{ display: flex; flex-direction: column; gap: 0.4em; }}
  .mw-row  {{ display: grid;
              grid-template-columns: 1fr 130px 44px 28px;

@@ -46,8 +46,16 @@ def compute_for_row(
     research_brief_json: str | None,
     cfg: dict,
     now: datetime | None = None,
+    *,
+    current_price_usd: float | None = None,
 ) -> dict:
     """Parse a research_brief JSON string and return the modifier payload.
+
+    ``current_price_usd`` is needed by the D52 ratio components
+    (``dilution_overhang``, ``cash_floor``) which compute against
+    ``fully_diluted_market_cap_usd = current_price_usd × fully_diluted_shares_count``.
+    Pass ``None`` when only legacy components are needed; the new ones
+    will fall back to their `missing_factor`.
 
     Empty / unparsable JSON → returns the neutral all-1.0 result so the
     column stays populated with a defensible default.
@@ -59,7 +67,8 @@ def compute_for_row(
         except Exception as e:
             _LOG.warning("research_brief_json parse failed: %s", e)
             rb = {}
-    return compute_modifier(rb, cfg, now=now)
+    return compute_modifier(rb, cfg, now=now,
+                            current_price_usd=current_price_usd)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +98,8 @@ def apply_modifiers_to_run(
     conn.row_factory = sqlite3.Row
     rows = list(conn.execute(
         """SELECT rowid, ticker, horizon, research_brief_json,
-                  score_at_current_pct_per_month
+                  score_at_current_pct_per_month,
+                  current_price_at_scoring_usd
            FROM llm_scores WHERE quarter = ? AND run_id = ?""",
         (quarter, run_id),
     ).fetchall())
@@ -100,11 +110,16 @@ def apply_modifiers_to_run(
     # Modifier is per-ticker (not per-horizon) — research_brief is
     # identical across horizons for the same (ticker, run). Compute once
     # per ticker, stamp on every horizon row.
+    # D52 — pass the row's current_price_at_scoring_usd to enable the
+    # ratio-based components (dilution_overhang, cash_floor).
     by_ticker: dict[str, dict] = {}
     for r in rows:
         t = r["ticker"]
         if t not in by_ticker:
-            by_ticker[t] = compute_for_row(r["research_brief_json"], cfg, now=now)
+            by_ticker[t] = compute_for_row(
+                r["research_brief_json"], cfg, now=now,
+                current_price_usd=r["current_price_at_scoring_usd"],
+            )
 
     # ── llm_scores updates ──
     for r in rows:
@@ -210,7 +225,12 @@ def collect_ticker_factors(
     if cfg is None:
         cfg = load_modifier_config()
     conn.row_factory = sqlite3.Row
-    query = "SELECT ticker, run_id, research_brief_json FROM llm_scores WHERE quarter = ?"
+    # D52 — also fetch current_price_at_scoring_usd so the ratio components
+    # (dilution_overhang, cash_floor) get the price they need to compute
+    # fully_diluted_market_cap_usd.
+    query = ("SELECT ticker, run_id, research_brief_json, "
+             "current_price_at_scoring_usd "
+             "FROM llm_scores WHERE quarter = ?")
     params: list = [quarter]
     if tickers:
         tickers = list(tickers)
@@ -226,7 +246,10 @@ def collect_ticker_factors(
 
     out: dict[str, dict] = {}
     for ticker, r in latest_by_ticker.items():
-        result = compute_for_row(r["research_brief_json"], cfg, now=now)
+        result = compute_for_row(
+            r["research_brief_json"], cfg, now=now,
+            current_price_usd=r["current_price_at_scoring_usd"],
+        )
         out[ticker] = {
             "factors": {n: c.get("factor", 1.0)
                         for n, c in result["components"].items()},
