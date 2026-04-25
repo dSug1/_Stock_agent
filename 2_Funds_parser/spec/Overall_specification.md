@@ -7,13 +7,14 @@ Pipeline flow
 run_2_Funds_parser.bat ─────────► existing .bat file. Shall be updated when new scripts are created.
                                 │
                                 ▼
-Module 1 ─── Configuration & foundation
-Module 2 ─── 13F extraction (EXISTING — already built)
-Module 3 ─── Bridge: prepare data for Module 4
-Module 4 ─── "Train hasn't left" filter & archetype ranking
-Module 5 ─── Market data enrichment (pre-LLM)
-Module 6 ─── LLM scoring via Claude API (batch + cached)
-Module 7 ─── Outcome tracking & feedback loop
+Module 1  ─── Configuration & foundation
+Module 2  ─── 13F extraction (EXISTING — already built)
+Module 3  ─── Bridge: prepare data for Module 4
+Module 4  ─── "Train hasn't left" filter & archetype ranking
+Module 5  ─── Market data enrichment (pre-LLM)
+Module 6  ─── LLM scoring via Claude API (batch + cached)
+Module 6b ─── Post-scoring refinement + user-driven selective dispatch
+Module 7  ─── Outcome tracking & feedback loop
 Each module is independently runnable, testable, and cached where appropriate.
 ________________________________________
 Module 1 — Configuration & Foundation
@@ -89,6 +90,27 @@ What it does (high level):
 Expected cost: ~$5–15 per quarterly run for 200 tickers, excluding web search tool fees. Explicit cost gates prevent surprises.
 Output: llm_scores_{quarter}.parquet + final integrated ranking report (HTML + Excel) combining Module 4 archetype score with Module 6 LLM rate.
 ________________________________________
+Module 6b — Post-scoring refinement + user-driven selective dispatch
+Role: Two responsibilities, both downstream of Module 6's LLM dispatch. Pure-Python and HTML-only — no additional Anthropic calls.
+Spec: spec/module_6b_spec.md. Decisions: spec/decisions.md § D47 (composite modifier) + § D48 (selective dispatch + mandatory gate).
+Part (a) — Composite score modifier (post-LLM, deterministic):
+•	Applies a deterministic multiplier (0.50–1.50) to the M6 primary score so that material signals already in the LLM's research_brief actually move the ranking. The D46 score formula uses only target/time/probability/current_price; everything else (competitive landscape, partnerships, insider activity, runway, dilution, past failures, mgmt track record, acquisition probability, moat, rNPV concentration) is captured but invisible to ranking.
+•	9 components combined multiplicatively, clipped to [0.50, 1.50]: competitive crowding, financing risk, recent dilution, insider conviction, mgmt track record, acquisition optionality, moat durability, recent operational failure, rNPV concentration. Each maps a research_brief field to a factor; per-component evidence captured in JSON for audit.
+•	Per-component factor maps tunable in config/scoring_modifier.yaml. Adding a component requires a spec rev; tuning a band is a config edit.
+•	Ranking key changes: final_rankings.final_rank now sorts by final_score_adjusted (= score_at_current × score_modifier). Raw final_score preserved as a reference column.
+•	Run sites: end of scripts/6_score.py after final_rankings write; end of scripts/6_recompute_scores.py after the D46 score recompute; standalone scripts/6b_apply_modifiers.py for retroactive application across historical runs.
+Part (b) — User-driven selective dispatch (pre-LLM control):
+•	The Module 6 final-ranking HTML report becomes a two-way control surface. Each ticker row carries a checkbox (default checked). Header has a master "select all" checkbox + "Save selection" + "Copy CLI command" buttons. JavaScript handles toggling, master-state derivation, and HTML serialisation of the checked attribute.
+•	"Save selection" overwrites the HTML in place via File System Access API (Blob download as fallback). Saved HTML carries the user's selection in the checked attributes.
+•	scripts/6_score.py gains --selection-from-html PATH flag — pipeline parses the HTML, restricts dispatch to checked tickers. Mutually exclusive with --ticker / --tickers.
+•	Confirmation gate ([y/N] before any Anthropic call) is mandatory regardless of TTY state. Only an explicit single-shot --yes flag bypasses it. The earlier "skip gate when stdin is non-interactive" path is removed (footgun: parent processes piping stdin would otherwise dispatch silently).
+•	Selective dispatch + tier classification compose: selected tickers still go through D39 tier classification. Tier A hits within the selection cost $0; the modifier still re-applies. Pre-flight cost summary shows the breakdown.
+•	No new SQL columns for selective dispatch (selection lives in the HTML); llm_runs.gate_config_json gains "selection_source" + "selection_count" for audit.
+Outputs (changed from M6):
+•	Outputs/final_ranking_{quarter}.html — adds checkbox column, master checkbox, Save/Copy buttons, modifier column, adjusted-score column, "Score modifier breakdown" detail panel.
+•	Outputs/final_ranking_{quarter}.xlsx — adds modifier + adjusted-score columns; conditional formatting moves to the adjusted score.
+•	llm_scores.db gains 6 additive columns (3 per table × 2 tables): score_modifier, score_modifier_json, score_at_current_adjusted_pct_per_month on llm_scores; score_modifier, score_modifier_json, final_score_adjusted on final_rankings.
+________________________________________
 Module 7 — Outcome Tracking & Feedback Loop
 Role: Record the forward price paths of scored tickers, compare realized returns to predicted returns, and surface empirical performance of archetypes and LLM scores.
 What it does (high level):
@@ -107,7 +129,7 @@ These apply to all modules and are documented once here rather than repeated per
 •	Cache hierarchy. Each module owns its own cache. Core lookup caches (ticker, CUSIP) never cleared even in debug mode. Per-module caches have 30-day hard TTL.
 •	Debug vs. production mode. Flip a flag in pipeline.yaml to subset rows, clear stage caches, shorten HTML display timeouts, verbose logging.
 •	Idempotency. Any module can be re-run. Outputs are deterministically sorted; byte-identical across runs on the same inputs.
-•	Cost approval gates. Any module that calls a paid API (only Module 6) runs a cost estimator first and requires user approval.
+•	Cost approval gates. Any module that calls a paid API (only Module 6) runs a cost estimator first and requires user approval. Per D48, the [y/N] gate is mandatory regardless of TTY state — only an explicit single-shot --yes flag bypasses it.
 •	Failure handling. Modules log and continue on row-level anomalies (unrecognized share classes, failed ticker fetches). They fail fast on structural issues (missing config, schema mismatch, missing upstream DB).
 •	Quarter convention. Every module uses "YYYYQn" format internally. Quarter is derived from 13F period_of_report (quarter-end date), never from filing_date (submission date, which lags by ~45 days).
 ________________________________________

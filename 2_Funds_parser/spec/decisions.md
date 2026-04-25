@@ -1077,6 +1077,237 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D47 — Module 6b composite score_modifier — 9 deterministic components from `research_brief`
+
+**Decision (2026-04-25):** Spec a new sub-module **Module 6b** that applies a deterministic composite multiplier to the M6 primary score so that material signals already present in the LLM's `research_brief` actually move the ranking. The D46 score formula uses only 4 LLM-emitted fields (`target_price_usd`, `time_to_catalyst_weeks`, `probability`, plus pack-sourced `current_price_usd`); the remaining ~15 structured fields the LLM produces (competitive landscape, partnerships, insider activity, runway, dilution, past failures, mgmt track record, acquisition probability, moat, technology uniqueness, FDA hurdles, rNPV breakdown, …) are stored for audit but invisible to ranking.
+
+**Concrete motivating cases (run 4, 2026-04-25):**
+- **NTLA crowded HAE space** — 5 commercial competitors (3 approvals 2025: Dawnzera, Ekterly, Andembry; plus incumbents Takhzyro, Orladeyo); the model's −10pp probability cut is bounded by the [0.15, 0.90] range and invisible to scoring.
+- **TCRX Lynx1 insider buy** — $30M PFW purchase at 37% premium Dec 2024 by a 10% owner, never reflected in score.
+- **NTLA MAGNITUDE patient death + clinical hold (Oct 2025) + workforce cut** — recent operational stress invisible to scoring.
+
+**Composite formula:**
+
+```python
+modifier = clip(
+    crowding × financing × dilution × insider × mgmt × acquisition × moat × failures × concentration,
+    0.50, 1.50,
+)
+score_at_current_adjusted = score_at_current × modifier
+final_score_adjusted = max_H(score_at_current_adjusted_H)
+```
+
+**Nine components** (each producing a factor in roughly `[0.70, 1.10]`, combined multiplicatively, clipped to `[0.50, 1.50]`):
+
+| # | Component | Source field | Factor range |
+|---|---|---|---|
+| 1 | Competitive crowding | `competitive_landscape[]` count at Ph3+/Approved | 0.80–1.00 |
+| 2 | Financing risk | `financials.runway_months` | 0.70–1.00 |
+| 3 | Recent dilution | `financials.recent_capital_raises[]` in last 180d | 0.93–1.00 |
+| 4 | Insider conviction | Open-market buy in `insider_activity.recent_transactions[]` last 180d | 1.00–1.10 |
+| 5 | Mgmt track record | `mgmt_track_record_score.score` (3-band) | 0.90–1.05 |
+| 6 | Acquisition optionality | `acquisition_target.score` (3-band) | 1.00–1.10 |
+| 7 | Moat durability | `moat.score` (3-band) | 0.95–1.05 |
+| 8 | Recent operational failure | `past_failures[]` matching event types in last 365d | 0.90–1.00 |
+| 9 | rNPV concentration | `max(rnpv_contribution_usd)/rnpv_total_usd` (excl. Platform row) | 0.85–1.00 |
+
+Per-component factor maps live in `config/scoring_modifier.yaml` (tunable). Per-row evidence captured in new TEXT column `score_modifier_json`. Spec: [module_6b_spec.md](module_6b_spec.md).
+
+**Ranking key changes from `final_score` to `final_score_adjusted`.** Raw `final_score` (D46 `score_at_current` at `final_horizon`) preserved as a reference column for transparency.
+
+**Worked examples (run 4):**
+- **NTLA**: 0.80 × 1.00 × 1.00 × 1.00 × 1.00 × 1.05 × 1.05 × 0.90 × 0.85 = 0.674. `44.68 × 0.674 = 30.11`
+- **TCRX**: 0.95 × 1.00 × 1.00 × 1.00 × 0.90 × 1.00 × 1.00 × 1.00 × 0.95 = 0.811. `13.03 × 0.811 = 10.57`. (Ranking gap narrows from 3.4× to 2.85×.)
+
+**Why a sub-module rather than baking into M6:**
+- M6's contract (LLM dispatch + parse + raw scoring) stays clean and unchanged; M6b is a downstream computation.
+- M6b is pure-Python, deterministic, no API cost — can run retroactively against any historical M6 row via `scripts/6b_apply_modifiers.py`.
+- Tuning a factor map (YAML edit) doesn't invalidate M6 dispatch; only re-runs M6b.
+- Per-component decomposition is auditable: user can disagree with one component in `score_modifier_json` without rewriting the formula.
+
+**Schema additions** (additive migration alongside D46's): `llm_scores`: `score_modifier`, `score_modifier_json`, `score_at_current_adjusted_pct_per_month`. `final_rankings`: `score_modifier`, `score_modifier_json`, `final_score_adjusted`.
+
+**Run sites:**
+- End of `scripts/6_score.py` after `final_rankings` write.
+- End of `scripts/6_recompute_scores.py` after D46 score recompute.
+- Standalone `scripts/6b_apply_modifiers.py` — for retroactive application.
+
+**Open items** (covered in [module_6b_spec.md § Open items](module_6b_spec.md)): PLEXI-T `event="other"` mismatch (proposes adding `program_discontinued` to M6 enum), insider premium-to-market detection (deferred), concentration vs. POS double-counting risk, mgmt double-counting risk, bounds tuning after running on the full feed.
+
+**Alternatives considered:**
+- Leave score formula untouched, add VISIBLE columns for each signal (let user mentally adjust) — rejected: doesn't solve the ranking problem; user would still need to mentally re-rank.
+- Bake each signal into the LLM prompt as adjustments to `probability` directly — rejected: probability is bounded `[0.15, 0.90]`, can't carry 9 signals; fragile against the model not following 9 separate adjustment instructions.
+- Per-component `weight` knobs (factor ** weight) — deferred to v2; v1 uses pure multiplicative combination.
+- Re-rank by `final_score` AND `final_score_adjusted` separately, presenting both lists — rejected: confusing for the user; pick one ranking key (adjusted) with the raw kept visible.
+
+---
+
+### D49 — Selection storage moved to local HTTP server + sidecar JSON file (revises D48 storage model)
+
+**Status: ✅ Implemented 2026-04-25.** Supersedes the D48 "HTML `checked` attribute as truth + File System Access API to save" storage model. The mandatory confirmation gate, `--selection-from-html` CLI flag, mutex with `--ticker`/`--tickers`, `--yes` bypass, and audit fields (`selection_source`, `selection_count`, `selection_pool_size`) from D48 all stand — only the *storage* of the user's selection changed.
+
+**New files:** `scripts/6_serve_report.py` (stdlib `http.server` based; ~250 lines), `src/module_6b/selection_io.py` (JSON I/O + atomic writes + `merge_selection` round-trip helper). **Modified files:** `src/module_6/reports.py` (FSA/IDB JS replaced with `fetch('PUT /selection/<quarter>', ...)`; file:// banner added), `scripts/6_score.py` (sidecar JSON preferred; HTML attribute fallback retained for back-compat; sidecar written after every render with merge), `run_2_Funds_parser.bat` (post-M6 prompt now starts the server then asks to re-score), `src/module_6b/__init__.py` (re-exports).
+
+**Decision (2026-04-25):** A small stdlib HTTP server bound to `127.0.0.1:4609` serves the rendered HTML and accepts `PUT /selection/<quarter>` writes from the browser to a sidecar JSON (`Outputs/final_ranking_<quarter>_selection.json`). The browser's `fetch()` writes are silent because they target a same-origin HTTP endpoint — browsers do not gate same-origin XHR behind the filesystem permission model. The pipeline reads the sidecar JSON in preference to parsing HTML `checked` attributes.
+
+**Sidecar JSON schema (v1):**
+
+```json
+{
+  "schema_version":   1,
+  "quarter":          "2025Q4",
+  "rendered_at":      "2026-04-25T13:30:00Z",
+  "updated_at":       "2026-04-25T14:01:23Z",
+  "all_tickers":      ["NTLA", "TCRX"],
+  "selected_tickers": ["TCRX"]
+}
+```
+
+`selected_tickers` is the source of truth. `all_tickers` is the rendering-time pool (used by the round-trip `merge_selection` function so re-renders preserve user choices for tickers still in the pool, default new tickers to selected, and silently drop tickers no longer in the pool).
+
+**Server endpoints:**
+
+| Method | Path                       | Purpose                                                  |
+|---|---|---|
+| GET    | `/`                        | 302 → `/<latest_quarter>` (auto-detect from `context_packs.db`) |
+| GET    | `/<quarter>`               | Serve `Outputs/final_ranking_<quarter>.html`             |
+| GET    | `/selection/<quarter>`     | Return the sidecar JSON (404 if missing)                 |
+| PUT    | `/selection/<quarter>`     | Atomic write of sidecar JSON; returns 200 + `saved_at`   |
+
+Bind is locked to `127.0.0.1` — never reachable off-host. Port auto-increments up to +50 if the default is in use.
+
+**Why the re-architecture (vs the D48 FSA design):**
+
+- **Zero dialogs, ever.** A same-origin `fetch('/selection/<q>', {method: 'PUT'})` is silent. The FSA approach showed a save-picker dialog the first time on every fresh render; even with `FileSystemFileHandle` persisted in IndexedDB and the smaller `requestPermission` prompt, the user still had to click through a permission UI.
+- **Single source of truth for both browser and pipeline.** With FSA, the HTML's `checked` attributes were the truth and the pipeline parsed them. With the sidecar, both browser and pipeline read/write the same JSON file — no risk of HTML/JSON drift, and no JS-property-vs-HTML-attribute serialisation footgun.
+- **Cleaner separation.** The HTML is now a presentation layer; selection state is data. The renderer seeds the JSON on every run; the server orchestrates browser writes; the pipeline consumes the JSON. Each component has one job.
+
+**Trade-offs accepted:**
+
+- **Server lifecycle.** The user must start `scripts/6_serve_report.py` (or use the bat-file prompt that does it) to enable auto-save. Opening the report directly via `file://` still renders correctly — the renderer seeded the HTML's `checked` attributes from the sidecar — but a yellow banner explains that auto-save is off and shows the exact serve command. Toggling checkboxes in `file://` mode produces a one-shot toast and does not persist.
+- **Port conflicts.** Default 4609; auto-increments up to 4659 if taken. If the user runs M6 + a Jupyter server + something else on 4609 simultaneously, the server picks the next free port and prints the URL. Browser auto-open uses the actual bound port.
+- **Backwards compatibility.** Reports rendered before D49 don't have a sidecar. The pipeline detects this and falls back to D48 HTML-attribute parsing — old reports keep working without re-rendering.
+
+**Alternatives reconsidered:**
+
+- D48 FSA + IndexedDB-cached handle: better than original D48 but still showed a permission popup on every fresh render. User explicitly rejected.
+- Pure browser-side localStorage (no Python integration): fast, silent, but pipeline can't read it. Rejected.
+- Sidecar JSON written via FSA from the browser: identical dialog issue to writing the HTML. Rejected.
+- Larger framework (Flask / FastAPI server): unnecessary; stdlib is enough. Rejected.
+
+**Acceptance tests:** the existing D48 acceptance tests (#10–#18 in `module_6b_spec.md`) all stand — they test selection round-trip semantics, not the storage mechanism. Added: when sidecar JSON exists, pipeline reads from it and ignores HTML `checked` attributes; when sidecar missing, pipeline falls back to HTML parser; PUT writes are atomic (no torn reads under concurrent GET).
+
+---
+
+### D48 — User-driven selective dispatch via HTML checkboxes + mandatory confirmation gate (Module 6b Part (b))
+
+**Status: ⚠️ Storage mechanism superseded by D49 same-day.** D48's selection-state-on-disk implementation (HTML `checked` attributes + File System Access save) was replaced by D49's local HTTP server + sidecar JSON. **All other aspects of D48 still apply** — the `--selection-from-html` CLI flag (now JSON-first internally), the `--yes` bypass, the mandatory confirmation gate, the audit fields in `gate_config_json`, the bat-file orchestration shape, and the selective-dispatch + tier-classification interaction. D48 remains the canonical reference for selective dispatch *behaviour*; D49 is the canonical reference for selection *storage*.
+
+**Decision (2026-04-25):** The Module 6 final-ranking HTML report becomes a **two-way control surface**: it shows the ranking AND captures the user's per-ticker selection for the next dispatch. New `--selection-from-html PATH` flag on `scripts/6_score.py` parses the HTML, extracts the checked-ticker list, and restricts the dispatch to those tickers. The confirmation gate (`[y/N]`) is **mandatory** — even when stdin is not a TTY, the gate prompts and aborts cleanly on EOF. The only bypass is an explicit single-shot `--yes` flag.
+
+**HTML changes (rendered by `src/module_6/reports.py::render_final_ranking_html`):**
+
+- Leftmost column gains a **per-ticker checkbox** (`<input type="checkbox" name="ticker_select" value="<TICKER>" checked>`).
+- Header row gains a **master checkbox** (`<input type="checkbox" id="select-all" checked>`) that toggles all per-row checkboxes; goes `indeterminate` when state is mixed.
+- Report header gains two buttons:
+  - **Save selection** — uses File System Access API to overwrite the HTML in place; falls back to a Blob download. Crucially, the JS sets the `checked` HTML attribute (not just JS property) before serialising so the saved HTML reflects the current state.
+  - **Copy CLI command** — copies `python scripts/6_score.py --selection-from-html Outputs/final_ranking_<quarter>.html -v` to clipboard.
+- Live "selected count" badge in header.
+- Selection state survives re-renders: the renderer reads the prior selection from the input HTML (when present) and emits checkboxes with matching `checked` attributes.
+
+**Pipeline changes:**
+
+- New `--selection-from-html PATH` flag, mutually exclusive with `--ticker` / `--tickers`. Pre-feed step replaces gate-driven `query_packs_for_quarter` with a direct ticker-list lookup parsed from the HTML.
+- New `--yes` flag for explicit gate bypass (single-shot, never config-driven).
+- Confirmation gate refactored to **always prompt** (no `sys.stdin.isatty()` short-circuit). On `EOFError` (closed stdin without `--yes`): print "Aborted." and exit 0.
+- `llm_runs.gate_config_json` extended with `"selection_source": "html|gates|tickers_flag"` and `"selection_count"` for run-level audit.
+
+**Parsing (no external deps):**
+
+```python
+import re
+_TICKER_CHECKBOX_RE = re.compile(
+    r"<input\b[^>]*\bname=['\"]?ticker_select['\"]?[^>]*\bchecked\b[^>]*?>",
+    re.IGNORECASE,
+)
+_VALUE_RE = re.compile(r"\bvalue=['\"]([A-Z0-9.\-]+)['\"]", re.IGNORECASE)
+```
+
+Lives at `src/module_6b/selection.py`.
+
+**Why mandatory gate (no inferred bypass):**
+- Earlier behaviour auto-skipped the gate when `sys.stdin.isatty()` was false. This was convenient but **dangerous** when the script was invoked from a parent process / cron / IDE that piped stdin — Anthropic calls would dispatch with no human confirmation. Promoting the gate to mandatory eliminates the footgun.
+- `--yes` is the explicit bypass, scoped to one invocation. Never inferable from environment.
+- The pipeline orchestrator [run_2_Funds_parser.bat](../run_2_Funds_parser.bat) already runs from a TTY-attached cmd window, so the prompt works naturally; no orchestrator change needed.
+
+**Workflow:**
+
+```
+Initial run  →  HTML rendered (98 tickers, all checked)
+              →  user reviews, unchecks 76, clicks Save
+              →  HTML on disk now has only 22 `checked`
+Selective    →  python scripts/6_score.py --selection-from-html Outputs/final_ranking_<q>.html
+re-run          →  parses 22 tickers
+              →  tier-classifies (A/B/C)
+              →  pre-flight cost estimate ($X for 22)
+              →  [y/N] gate prompts (mandatory)
+              →  on y: dispatches; on n / EOF: aborts cleanly
+              →  M6b modifier re-applies; HTML re-rendered with selection preserved
+```
+
+**Selective + tier interaction:** `--selection-from-html` does NOT override D39 caching. Selected tickers still classify as Tier A / B / C. The selection mechanism additionally restricts which tickers are even considered. Tier A hits within the selection cost $0; the modifier still re-applies.
+
+**Schema additions:** none. Selection state lives in the HTML file.
+
+**Acceptance tests:** see [module_6b_spec.md § Acceptance tests for selective dispatch](module_6b_spec.md) (tests #10–#18).
+
+**Alternatives considered:**
+- Sidecar JSON file (`<quarter>_selection.json`) instead of HTML-as-source-of-truth — rejected: user explicitly wanted the HTML to be both viewer and selection state. Extra file would diverge from the rendered view.
+- Backend-driven selection (HTML POSTs to a local server which writes selection) — rejected: requires running a server; over-engineered for a local pipeline.
+- Trust the user's `--tickers TCRX,NTLA,…` flag exclusively (no HTML mechanism) — rejected: fragile (user has to retype tickers from memory after reviewing the report); doesn't scale to 30+ ticker selections.
+- Skip gate when `--non-interactive` flag is set — rejected: footgun via accidental flag passthrough; an explicit `--yes` is safer.
+- Allow `--yes` to be set in `scoring.yaml` config — rejected: keep the bypass single-shot and explicit.
+
+---
+
+### D46 — Primary ranking score re-anchored from `fair_mid` to `current_price` (revises D42)
+
+**Decision (2026-04-25):** The primary `final_score` used to rank tickers in `final_rankings` is re-anchored from `fair_entry_mid` (D42 original) to **`current_price_usd`** (the M5 pack's `market_snapshot.last_close_usd` at scoring time). Reference scores `score_at_fair` and `score_at_full_reward` are still computed and stored, but they're for positioning context only — they do not drive the ranking.
+
+```python
+current_price_usd = pack["market_snapshot"]["last_close_usd"]
+months = max(1.0, time_to_catalyst_weeks / 4.33)
+appreciation_from_current_pct = (target_price_usd - current_price_usd) / current_price_usd * 100
+score_at_current = (appreciation_from_current_pct / months) * probability       # PRIMARY
+final_horizon = argmax_H(score_at_current_H)
+final_score   = max_H(score_at_current_H)
+```
+
+**Why the reversal:**
+- The fair-mid-anchored score (D42) produced theoretical-EV numbers that didn't reflect what an investor could actually capture buying today.
+- **NTLA m6-v3 example:** target $26 / fair_mid $6.50 / wks=1 / prob=0.7 → score_at_fair = **210 %/mo**. But current market is $15.87 — nobody can buy at $5.50, so 210 is academic. Re-anchored to current: (26 − 15.87)/15.87 × 0.7 / 1.0 = **44.7 %/mo** — actionable.
+- Ranking by score_at_fair surfaces "compelling thesis if you wait" cases above "compelling thesis if you buy now" cases, which is the wrong default for a ranked investment ledger.
+
+**What the fair-entry / full-reward ranges still buy us:**
+- The model's anchoring discipline (HARD RULES #7, #8) is unchanged — model must still anchor `fair_entry` on rNPV-per-share + cash floor and `full_reward` on cash-per-share floor.
+- Reports show `current_vs_fair_mid_pct` (positioning gap) so the user can see "this is 144% above fair entry — wait for pullback" or "this is at fair entry — buy now".
+- `score_at_fair` and `score_at_full_reward` are still queryable for filtering: e.g., "find tickers where score_at_fair > 50 AND current is < 30% above fair_mid" surfaces high-conviction names with limited entry premium.
+
+**No prompt change.** The LLM still emits `target_price_usd`, `time_to_catalyst_weeks`, `probability`, `fair_entry_*`, `full_reward_*`. Only the Python downstream computation changes. `prompt_version` stays at `m6-v3`.
+
+**No re-dispatch needed.** Existing `llm_scores` rows for run_id=4 (NTLA + TCRX) can be recomputed offline — all needed inputs (target, weeks, probability, fair_entry, full_reward) plus `current_price_at_scoring_usd` (must be re-sourced from the pack at recompute time, since not previously stored) are available. A one-off script `scripts/recompute_scores.py` will re-derive `score_at_current_*` columns and rewrite `final_rankings`. Other existing rows under m6-v2 can be similarly recomputed.
+
+**Schema additions (additive migration):**
+- `llm_scores`: new columns `current_price_at_scoring_usd`, `appreciation_from_current_pct`, `score_at_current_pct_per_month`. Existing fair/full_reward columns retained.
+- `final_rankings`: new columns `current_price_at_scoring_usd`, `score_at_current_3mo`, `score_at_current_12mo`, `appreciation_from_current_3mo_pct`, `appreciation_from_current_12mo_pct`, `current_vs_fair_mid_pct`. Final-rank sort key changed to `score_at_current`.
+
+**Alternatives considered:**
+- Keep fair-mid as primary, add visual warning in the report ("score is academic — wait for pullback") — rejected: doesn't solve the ranking problem; high-fair-mid scores still float to the top inappropriately.
+- Use both anchors and average them — rejected: hides the actionable signal in a blended number.
+- Drop fair_entry / full_reward ranges entirely — rejected: still genuinely useful as positioning anchors and for the "what would this look like at $X" reference scores.
+
+---
+
 ---
 
 ## Module 7 — Outcome Tracking

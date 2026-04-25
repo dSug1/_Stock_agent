@@ -169,10 +169,13 @@ Primary key `(ticker, quarter, horizon, prompt_version, model)`. Re-runs at same
 | `catalyst_detail` | TEXT | ≤120 chars; specifies the actual catalyst |
 | `thesis_summary` | TEXT | ≤300 chars |
 | `key_risks_json` | TEXT | JSON-encoded `string[]` |
-| `appreciation_from_fair_pct` | REAL | Python-computed: (target − fair_mid) / fair_mid × 100 |
-| `appreciation_from_full_reward_pct` | REAL | Python-computed: (target − full_mid) / full_mid × 100 |
-| `score_at_fair_pct_per_month` | REAL | Python-computed: (appreciation_from_fair / months) × probability |
-| `score_at_full_reward_pct_per_month` | REAL | Python-computed same formula vs full-reward mid |
+| `current_price_at_scoring_usd` | REAL | Snapshot of `pack.market_snapshot.last_close_usd` at scoring time (D46) |
+| `appreciation_from_current_pct` | REAL | Python-computed: (target − current_price) / current_price × 100 — **primary** (D46) |
+| `appreciation_from_fair_pct` | REAL | Python-computed: (target − fair_mid) / fair_mid × 100 — reference |
+| `appreciation_from_full_reward_pct` | REAL | Python-computed: (target − full_mid) / full_mid × 100 — reference |
+| `score_at_current_pct_per_month` | REAL | **PRIMARY ranking score** (D46): (appr_from_current / months) × probability |
+| `score_at_fair_pct_per_month` | REAL | Reference: (appr_from_fair / months) × probability |
+| `score_at_full_reward_pct_per_month` | REAL | Reference: same formula vs full-reward mid |
 | `source_tier` | TEXT | `'A'` exact cache, `'B'` light refresh, `'C'` full scoring (D39) |
 | `pack_source_rank_hash` | TEXT | The M5 pack's `source_rank_hash` at scoring time (D39) |
 | `refreshed_from_row_id` | INTEGER | FK to a prior `llm_scores` row when this row was written by a Tier B "no material change" refresh; NULL otherwise |
@@ -260,15 +263,21 @@ One row per `(ticker, quarter, run_id)`. The HTML / XLSX reports are a projectio
 | `run_id` | INTEGER |
 | `final_rank` | INTEGER |
 | `final_horizon` | TEXT — `3mo` \| `12mo` \| `either` |
-| `final_score` | REAL — `score_at_fair` at `final_horizon` |
-| `score_at_fair_3mo` | REAL |
-| `score_at_fair_12mo` | REAL |
-| `score_at_full_reward_3mo` | REAL |
-| `score_at_full_reward_12mo` | REAL |
+| `final_score` | REAL — `score_at_current` at `final_horizon` (D46) |
+| `current_price_at_scoring_usd` | REAL — D46 |
+| `score_at_current_3mo` | REAL — primary score (D46) |
+| `score_at_current_12mo` | REAL — primary score (D46) |
+| `score_at_fair_3mo` | REAL — reference |
+| `score_at_fair_12mo` | REAL — reference |
+| `score_at_full_reward_3mo` | REAL — reference |
+| `score_at_full_reward_12mo` | REAL — reference |
 | `target_price_3mo_usd` | REAL |
 | `target_price_12mo_usd` | REAL |
-| `appreciation_from_fair_3mo_pct` | REAL |
-| `appreciation_from_fair_12mo_pct` | REAL |
+| `appreciation_from_current_3mo_pct` | REAL — D46 |
+| `appreciation_from_current_12mo_pct` | REAL — D46 |
+| `appreciation_from_fair_3mo_pct` | REAL — reference |
+| `appreciation_from_fair_12mo_pct` | REAL — reference |
+| `current_vs_fair_mid_pct` | REAL — = (current − fair_mid)/fair_mid × 100; positioning gap shown in reports |
 | `time_to_catalyst_3mo_weeks` | INTEGER |
 | `time_to_catalyst_12mo_weeks` | INTEGER |
 | `probability_3mo` | REAL |
@@ -734,27 +743,38 @@ The LLM returns a **three-section** structured JSON object: research brief (qual
 }
 ```
 
-### Python-side deterministic score (D42)
+### Python-side deterministic score (D42 / **revised D46**)
+
+The **primary ranking score** is anchored on the **current market price** (sourced from the M5 pack's `market_snapshot.last_close_usd` at scoring time). This reflects the actual EV of buying TODAY rather than the academic EV of buying at the analyst-computed fair entry. The `fair_entry` / `full_reward` reference scores are still computed and stored for positioning analysis ("how much better would this look at a pullback?") but do NOT drive the ranking.
 
 ```python
-# Per-ticker entry range midpoints
+# Sourced from the M5 pack at scoring time
+current_price_usd = pack["market_snapshot"]["last_close_usd"]
+
+# Per-ticker entry range midpoints (still used for reference scores)
 fair_mid = (fair_entry_low_usd + fair_entry_high_usd) / 2.0
 full_mid = (full_reward_low_usd + full_reward_high_usd) / 2.0
 
 # Per-horizon scoring (for H in {3mo, 12mo})
 months = max(1.0, time_to_catalyst_weeks / 4.33)
-appreciation_from_fair_pct = (target_price_usd - fair_mid) / fair_mid * 100.0
-appreciation_from_full_pct = (target_price_usd - full_mid) / full_mid * 100.0
+appreciation_from_current_pct = (target_price_usd - current_price_usd) / current_price_usd * 100.0
+appreciation_from_fair_pct    = (target_price_usd - fair_mid) / fair_mid * 100.0
+appreciation_from_full_pct    = (target_price_usd - full_mid) / full_mid * 100.0
 
-score_at_fair        = (appreciation_from_fair_pct / months) * probability
-score_at_full_reward = (appreciation_from_full_pct / months) * probability
+score_at_current      = (appreciation_from_current_pct / months) * probability   # PRIMARY (D46)
+score_at_fair         = (appreciation_from_fair_pct    / months) * probability   # reference
+score_at_full_reward  = (appreciation_from_full_pct    / months) * probability   # reference
 
-# Final ranking per ticker
-final_horizon = argmax_H(score_at_fair_H)
-final_score   = max_H(score_at_fair_H)
+# Final ranking per ticker — uses score_at_current (D46)
+final_horizon = argmax_H(score_at_current_H)
+final_score   = max_H(score_at_current_H)
 ```
 
-**Score units:** expected appreciation in percentage points per month from the fair-entry midpoint, probability-weighted. A score of `10` = "pro-rata, this earns ~10%/month of expected value at fair entry." Negative scores (target < fair entry) rank last.
+**Score units:** expected appreciation in percentage points per month **from current market price**, probability-weighted. A score of `10` = "pro-rata, this earns ~10%/month of expected value if bought at today's close." Negative scores (target < current price) rank last.
+
+**Why current-price anchoring (D46):** The earlier fair-mid-anchored score (D42 original) produced theoretical-EV numbers that didn't reflect what an investor could actually capture buying today. NTLA at $15.87 with HAELO topline next week scored 210 %/mo at fair-mid $6.50 — meaningless because nobody could buy at $5.50. Re-anchored to current price, the same thesis scores 44.7 %/mo — actionable. Reference `score_at_fair` and `score_at_full_reward` remain so the user can still see the "wait for pullback" upside.
+
+**`fair_entry` / `full_reward` ranges still required** — they drive the positioning gap shown in reports (`(current_price − fair_mid) / fair_mid`) and the `score_at_fair` reference column. The model's anchoring discipline is unchanged: `fair_entry` MUST cite rNPV-per-share + cash floor (HARD RULE #7), `full_reward` MUST cite cash-per-share floor (HARD RULE #8).
 
 **Probability band anchors (continuous 0.15–0.90):**
 - HIGH `0.70–0.90` — scheduled catalyst, precedent-backed direction, corroborating source, timing ±2w.

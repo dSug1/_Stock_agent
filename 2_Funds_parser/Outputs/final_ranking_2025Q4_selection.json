@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "quarter": "2025Q4",
+  "all_tickers": [
+    "NTLA",
+    "TCRX"
+  ],
+  "selected_tickers": [
+    "NTLA",
+    "TCRX"
+  ],
+  "updated_at": "2026-04-25T14:20:44+00:00"
+}

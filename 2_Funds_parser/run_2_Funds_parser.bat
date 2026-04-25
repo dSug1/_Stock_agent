@@ -10,7 +10,7 @@ REM   Start in:   ...\_Stock_agent\2_Funds_parser
 REM   Run as the user who owns the venv.
 REM ============================================================
 
-setlocal
+setlocal EnableDelayedExpansion
 
 REM --- Resolve parser folder (folder this .bat lives in) ------
 set "PARSER_ROOT=%~dp0"
@@ -130,7 +130,29 @@ if /i "%RUN_M3%"=="y" (
                         endlocal ^& exit /b 1
                     )
                     echo.
-                    echo [2_Funds_parser] Open Outputs\final_ranking_*.html
+                    echo [2_Funds_parser] Final ranking written to Outputs\final_ranking_*.html
+                    echo.
+                    set /p RUN_M6_EDIT="Open the selection editor (local HTTP server)? [y/N]: "
+                    if /i "!RUN_M6_EDIT!"=="y" (
+                        REM D49 — local HTTP server + sidecar JSON. Serves the HTML
+                        REM and writes Outputs\final_ranking_<quarter>_selection.json
+                        REM atomically on each browser checkbox toggle. Press CTRL+C
+                        REM in the spawned window to close the server when done.
+                        echo [2_Funds_parser] Starting selection editor server.
+                        echo                  Browser opens automatically. Press CTRL+C
+                        echo                  in the server output to stop, then return here.
+                        python scripts\6_serve_report.py
+                        echo.
+                        set /p RUN_M6_RESCORE="Re-score from your edited selection? [y/N]: "
+                        if /i "!RUN_M6_RESCORE!"=="y" (
+                            for /f "tokens=*" %%Q in ('python -c "import sqlite3; c=sqlite3.connect(r'context_packs.db'); print(c.execute('SELECT quarter FROM context_packs GROUP BY quarter ORDER BY quarter DESC LIMIT 1').fetchone()[0])"') do set "M6_QUARTER=%%Q"
+                            echo [2_Funds_parser] Module 6 (selective): reading sidecar for !M6_QUARTER!
+                            python scripts\6_score.py --selection-from-html "Outputs\final_ranking_!M6_QUARTER!.html" -v
+                            if errorlevel 1 (
+                                echo [WARN] Module 6 selective re-score failed; original report is unchanged.
+                            )
+                        )
+                    )
                 )
             )
         )

@@ -42,11 +42,14 @@ CREATE TABLE IF NOT EXISTS llm_scores (
     thesis_summary                      TEXT,
     key_risks_json                      TEXT,
 
-    -- Python-computed deterministic scoring
+    -- Python-computed deterministic scoring (D46 — current_price-anchored)
+    current_price_at_scoring_usd        REAL,
+    appreciation_from_current_pct       REAL,
     appreciation_from_fair_pct          REAL,
     appreciation_from_full_reward_pct   REAL,
-    score_at_fair_pct_per_month         REAL,
-    score_at_full_reward_pct_per_month  REAL,
+    score_at_current_pct_per_month      REAL,                  -- PRIMARY (D46)
+    score_at_fair_pct_per_month         REAL,                  -- reference
+    score_at_full_reward_pct_per_month  REAL,                  -- reference
 
     -- per-ticker fields (duplicated across horizon rows for query simplicity)
     fair_entry_low_usd                  REAL,
@@ -136,15 +139,21 @@ CREATE TABLE IF NOT EXISTS final_rankings (
     run_id                              INTEGER,
     final_rank                          INTEGER,
     final_horizon                       TEXT,
-    final_score                         REAL,
-    score_at_fair_3mo                   REAL,
-    score_at_fair_12mo                  REAL,
-    score_at_full_reward_3mo            REAL,
-    score_at_full_reward_12mo           REAL,
+    final_score                         REAL,                  -- D46: score_at_current at final_horizon
+    current_price_at_scoring_usd        REAL,                  -- D46
+    score_at_current_3mo                REAL,                  -- D46 — primary
+    score_at_current_12mo               REAL,                  -- D46 — primary
+    score_at_fair_3mo                   REAL,                  -- reference
+    score_at_fair_12mo                  REAL,                  -- reference
+    score_at_full_reward_3mo            REAL,                  -- reference
+    score_at_full_reward_12mo           REAL,                  -- reference
     target_price_3mo_usd                REAL,
     target_price_12mo_usd               REAL,
+    appreciation_from_current_3mo_pct   REAL,                  -- D46
+    appreciation_from_current_12mo_pct  REAL,                  -- D46
     appreciation_from_fair_3mo_pct      REAL,
     appreciation_from_fair_12mo_pct     REAL,
+    current_vs_fair_mid_pct             REAL,                  -- D46 — positioning gap
     time_to_catalyst_3mo_weeks          INTEGER,
     time_to_catalyst_12mo_weeks         INTEGER,
     probability_3mo                     REAL,
@@ -196,8 +205,40 @@ _INDEX_STATEMENTS = (
 )
 
 
+# Additive migrations — (table, column, type). Each runs ALTER TABLE ADD COLUMN
+# inside try/except so re-running on already-migrated DBs is a no-op.
+_ADDITIVE_MIGRATIONS = (
+    # D46 — current-price-anchored score (added 2026-04-25)
+    ("llm_scores",     "current_price_at_scoring_usd",         "REAL"),
+    ("llm_scores",     "appreciation_from_current_pct",        "REAL"),
+    ("llm_scores",     "score_at_current_pct_per_month",       "REAL"),
+    ("final_rankings", "current_price_at_scoring_usd",         "REAL"),
+    ("final_rankings", "score_at_current_3mo",                 "REAL"),
+    ("final_rankings", "score_at_current_12mo",                "REAL"),
+    ("final_rankings", "appreciation_from_current_3mo_pct",    "REAL"),
+    ("final_rankings", "appreciation_from_current_12mo_pct",   "REAL"),
+    ("final_rankings", "current_vs_fair_mid_pct",              "REAL"),
+)
+
+
+def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
+    """Best-effort ALTER TABLE ADD COLUMN for each pending column. SQLite
+    raises OperationalError if the column already exists — we swallow that.
+    """
+    for table, col, ctype in _ADDITIVE_MIGRATIONS:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+
 def init_llm_scores_schema(conn: sqlite3.Connection) -> None:
-    """Idempotent schema init for llm_scores.db. Safe on existing databases."""
+    """Idempotent schema init for llm_scores.db. Safe on existing databases.
+
+    Runs CREATE TABLE IF NOT EXISTS for fresh DBs, then applies additive
+    migrations for pre-existing DBs that may be missing newer columns.
+    """
     cur = conn.cursor()
     cur.execute(_CREATE_LLM_SCORES)
     cur.execute(_CREATE_LLM_RUNS)
@@ -206,6 +247,7 @@ def init_llm_scores_schema(conn: sqlite3.Connection) -> None:
     cur.execute(_CREATE_WEB_SEARCH_CACHE)
     for stmt in _INDEX_STATEMENTS:
         cur.execute(stmt)
+    _apply_additive_migrations(conn)
     conn.commit()
 
 
