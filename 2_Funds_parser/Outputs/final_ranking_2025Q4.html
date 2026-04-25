@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>M6 final ranking 2025Q4</title>
+<style>
+ body { font-family: -apple-system, Segoe UI, Helvetica, sans-serif;
+         margin: 1em; color: #222; }
+ h1 { margin-bottom: 0; }
+ .stamp { color: #888; font-size: 0.85em; margin-bottom: 1.5em; }
+ table { border-collapse: collapse; font-size: 0.85em; width: 100%; }
+ th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: right;
+          white-space: nowrap; }
+ th { background: #f0f0f0; cursor: pointer; user-select: none; text-align: center; }
+ th:hover { background: #e0e0e0; }
+ td:nth-child(2), td:nth-child(3) { text-align: left; }
+ .h3   { background: #fff3e0; }
+ .h12  { background: #e3f2fd; }
+ .heither { background: #f3e5f5; }
+</style>
+</head><body>
+<h1>Module 6 — final ranking</h1>
+<div class="stamp">Quarter <code>2025Q4</code> &middot;
+ run_id <code>4</code> &middot;
+ <a href="llm_responses_2025Q4.html">view LLM raw responses</a></div>
+<table id="rank">
+<thead><tr><th data-col='0'>Rank</th><th data-col='1'>Ticker</th><th data-col='2'>Industry</th><th data-col='3'>Horizon</th><th data-col='4'>Score (final, %/mo)</th><th data-col='5'>Score 3mo @fair</th><th data-col='6'>Score 12mo @fair</th><th data-col='7'>Score 3mo @full</th><th data-col='8'>Score 12mo @full</th><th data-col='9'>Fair entry $ range</th><th data-col='10'>Full-reward $ range</th><th data-col='11'>Target 3mo $</th><th data-col='12'>Target 12mo $</th><th data-col='13'>Prob 3mo</th><th data-col='14'>Prob 12mo</th><th data-col='15'>rNPV/share $</th><th data-col='16'>Moat</th><th data-col='17'>FDA POS lead</th><th data-col='18'>Market cap</th></tr></thead>
+<tbody><tr><td>1</td><td><b>NTLA</b></td><td>Biotechnology</td><td class='h12'>12mo</td><td style='color:#2e7d32; font-weight:600'>210.00</td><td>125.00</td><td>210.00</td><td>209.44</td><td>334.44</td><td>$5.50 – $7.50</td><td>$4.00 – $5.00</td><td>$19.00</td><td>$26.00</td><td>0.65</td><td>0.70</td><td>$7.83</td><td>0.90</td><td>0.82</td><td>$1.87B</td></tr>
+<tr><td>2</td><td><b>TCRX</b></td><td>Biotechnology</td><td class='h3'>3mo</td><td style='color:#2e7d32; font-weight:600'>21.59</td><td>21.59</td><td>11.40</td><td>44.41</td><td>20.14</td><td>$0.85 – $1.10</td><td>$0.55 – $0.75</td><td>$1.85</td><td>$2.80</td><td>0.50</td><td>0.45</td><td>$0.39</td><td>0.60</td><td>0.18</td><td>$72.1M</td></tr></tbody>
+</table>
+<script>
+// Tiny sortable: click header to toggle asc/desc.
+document.querySelectorAll('#rank thead th').forEach(th => {
+  th.addEventListener('click', () => {
+    const tbody = th.closest('table').tBodies[0];
+    const idx = +th.dataset.col;
+    const asc = th.dataset.dir !== 'asc';
+    th.dataset.dir = asc ? 'asc' : 'desc';
+    Array.from(tbody.rows)
+      .sort((a, b) => {
+        const av = a.cells[idx].innerText.replace(/[^-0-9.]/g, '');
+        const bv = b.cells[idx].innerText.replace(/[^-0-9.]/g, '');
+        const an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return asc ? an - bn : bn - an;
+        return asc ? a.cells[idx].innerText.localeCompare(b.cells[idx].innerText)
+                   : b.cells[idx].innerText.localeCompare(a.cells[idx].innerText);
+      })
+      .forEach(r => tbody.appendChild(r));
+  });
+});
+</script>
+</body></html>

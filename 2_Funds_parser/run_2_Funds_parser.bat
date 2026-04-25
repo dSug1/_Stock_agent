@@ -105,6 +105,33 @@ if /i "%RUN_M3%"=="y" (
                 )
                 echo.
                 echo [2_Funds_parser] Open Outputs\enrichment_report_*.html
+
+                REM --- Module 6: LLM scoring (user-gated, paid API) ---
+                echo.
+                echo [2_Funds_parser] Module 6 will call the Anthropic API.
+                echo                  You will be prompted to set D21/D27/D28/D29 gates,
+                echo                  shown a cost estimate, and asked to approve dispatch.
+                set /p RUN_M6_EST="Run cost estimator first (no API call, no charges)? [Y/n]: "
+                if /i not "%RUN_M6_EST%"=="n" (
+                    python scripts\6_estimate_cost.py
+                    if errorlevel 1 (
+                        echo [WARN] cost estimator failed; you can still run scoring.
+                    )
+                    echo.
+                    echo [2_Funds_parser] Open Outputs\cost_estimate_*.html
+                )
+                echo.
+                set /p RUN_M6="Proceed to Module 6 (LLM scoring, billed)? [y/N]: "
+                if /i "%RUN_M6%"=="y" (
+                    echo [2_Funds_parser] Module 6: dispatching to Anthropic...
+                    python scripts\6_score.py -v
+                    if errorlevel 1 (
+                        echo [FATAL] Module 6 failed.
+                        endlocal ^& exit /b 1
+                    )
+                    echo.
+                    echo [2_Funds_parser] Open Outputs\final_ranking_*.html
+                )
             )
         )
     )

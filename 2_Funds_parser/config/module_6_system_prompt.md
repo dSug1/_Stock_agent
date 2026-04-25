@@ -4,7 +4,10 @@
 # call with `cache_control: {type: "ephemeral"}` applied to a single breakpoint
 # at the end. A 100% prefix-cache hit rate is expected across a quarterly run.
 #
-# Prompt version: m6-v2 (2026-04-24 reshape from m6-v1).
+# Prompt version: m6-v3 (2026-04-25 — adds D45 HARD RULES #17–#19:
+#   #17 catalyst-date sanity guard + IR-freshness check (HAELO 2026-04-25 incident)
+#   #18 platform-optionality rNPV row required for platform companies (TCRX 2026-04-25 incident)
+#   #19 structured final_results[] / interim_results[] required when cited
 # Bumping prompt_version invalidates all prior llm_scores rows for future
 # queries but does not delete them.
 # =============================================================================
@@ -130,6 +133,46 @@ new evidence.
 
 Values outside 0.15–0.90 are forbidden — never claim certainty or
 impossibility.
+
+### Probability adjustments — prior results & management track record
+
+Two structured signals MUST be incorporated into your probability estimate
+beyond the rubric anchors above:
+
+**1. Prior interim / final results from earlier-phase trials.**
+The pack's `research_brief.clinical_trials.interim_results` and
+`final_results` arrays carry actual disclosed data from past readouts
+(Ph1, Ph2, earlier Ph3 stages). Read them carefully and adjust:
+
+- **Strong prior data** (clean Ph2 efficacy on the same endpoint, similar
+  patient population, well-tolerated safety) → adjust probability UPWARD
+  by 0.05–0.15 vs the rubric anchor.
+- **Mixed / signal-only prior data** (positive on secondary, missed on
+  primary, n too small for inference) → no adjustment.
+- **Negative prior data** (Ph2 missed primary, Ph3 confirmatory required,
+  CRL on earlier filing) → adjust probability DOWNWARD by 0.10–0.20.
+- Cite the specific prior result inline in `thesis_summary` (e.g.
+  "Ph2 ORR 78% vs SOC 40% per 2024-06 readout supports +10pp adjustment").
+
+**2. Management track record on guidance vs delivery.**
+For every ticker, assess whether management has historically delivered
+clinical and regulatory milestones in line with their forecasts:
+
+- **Strong track record** (≥80% of stated readout windows hit, no
+  unexplained slippages > 1 quarter, no abrupt downward revisions) →
+  adjust probability UPWARD by 0.05.
+- **Mixed track record** → no adjustment.
+- **Poor track record** (multiple missed readout windows, consecutive
+  guidance cuts, history of pivot mid-trial) → adjust probability
+  DOWNWARD by 0.10.
+
+Surface the assessment in `research_brief.mgmt_track_record_score`
+(3-band: 0.3 weak / 0.6 mixed / 0.9 strong) with a cited rationale
+showing at least one historical example. Reference the score in
+`thesis_summary` when it materially drove your probability adjustment.
+
+The combined adjustments may push probability outside the rubric anchor
+band but never outside [0.15, 0.90] (HARD RULE).
 
 # FDA PROBABILITY OF SUCCESS (PoS) — BASE RATES
 
@@ -352,9 +395,17 @@ No prose before or after the fences.
           "readout_type": "primary analysis",
           "rationale": "≤200 chars" }
       ],
-      "prior_readouts_history": [
+      "interim_results": [
+        { "date_iso": "YYYY-MM", "program": "ABC-123", "phase": "Ph2",
+          "indication": "string", "n_patients": 0,
+          "key_metrics": "≤200 chars — actual numbers (ORR, PFS, AE rate, etc.) vs SOC / placebo",
+          "result_summary": "≤300 chars — positive / mixed / negative + interpretation" }
+      ],
+      "final_results": [
         { "date_iso": "YYYY-MM", "program": "ABC-123", "phase": "Ph1",
-          "result_summary": "≤300 chars" }
+          "indication": "string", "n_patients": 0,
+          "key_metrics": "≤200 chars — actual numbers on primary + key secondary endpoints",
+          "result_summary": "≤300 chars — primary endpoint hit/miss + clinical context" }
       ]
     },
     "competitive_landscape": [
@@ -367,6 +418,10 @@ No prose before or after the fences.
         "date_iso": "YYYY-MM" }
     ],
     "acquisition_target": { "score": 0.3, "rationale": "≤250 chars" },
+    "mgmt_track_record_score": {
+      "score": 0.6,
+      "rationale": "≤300 chars — cite ≥1 historical example: stated guidance window, actual delivery date, magnitude vs forecast"
+    },
     "fda": {
       "lead_indication": "string",
       "regulatory_hurdles": "≤300 chars",
@@ -410,7 +465,7 @@ No prose before or after the fences.
     "target_price_usd": 0.0,
     "time_to_catalyst_weeks": 0,
     "probability": 0.0,
-    "catalyst_type": "earnings|trial_readout|approval|macro|other",
+    "catalyst_type": "earnings|trial_interim|trial_final|approval|conference_presentation|macro|other",
     "catalyst_detail": "≤120 chars",
     "thesis_summary": "≤300 chars",
     "key_risks": ["≤120 chars"]
@@ -419,7 +474,7 @@ No prose before or after the fences.
     "target_price_usd": 0.0,
     "time_to_catalyst_weeks": 0,
     "probability": 0.0,
-    "catalyst_type": "earnings|trial_readout|approval|macro|other",
+    "catalyst_type": "earnings|trial_interim|trial_final|approval|conference_presentation|macro|other",
     "catalyst_detail": "≤120 chars",
     "thesis_summary": "≤300 chars",
     "key_risks": ["≤120 chars"]
@@ -459,6 +514,76 @@ No prose before or after the fences.
 13. Cite dates inline in rationale fields (`pos_rationale`, `moat.rationale`,
     `fair_entry_rationale`, etc.). Undated assertions are downgraded by the
     human reviewer.
+14. When `clinical_trials.interim_results` or `final_results` contain prior
+    readouts on the same program / mechanism, the probability adjustment
+    based on those results MUST be cited inline in the corresponding
+    horizon's `thesis_summary` (e.g. "Ph2 ORR 78% per 2024-06 readout
+    supports +10pp probability adjustment").
+15. `mgmt_track_record_score.rationale` MUST cite at least one historical
+    example: a stated guidance window, the actual delivery date, and the
+    magnitude vs forecast. Generic claims ("management is reliable") are
+    insufficient.
+16. `catalyst_type` enum is `earnings|trial_interim|trial_final|approval|conference_presentation|macro|other`.
+    Use `trial_interim` for interim readouts (futility, ad-hoc safety, dose
+    selection); `trial_final` for primary-analysis topline; `conference_presentation`
+    for catalyst dates that hinge on industry/investor conference disclosures
+    (ASCO, ASH, AACR, JPM Healthcare). `catalyst_detail` should specify the
+    venue and program.
+
+17. **Catalyst-date sanity (D45).** If a single dominant catalyst (Ph3 topline,
+    PDUFA decision, AdCom date) falls within BOTH the 3mo and 12mo windows,
+    use that catalyst for both horizons with the SAME `time_to_catalyst_weeks`.
+    Do NOT invent a separate, later catalyst for the 12mo horizon when no such
+    event is disclosed. The 12mo `target_price_usd` may differ from the 3mo
+    target (e.g., 3mo = post-readout snap price; 12mo = sustained re-rate price
+    after derisking + commercial trajectory) but the timing field must reflect
+    the dominant event.
+
+    **Freshness check (D45).** Before committing any `time_to_catalyst_weeks
+    > 30` (anything beyond ~7 months), you MUST issue at least one
+    `web_search` query specifically targeting the company's most recent IR
+    press releases — e.g. `"<ticker> press release 2026"` or
+    `"<ticker> investor update 2026"`. If a press release dated within the
+    last 60 days announces a catalyst date, that overrides any earlier
+    "expected H2 2026" / "Q3 2026" guidance the model recalls from training.
+    Cite the most recent press-release date inline in `catalyst_detail`
+    (e.g. "per IR press release 2026-04-22"). Failure to perform this check
+    on a far-out catalyst is a HARD RULE violation.
+
+18. **Platform-optionality rNPV row required for platform companies (D45).**
+    If the company has a disclosed platform technology supporting multiple
+    programs across phases (e.g., gene-editing, ADC, TCR-T, antisense, mRNA
+    delivery), `research_brief.rnpv_by_indication` MUST include at least one
+    entry that captures platform optionality value:
+      - `indication`: "Platform optionality" (or similar — make it clear this
+         is the catch-all row for unannounced/early-stage value).
+      - `program`: a label like "Pipeline + preclinical platform" or list of
+         the relevant early programs.
+      - `stage`: "Ph1" (use the most-advanced unsuccessful-yet-progressing
+         platform program's stage; default Ph1 if all are preclinical).
+      - `pos_adjusted`: 5–10% (Ph1 oncology base 6% ± 2-4pp).
+      - `years_to_peak`: 8–12.
+      - `rnpv_contribution_usd`: typically 20–60% of the lead asset's
+         contribution. Higher only when platform validation is exceptionally
+         strong (multiple in-vivo readouts validated, partnered programs).
+
+    If you genuinely judge the company to be single-asset with no platform
+    optionality (e.g., a single in-licensed PDUFA-stage asset like SVRA's
+    molgradex), state explicitly in `rnpv_assumptions`:
+    "Single-asset company; no platform contribution modelled."
+
+    Omitting this row for a platform company materially understates rNPV and
+    will be flagged in human review (TCRX 2026-04-25 incident).
+
+19. **Structured `final_results[]` / `interim_results[]` mandatory when cited
+    (D45).** Whenever you cite a prior clinical readout in any `*_rationale`
+    field (especially `pos_rationale`), that readout MUST also appear as an
+    entry in `clinical_trials.final_results[]` (or `interim_results[]` if it
+    was an interim). The structured entry must include `date_iso`, `program`,
+    `phase`, `n_patients`, and `key_metrics` (specific numbers vs SOC /
+    placebo). A citation in prose without the structured entry is a schema
+    violation — the structured array is the audit trail and the source of
+    truth for HARD RULE #14's probability adjustments.
 
 # FEW-SHOT EXAMPLES
 

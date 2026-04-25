@@ -165,7 +165,7 @@ Primary key `(ticker, quarter, horizon, prompt_version, model)`. Re-runs at same
 | `target_price_usd` | REAL | LLM's expected price at catalyst |
 | `time_to_catalyst_weeks` | INTEGER | |
 | `probability` | REAL | continuous 0.15–0.90 (D42) |
-| `catalyst_type` | TEXT | enum: `earnings` \| `trial_readout` \| `approval` \| `macro` \| `other` |
+| `catalyst_type` | TEXT | enum (D43): `earnings` \| `trial_interim` \| `trial_final` \| `approval` \| `conference_presentation` \| `macro` \| `other` |
 | `catalyst_detail` | TEXT | ≤120 chars; specifies the actual catalyst |
 | `thesis_summary` | TEXT | ≤300 chars |
 | `key_risks_json` | TEXT | JSON-encoded `string[]` |
@@ -196,6 +196,7 @@ Per-ticker columns (same value for both horizon rows of a single `(ticker, run_i
 | `moat_score` | REAL | 3-band |
 | `technology_uniqueness_score` | REAL | 3-band |
 | `acquisition_target_score` | REAL | 3-band |
+| `mgmt_track_record_score` | REAL | 3-band (D43) |
 | `lead_indication` | TEXT | `research_brief.fda.lead_indication` |
 | `research_brief_json` | TEXT | full nested research_brief as TEXT for audit / HTML rendering |
 | `reasoning_trace` | TEXT | LLM's top-level reasoning block |
@@ -630,7 +631,7 @@ The LLM returns a **three-section** structured JSON object: research brief (qual
           "enrollment_target": 0, "enrollment_current": 0,
           "primary_endpoint": "≤200 chars" }
       ],
-      "interim_readouts_expected": [
+      "interim_readouts_expected": [   /* future expected interim */
         { "program": "string", "phase": "Ph1|Ph2|Ph3",
           "expected_date_iso": "YYYY-QQ or YYYY-MM",
           "readout_type": "interim efficacy|safety|futility",
@@ -642,9 +643,17 @@ The LLM returns a **three-section** structured JSON object: research brief (qual
           "readout_type": "primary analysis|topline|PFS|OS",
           "rationale": "≤200 chars" }
       ],
-      "prior_readouts_history": [
+      "interim_results": [             /* actual past interim readouts (D43) */
         { "date_iso": "YYYY-MM", "program": "string", "phase": "Ph1|Ph2|Ph3",
-          "result_summary": "≤300 chars — positive / mixed / negative, key numbers" }
+          "indication": "string", "n_patients": 0,
+          "key_metrics": "≤200 chars — actual numbers (ORR, PFS, AE rate, etc.) vs SOC / placebo",
+          "result_summary": "≤300 chars — positive / mixed / negative + interpretation" }
+      ],
+      "final_results": [               /* actual past final/topline readouts (D43) */
+        { "date_iso": "YYYY-MM", "program": "string", "phase": "Ph1|Ph2|Ph3",
+          "indication": "string", "n_patients": 0,
+          "key_metrics": "≤200 chars — actual numbers on primary + key secondary endpoints",
+          "result_summary": "≤300 chars — primary endpoint hit/miss + clinical context" }
       ]
     },
 
@@ -661,6 +670,11 @@ The LLM returns a **three-section** structured JSON object: research brief (qual
     "acquisition_target": {
       "score": 0.3,                          // 3-band 0.3/0.6/0.9
       "rationale": "≤250 chars — named strategic fits and rationale"
+    },
+
+    "mgmt_track_record_score": {             // D43 — feeds probability adjustment
+      "score": 0.6,                          // 3-band 0.3 weak / 0.6 mixed / 0.9 strong
+      "rationale": "≤300 chars — ≥1 historical example: stated guidance window, actual delivery, magnitude vs forecast"
     },
 
     "fda": {
@@ -711,7 +725,7 @@ The LLM returns a **three-section** structured JSON object: research brief (qual
     "target_price_usd": 0.0,                 // LLM's expected price at catalyst
     "time_to_catalyst_weeks": 0,             // integer ≥ 1
     "probability": 0.55,                     // continuous 0.15–0.90 (D42)
-    "catalyst_type": "earnings|trial_readout|approval|macro|other",
+    "catalyst_type": "earnings|trial_interim|trial_final|approval|conference_presentation|macro|other",
     "catalyst_detail": "≤120 chars",
     "thesis_summary": "≤300 chars",
     "key_risks": ["≤120 chars", "..."]

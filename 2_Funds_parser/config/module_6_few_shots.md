@@ -98,9 +98,14 @@ Score both horizons per the framework.
       "final_readouts_expected": [
         { "program": "NTLA-2002", "phase": "Ph3", "expected_date_iso": "2026-Q3", "readout_type": "primary analysis — HAE attack rate", "rationale": "Per mgmt Q4 2025 earnings call — topline H2 2026, consistent with 16-week primary endpoint timing post-enrollment completion" }
       ],
-      "prior_readouts_history": [
-        { "date_iso": "2024-06", "program": "NTLA-2002", "phase": "Ph2", "result_summary": "n=10, ~90% reduction in monthly HAE attacks vs baseline, well-tolerated single IV dose. Basis for Ph3 POS adjustment." },
-        { "date_iso": "2024-11", "program": "NTLA-2001", "phase": "Ph1", "result_summary": "94% mean serum TTR reduction at highest dose; supports Ph2 expansion. Regeneron option exercised Aug 2024." }
+      "interim_results": [],
+      "final_results": [
+        { "date_iso": "2024-06", "program": "NTLA-2002", "phase": "Ph2", "indication": "HAE",
+          "n_patients": 10, "key_metrics": "~90% reduction in monthly HAE attacks vs baseline; single IV dose; no DLT, mild infusion reactions only",
+          "result_summary": "POSITIVE Ph2: clean efficacy + safety on small sample. Upper-quartile precedent for rare-disease Ph2-to-Ph3. Drives +5pp POS adjustment vs base 75% rare-disease rate." },
+        { "date_iso": "2024-11", "program": "NTLA-2001", "phase": "Ph1", "indication": "ATTR amyloidosis",
+          "n_patients": 18, "key_metrics": "94% mean serum TTR reduction at highest dose, sustained ≥12 months; no Grade ≥3 AEs",
+          "result_summary": "POSITIVE Ph1: deep TTR knockdown comparable to Alnylam patisiran. Triggered Regeneron option exercise Aug 2024. Modest +2pp lift on Ph2 POS." }
       ]
     },
     "competitive_landscape": [
@@ -114,6 +119,10 @@ Score both horizons per the framework.
     "acquisition_target": {
       "score": 0.6,
       "rationale": "Plausible fit for Regeneron (already partnered on 2001), Pfizer (post-Seagen pipeline hole), AstraZeneca (rare-disease platform). No disclosed activity; founder CEO likely resistant pre-approval."
+    },
+    "mgmt_track_record_score": {
+      "score": 0.9,
+      "rationale": "Strong: NTLA-2002 Ph2 readout 2024-06 delivered within 1 quarter of guidance (mgmt Q4 2023 call: 'H1 2024'); NTLA-2001 Ph1 final 2024-11 hit upper end of guided H2 2024 window. No downward revisions on either program in trailing 3 years. CEO Leonard's Apr 2024 R&D day timeline guidance has held."
     },
     "fda": {
       "lead_indication": "Hereditary Angioedema (NTLA-2002)",
@@ -165,9 +174,9 @@ Score both horizons per the framework.
     "target_price_usd": 18.00,
     "time_to_catalyst_weeks": 10,
     "probability": 0.60,
-    "catalyst_type": "trial_readout",
-    "catalyst_detail": "HAELO enrollment completion + safety update expected Q2 2026 per CT.gov",
-    "thesis_summary": "Near-term torque is enrollment-completion confirmation + any additional Ph2 data presentation. Modest upside from current $15.87; priced-in expectation leaves <15% appreciation at fair-entry-adjusted base.",
+    "catalyst_type": "trial_interim",
+    "catalyst_detail": "HAELO Ph3 enrollment completion + safety interim update expected Q2 2026 per CT.gov",
+    "thesis_summary": "Near-term torque is enrollment-completion confirmation. Modest upside from current $15.87; priced-in expectation leaves <15% appreciation at fair-entry-adjusted base. Strong mgmt track record (score 0.9, prior readouts on time) anchors MEDIUM probability vs HIGH.",
     "key_risks": [
       "HAELO enrollment slippage signals competitive pressure from orals",
       "Sector beta pullback de-rates momentum names disproportionately",
@@ -178,9 +187,9 @@ Score both horizons per the framework.
     "target_price_usd": 28.00,
     "time_to_catalyst_weeks": 32,
     "probability": 0.75,
-    "catalyst_type": "trial_readout",
+    "catalyst_type": "trial_final",
     "catalyst_detail": "HAELO Ph3 primary analysis topline expected Q3 2026 — first in-vivo CRISPR pivotal",
-    "thesis_summary": "HAELO is category-defining: first in-vivo CRISPR Ph3. Scheduled endpoint (attack rate), Ph2 precedent (90% reduction n=10) supports 80% adjusted POS. Positive data re-rates HAE rNPV ($425M → ~$700M at derisked) and platform POS (8% → 12%+) — total rNPV to ~$1.5B, per-share $10.50. Target $28 assumes positive data + modest platform re-rating.",
+    "thesis_summary": "HAELO is category-defining: first in-vivo CRISPR Ph3. Scheduled endpoint, Ph2 final_results 2024-06 (n=10, ~90% attack reduction) supports +5pp POS adjustment to 80%; mgmt track record 0.9 adds further +0.05 to probability vs raw rubric. Positive data re-rates HAE rNPV ($425M → ~$700M derisked) + platform POS (8% → 12%+) — rNPV/share to ~$10.50.",
     "key_risks": [
       "HAELO primary endpoint miss — Ph2 n=10 has wide CI, Ph3 dilution common",
       "Durability < 52w raises regulatory bar; may require additional follow-up",
@@ -266,8 +275,12 @@ Score both horizons per the framework.
       "final_readouts_expected": [
         { "program": "molgradex", "phase": "Ph3", "expected_date_iso": "2026-Q2", "readout_type": "IMPALA-2 topline + BLA refile", "rationale": "Per mgmt Q4 2025 earnings call — topline Q2 2026, BLA refile H2 2026" }
       ],
-      "prior_readouts_history": [
-        { "date_iso": "2019-12", "program": "molgradex", "phase": "Ph3", "result_summary": "IMPALA-1 MISSED primary endpoint (A-a gradient change). Secondary endpoints supportive; FDA required confirmatory trial. Basis for IMPALA-2 POS haircut." }
+      "interim_results": [],
+      "final_results": [
+        { "date_iso": "2019-12", "program": "molgradex", "phase": "Ph3", "indication": "aPAP",
+          "n_patients": 138,
+          "key_metrics": "A-a gradient change vs placebo at week 24: NS (p=0.17). Secondary 6-min walk distance: +25m vs placebo (NS, p=0.09). St George's Respiratory Q: -7 vs -3 (positive trend, NS).",
+          "result_summary": "NEGATIVE Ph3 IMPALA-1: missed primary endpoint. Secondary endpoints supportive but underpowered. FDA 2020 communication required confirmatory trial — basis for IMPALA-2 POS haircut from 75% rare-disease base to 55% (refile-after-fail precedent ~50%)." }
       ]
     },
     "competitive_landscape": [
@@ -277,6 +290,10 @@ Score both horizons per the framework.
     "acquisition_target": {
       "score": 0.3,
       "rationale": "Single-asset orphan drug with modest TAM; acquirers typically wait until post-approval. No disclosed activity. Management has not signalled strategic review."
+    },
+    "mgmt_track_record_score": {
+      "score": 0.3,
+      "rationale": "Weak: IMPALA-1 missed primary 2019-12 after positive Ph2a (n=23) per mgmt 2017 guidance — major Ph3 magnitude reversal. Mgmt-guided BLA filing 2020-H2 slipped to IMPALA-2 confirmatory (3y delay). 2023 R&D-day timeline pulled topline forward by 1 quarter then re-slipped to Q2 2026."
     },
     "fda": {
       "lead_indication": "autoimmune Pulmonary Alveolar Proteinosis",
@@ -313,12 +330,12 @@ Score both horizons per the framework.
   "near_term_3mo": {
     "target_price_usd": 5.50,
     "time_to_catalyst_weeks": 10,
-    "probability": 0.45,
-    "catalyst_type": "trial_readout",
-    "catalyst_detail": "IMPALA-2 topline — primary A-a gradient endpoint readout expected Q2 2026",
-    "thesis_summary": "OVERRIDES broken_trend prior: near-term is dominated by IMPALA-2 topline. Positive data → tape snaps +30% from current. Miss → -60%. Expected-value blend at probability 0.45 (LOW-MEDIUM band, reflecting refile-after-fail precedent).",
+    "probability": 0.40,
+    "catalyst_type": "trial_final",
+    "catalyst_detail": "IMPALA-2 Ph3 topline — primary A-a gradient endpoint readout expected Q2 2026",
+    "thesis_summary": "OVERRIDES broken_trend prior: near-term dominated by IMPALA-2 topline. Probability 0.40 reflects: refile-after-fail precedent ~50% (rubric MEDIUM anchor), -10pp adjustment for IMPALA-1 2019 negative final_results on identical primary endpoint, -5pp for weak mgmt track record (score 0.3). Positive data → +30%; miss → -60%.",
     "key_risks": [
-      "IMPALA-2 misses primary endpoint — cut mcap ~70% to cash-plus",
+      "IMPALA-2 misses primary endpoint as IMPALA-1 did — cut mcap ~70% to cash-plus",
       "Endpoint split success (primary hit, secondary miss) creates regulatory ambiguity",
       "Pre-PDUFA manufacturing inspection finding leaks"
     ]
@@ -326,10 +343,10 @@ Score both horizons per the framework.
   "long_term_12mo": {
     "target_price_usd": 9.00,
     "time_to_catalyst_weeks": 40,
-    "probability": 0.50,
+    "probability": 0.45,
     "catalyst_type": "approval",
     "catalyst_detail": "Molgradex PDUFA autoimmune PAP expected H2 2026/Q1 2027 following IMPALA-2 topline + BLA refile",
-    "thesis_summary": "OVERRIDES broken_trend at 12mo: molgradex approval re-rates franchise to orphan peer multiples ($800M-$1.2B market). POS 0.50 reflects refile-after-fail precedent — NOT the 75% rare-disease base rate. Target $9 is EV blend of approval ($12, 50%) and CRL ($2, 50%).",
+    "thesis_summary": "OVERRIDES broken_trend at 12mo: molgradex approval re-rates franchise to orphan peer multiples ($800M-$1.2B market). POS 0.45 = 0.55 base (refile-after-fail) -10pp for IMPALA-1 negative final_results on same primary endpoint (2019-12 cited), no further mgmt adjust at 12mo (effect already in Ph3 priors). Target $9 is EV blend of approval ($12, 45%) and CRL ($2, 55%).",
     "key_risks": [
       "CRL on manufacturing or labeling — refile cycles typically 9-18 months, further dilution",
       "Single-asset risk: no pipeline diversification to absorb adverse PDUFA",

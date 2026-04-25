@@ -977,6 +977,106 @@ final_score   = max_H(score_at_fair_H)
 
 ---
 
+### D43 — m6-v2 review-feedback round: clinical trial results split, expanded catalyst enum, probability adjustments from prior results + management track record
+
+**Decision (review pass on m6-v2 prompt 2026-04-25):** Three additive changes to the m6-v2 schema and rubric, no breaking changes to D40–D42 contract.
+
+**1. `clinical_trials.prior_readouts_history` replaced by `interim_results` and `final_results`.** Two parallel arrays distinguish interim readouts (futility, ad-hoc safety, dose-selection mid-trial) from final/topline analyses. Each entry carries `key_metrics` (specific numerical results vs SOC/placebo, e.g. "ORR 78% vs 40%") in addition to `result_summary`. Interim and final results have different signal value for downstream probability inference — splitting them lets the prompt steer adjustments correctly.
+
+**2. `catalyst_type` enum expanded** from `{earnings, trial_readout, approval, macro, other}` to `{earnings, trial_interim, trial_final, approval, conference_presentation, macro, other}`. Replacements:
+- `trial_readout` → split into `trial_interim` (interim safety / efficacy / futility readouts) and `trial_final` (primary-analysis topline).
+- New `conference_presentation` for catalysts hinging on industry/investor conference disclosures (ASCO, ASH, AACR, JPM Healthcare). `catalyst_detail` should specify venue + program.
+
+**3. Probability adjustments anchored on prior results AND management track record.** The PROBABILITY RUBRIC now has a "Probability adjustments" sub-section (HARD RULE #14) that requires the model to:
+- Read `clinical_trials.interim_results` / `final_results` and adjust probability ±0.05 to ±0.20 based on prior-data quality (positive Ph2 → +5–15pp; mixed → 0; negative Ph2 → -10–20pp). Adjustment must be cited inline in `thesis_summary` with the specific prior result.
+- Score and inject `research_brief.mgmt_track_record_score` (3-band 0.3 weak / 0.6 mixed / 0.9 strong) based on historical delivery of stated guidance windows. ≥1 historical example required in `rationale`. Strong → +0.05; weak → -0.10. Adjustment cited in `thesis_summary` when material.
+
+Combined adjustments may push probability outside the rubric anchor band but never outside `[0.15, 0.90]` (HARD RULE #3 invariant preserved).
+
+**Schema additions** (additive — no migration needed):
+- `research_brief.clinical_trials.interim_results[]` and `final_results[]` (replace `prior_readouts_history`).
+- `research_brief.mgmt_track_record_score: {score, rationale}`.
+- New SQL column `mgmt_track_record_score REAL` on `llm_scores` (additive migration alongside D40 columns).
+
+**HARD RULES added** (#14, #15, #16):
+- #14 — probability adjustments based on `interim_results` / `final_results` MUST be cited inline.
+- #15 — `mgmt_track_record_score.rationale` MUST cite ≥1 historical example with stated window, actual delivery, magnitude vs forecast.
+- #16 — `catalyst_type` enum codified; `catalyst_detail` must specify venue + program for `conference_presentation`.
+
+**Rationale:**
+- User flagged that the m6-v2 schema was thin on actual past results — only narrative `result_summary` text, no structured key metrics. Splitting interim vs final and adding `key_metrics` makes the data load-bearing for probability inference.
+- Catalyst enum was too coarse — biotech investors distinguish interim (signal) from final (decisive) readouts; conference presentations (especially ASCO/ASH abstracts + oral presentations) move stocks materially and don't fit `trial_readout` cleanly.
+- Probability rubric in m6-v2 anchored only on catalyst scheduling/evidence base — missed the two strongest empirical predictors of biotech program success: prior-stage data quality and management's historical delivery vs guidance. Both are now load-bearing inputs to probability adjustments rather than free-text observations.
+
+**Few-shot updates:** NTLA and SVRA both updated to use the new schema. SVRA in particular demonstrates the pattern — IMPALA-1 negative `final_results` 2019-12 cited explicitly + weak `mgmt_track_record_score` (0.3) drives probability down from rubric MEDIUM (~0.55) to 0.40 on 3mo and 0.45 on 12mo. The cited adjustment chain is auditable.
+
+**Alternatives considered:**
+- Keep single `prior_readouts_history` array — rejected: doesn't surface the interim-vs-final distinction the model needs for probability inference; loses `key_metrics` structure.
+- Keep `trial_readout` enum and rely on `catalyst_detail` to disambiguate — rejected: enum filtering in reports is more useful when the type itself carries the signal; analytics queries `WHERE catalyst_type='trial_final'` are common.
+- Free-text "management quality" field — rejected: 3-band score with cited example is queryable and forces the model to anchor on specific evidence.
+- Hardcode probability adjustments in Python (apply mechanical formula based on `mgmt_track_record_score` + prior-readout quality) — rejected: forces the model to surface its reasoning; Python application would lose the cited rationale that drives the adjustment.
+
+---
+
+### D44 — Cost-estimator pricing recalibrated against empirical Anthropic billing (cache_creation 1.25 → 0.10)
+
+**Decision (2026-04-25):** `scoring.yaml::pricing.cache_creation_multiplier` lowered from `1.25` (Anthropic-docs nominal) to `0.10` (empirical, matching observed billing). The cost estimator overestimated by ~3× on Opus 4.7 + sync mode + web_search workloads with the docs-quoted value.
+
+**Empirical data (4 sync runs, 11 tickers total, 2026-04-25):**
+
+| Run | Tickers | Tokens (in/out/cache_r/cache_c) | My old computation | Actual Anthropic bill | Ratio |
+|---|---|---|---:|---:|---:|
+| 1 | TCRX/NTLA/ABEO (parse-failed) | n/a | n/a | $2.47 | — |
+| 2 | TCRX/NTLA/ABEO (success) | 5.7K / 22K / 344K / 309K | $8.09 | $2.81 | 2.88× |
+| 3 | GLUE/BCYC/GRAL (success) | 5.6K / 24K / 249K / 287K | $7.67 | $2.67 | 2.87× |
+| 4 | NTLA/TCRX (m6-v3, success) | 3.8K / 16K / 252K / 204K | $1.95 (new model) | $1.90 | 1.03× |
+
+Walk-back math at `cache_creation_multiplier = 0.10`:
+- Run 2 expected: output 22K × $75 + input 5.7K × $15 + cache_read 344K × $1.50 + cache_create 309K × $1.50 + 13 × $0.01 = **$2.85** vs actual $2.81. ✓
+- Run 3 expected: 24K × $75 + 5.6K × $15 + 249K × $1.50 + 287K × $1.50 + 12 × $0.01 = **$2.80** vs actual $2.67. ✓ (within 5%)
+
+**Why the multiplier appears 0.10×, not 1.25×:** unclear at the field-semantics level — Anthropic's docs describe `cache_creation_input_tokens` as billed at 1.25× input. Possible explanations: (a) Opus 4.7 uses a different cache-pricing tier than older Opus models; (b) multi-turn web_search workloads where each internal continuation re-caches the prefix incur a different billing path; (c) the SDK field name is misleading and these tokens are actually billed at the cache-read rate. Without an Anthropic billing-API endpoint to verify, the empirical match is the source of truth for now.
+
+**Consequence on production-feed estimate (98 tickers, default gates):**
+- Old estimate: ~$264
+- New estimate: ~$93
+
+**How to re-verify:** when next billing cycle arrives, compare `llm_runs.usd_cost_total` vs Anthropic invoice; if drift > 10%, retune the multiplier (one-line YAML edit).
+
+**Alternatives considered:**
+- Keep docs-quoted 1.25 and add a downstream `cost_calibration_factor: 0.35` knob — rejected: opaque; the multiplier is the right place to encode the discrepancy.
+- Wait for Anthropic to clarify field semantics — rejected: estimator is needed now for production-run sizing; can refine later.
+
+---
+
+### D45 — Prompt v3 (m6-v3): catalyst-date sanity + IR-freshness check + platform-rNPV row + structured `final_results[]` requirement
+
+**Decision (2026-04-25):** Bump `prompt_version: m6-v2 → m6-v3`. Three new HARD RULES added (#17, #18, #19) addressing two concrete failures observed in the 2026-04-25 live tests:
+
+**Failure A — NTLA HAELO timing miss.** Model returned `time_to_catalyst_weeks=30` for "HAELO Ph3 primary analysis topline expected Q3 2026" on the 12mo horizon — when in reality Intellia's IR press release the same week had announced topline for the immediately following week. Model did issue web_search queries but apparently relied on stale guidance ("expected H2 2026") rather than the most recent IR update. Effect: invented a phantom 12mo catalyst and grossly understated the dominant near-term event's significance.
+
+**Failure B — TCRX rNPV $0.15 from omitted platform optionality.** Model produced a valid rNPV of $20M / 132M FD shares = $0.15/share, citing only TSC-101 + TSC-102 indications. Model wrote "Platform/autoimmune optionality not modelled" in `rnpv_assumptions`. But TCRX has a TCR-T platform with multiple programs in development — the m6-v2 NTLA few-shot demonstrated the platform-optionality row pattern (worth 52% of NTLA's rNPV), and the model failed to generalize. Adding even a conservative platform row (~$50–100M) would raise rNPV/share to $0.55–$0.95.
+
+**HARD RULES added:**
+
+- **#17 (catalyst-date sanity + IR-freshness check).** If a single dominant catalyst falls within both 3mo and 12mo windows, use the SAME `time_to_catalyst_weeks` on both horizons (12mo `target_price_usd` may differ — sustained re-rate price). Do not invent later phantom catalysts. For any `time_to_catalyst_weeks > 30`, model MUST issue a `web_search` for the company's IR press releases dated within the last 60 days (e.g., `"<ticker> press release 2026"`) and cite the most recent press-release date inline in `catalyst_detail`.
+
+- **#18 (platform-optionality rNPV row required for platform companies).** Platform companies (gene-editing, ADC, TCR-T, antisense, mRNA delivery, etc.) MUST have at least one `rnpv_by_indication` entry labeled "Platform optionality" or similar, with conservative parameters (Ph1 stage, POS 5–10%, years_to_peak 8–12, rNPV contribution 20–60% of lead asset). Genuinely single-asset companies (e.g., SVRA's molgradex) are exempt but must explicitly state "Single-asset company; no platform contribution modelled" in `rnpv_assumptions`.
+
+- **#19 (structured `final_results[]` / `interim_results[]` mandatory when cited).** Any prior clinical readout cited in any `*_rationale` field MUST also appear as a structured entry in `clinical_trials.final_results[]` (or `interim_results[]`) with `date_iso`, `program`, `phase`, `n_patients`, `key_metrics`. The structured array is the audit trail for HARD RULE #14's probability adjustments — citation in prose alone is a schema violation.
+
+**Cache invalidation:** prompt_version bump to `m6-v3` invalidates m6-v2 cache hits on next run. Existing m6-v2 rows (ABEO, GLUE, BCYC, GRAL — 4 tickers) persist for audit but won't be returned as Tier A on re-run.
+
+**Targeted re-test:** Module 6 data for NTLA + TCRX explicitly erased (78 rows: 4 from llm_scores, 2 from llm_errors, 2 from final_rankings, 70 from web_search_cache). M5 context_packs intact (1 row each). Next M6 run on those two tickers will dispatch fresh under m6-v3 to verify the fixes.
+
+**Alternatives considered:**
+- Per-ticker IR-domain whitelist additions (e.g., `investors.intelliatx.com`) — rejected: doesn't scale to 133 tickers; already-allowlisted wires (GlobeNewswire / PR Newswire / BusinessWire) carry IR content. The fix is to make the model SEARCH for fresh content, not to whitelist more domains.
+- Move catalyst date to a separate "verification turn" (two-pass dispatch: research → score) — rejected: doubles cost surface; HARD RULE + freshness search query inside the same call is enough.
+- Hardcode platform detection in Python (industry × business model heuristic) — rejected: model is closer to the source data; HARD RULE forcing the explicit row is more honest.
+- Make `final_results[]` citation enforcement a soft warning rather than HARD RULE — rejected: was a soft warning in m6-v2 and the model treated it as optional; promotion to HARD RULE is the only fix.
+
+---
+
 ---
 
 ## Module 7 — Outcome Tracking

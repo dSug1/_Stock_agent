@@ -1,0 +1,81 @@
+# Module 6 — LLM scoring config.
+# Loaded by scripts/6_estimate_cost.py and scripts/6_score.py.
+#
+# Spec: spec/module_6_spec.md (m6-v2 reshape, 2026-04-24).
+# Decisions: decisions.md § D30–D43.
+
+# ---------------- Prompt / model ----------------
+model: claude-opus-4-7
+prompt_version: m6-v3                                  # m6-v3 (D45) adds: catalyst-date sanity + IR-freshness check + platform-rNPV row + structured final_results citation
+max_output_tokens: 10000      # raised after 3-ticker live test showed 6000 truncated mid-thesis
+system_prompt_path: config/module_6_system_prompt.md
+few_shot_examples_path: config/module_6_few_shots.md
+
+# ---------------- Gates (D21 / D27 / D28 / D29) ----------------
+# These are OVERRIDDEN by interactive prompts in scripts/6_score.py at runtime
+# (per D30). The values below are fallback defaults used by the cost estimator
+# (which is non-interactive in step B) and by --non-interactive runs.
+gates:
+  composite_best_min: 6.0
+  industry_allowlist:
+    - Biotechnology
+    - Drug Manufacturers - Specialty & Generic
+  market_cap_max_usd: 3700000000
+  rescue:
+    enabled: true
+    new_positions_min: 1
+    qoq_fund_count_change_min: 1
+    excluded_archetypes:
+      - extended_uptrend
+      - late_stage_extension
+      - broken_trend
+      - sustained_decline
+      - parabolic_blowoff
+
+# ---------------- Web search (D22 / D35) ----------------
+web_search:
+  enabled: true
+  max_uses: 12                     # full-scoring cap per ticker (D40 reshape)
+  max_uses_tier_b: 2               # light-refresh cap (D39)
+  whitelists_path: config/module_6_web_search_whitelists.yaml
+
+# ---------------- Cross-run caches (D36 / D37 / D38 / D39) ----------------
+cache:
+  web_search_lookback_days: 180    # prior search content injected if newer than this
+  prior_thesis_max_per_horizon: 2  # latest N prior llm_scores rows injected
+  default_cache_reuse: true        # tiered routing on by default; --force-refresh flips off
+  refresh_threshold_weeks_3mo: 4   # Tier B window for 3mo horizon
+  refresh_threshold_weeks_12mo: 8  # Tier B window for 12mo horizon
+  tier_b_max_output_tokens: 400    # output cap for light-refresh calls
+
+# ---------------- Dispatch ----------------
+dispatch:
+  mode: batch                      # "batch" | "sync"
+  sync_concurrency: 8              # only used in sync mode
+  poll_interval_s: 30              # batch polling cadence
+  timeout_s: 86400                 # batch hard deadline
+
+# ---------------- Rate / score calc ----------------
+rate:
+  tie_tolerance: 0.05              # final_horizon="either" when scores within 5%
+
+# ---------------- Failure handling ----------------
+failures:
+  abort_threshold_pct: 5.0         # abort run if >5% tickers fail to parse
+
+# ---------------- Pricing (for cost estimator) ----------------
+# All prices per 1M tokens, USD. VERIFY against Anthropic's current pricing
+# page at first run — Open Item #3 in the spec.
+pricing:
+  model: claude-opus-4-7
+  input_per_mtok: 15.00
+  output_per_mtok: 75.00
+  cache_read_multiplier: 0.10      # cache-read = 10% of input
+  # cache_creation_multiplier: empirically ~0.10 for Opus 4.7 web_search workloads
+  # — was set at the docs-quoted 1.25 before, but actual Anthropic billing on
+  # 2026-04-25 (3 sync calls × 3 tickers) implied ~0.10 (see decisions §D44).
+  cache_creation_multiplier: 0.10
+  batch_discount: 0.50             # 50% off all tokens via Message Batches API
+  web_search_per_1k: 10.00         # $10 per 1000 web_search queries
+  search_result_avg_tokens: 1500   # heuristic: avg tokens per web_search snippet result
+                                   # (used to estimate the input-token cost of search results)
