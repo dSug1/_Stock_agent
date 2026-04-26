@@ -54,9 +54,15 @@ _HASH_FIELDS: tuple[str, ...] = (
 )
 
 
-def compute_source_rank_hash(row: pd.Series) -> str:
-    """sha1 over the pack-relevant subset of a ranked row."""
+def compute_source_rank_hash(
+    row: pd.Series, *, fundamentals_fingerprint: str = "",
+) -> str:
+    """sha1 over the pack-relevant subset of a ranked row, plus an optional
+    M4c fundamentals fingerprint string (keeps M5 cache fresh when M4c
+    refreshes — D54)."""
     payload = {k: _to_hashable(row.get(k)) for k in _HASH_FIELDS}
+    if fundamentals_fingerprint:
+        payload["__fundamentals_fingerprint"] = fundamentals_fingerprint
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
@@ -129,10 +135,16 @@ def build_context_pack(
     pack_config: dict,
     source_rank_hash: str,
     built_at: str,
+    fundamentals: Optional[dict] = None,
 ) -> dict:
     """Assemble one context pack dict from a ranked row + prices extremes.
 
     Pure function. Does no I/O. Deterministic given the same inputs.
+
+    `fundamentals` (D54): M4c-supplied dict (financials + recent capital raises
+    + recent insider transactions). When non-None AND `available=True`, the
+    pack gains a top-level `fundamentals` key. When None or unavailable, the
+    key is omitted (back-compat with packs built before M4c).
     """
     pack_version: str = str(pack_config.get("pack_version", "m5-v1"))
 
@@ -258,7 +270,7 @@ def build_context_pack(
         currency_note_tail=currency_note_tail,
     )
 
-    return {
+    pack: dict = {
         "pack_version": pack_version,
         "pack_built_at": built_at,
         "source_rank_hash": source_rank_hash,
@@ -270,6 +282,10 @@ def build_context_pack(
         "near_term_3mo": near_term,
         "long_term_12mo": long_term,
     }
+    # D54: include the M4c-supplied fundamentals block when present + available.
+    if fundamentals and fundamentals.get("available"):
+        pack["fundamentals"] = fundamentals
+    return pack
 
 
 # ─── Horizon-section builder ─────────────────────────────────────────────────

@@ -1,0 +1,46 @@
+# Module 7 — outcome tracking + calibration configuration.
+# Spec:      spec/module_7_spec.md
+# Decisions: spec/decisions.md § D53 (and D55 for M7-α implementation).
+
+# Forward-price windows (weeks). Filled by scripts/7_track_outcomes.py.
+forward_windows_weeks: [1, 4, 12, 26, 52]
+
+# Trading-day search window when looking up the closest price.
+price_lookup_max_forward_days: 5
+
+# Cadence for the periodic runner. Informational; actual scheduling lives
+# in Task Scheduler / cron / run_2_Funds_parser.bat.
+collection_cadence: weekly
+
+# Outcome classification thresholds (multiplied against target_appreciation).
+# M7-β uses these; M7-α only writes predictions + forward_prices.
+outcome_thresholds:
+  target_hit_min_ratio:        0.95     # actual_appr >= 0.95 × target_appr
+  partial_move_min_ratio:      0.50
+  touched_min_max_ratio:       0.80     # max_appr >= 0.80 × target_appr
+  flat_min_appr:              -0.05
+
+# Per-component calibration thresholds (M7-γ).
+calibration:
+  min_n_for_verdict:          30        # N for "calibrated" verdict
+  min_n_for_suggestion:       50        # N for "suggested edit" verdict
+  bootstrap_iterations:       1000
+  ci_confidence:              0.95
+  delta_calibrated:           0.05
+  delta_mild:                 0.10
+
+# OLS regression (M7-γ v2).
+regression:
+  min_n:                      200
+  include_archetype_indicators: true
+  include_industry_indicators:  false
+
+# Survivorship: how many days without a price before flagging delisted.
+delist_grace_days:            90
+
+# Outputs
+report_path_pattern:           "Outputs/m7_calibration_{asof_date}.html"
+predictions_dashboard_pattern: "Outputs/m7_predictions_{quarter}.html"
+
+# Storage
+db_path: "data/outcomes.db"

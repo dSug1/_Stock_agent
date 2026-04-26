@@ -1,0 +1,44 @@
+# Module 4c — fundamentals enrichment configuration.
+# Spec: spec/module_4c_spec.md
+# Decisions: spec/decisions.md § D54.
+#
+# Scope: financials only. M4c does not touch ClinicalTrials.gov; clinical
+# data (interim/final readouts, past failures, ongoing trials) stays with
+# M6's web_search.
+
+# Industries that trigger M4c enrichment. Tickers in any other industry are
+# logged as 'skipped_non_biotech' in fetch_log; M5 emits packs without a
+# fundamentals block; M6 falls back to web_search.
+biotech_industries:
+  - "Biotechnology"
+  - "Drug Manufacturers - Specialty & Generic"
+  - "Drug Manufacturers - General"
+
+# Per-source TTLs (days). 0 disables the source for the run.
+ttls:
+  companyfacts_days:    30
+  submissions_days:      7
+  form4_days:           30      # poll cadence; rows are append-only
+  capital_raises_days:  30      # poll cadence; rows are append-only
+
+# Source toggles. Disable a source globally without touching code.
+sources:
+  companyfacts:    true
+  submissions:     true
+  form4:           true
+  capital_raises:  true
+
+# EDGAR client.
+edgar:
+  user_agent: "Stock-agent/1.0 sugitania846@gmail.com"
+  # Rate limit reused from src/layer_1/edgar_13f._EDGAR_LIMITER (9 req/s).
+  max_workers: 5
+
+# Form 4 fetch policy.
+form4:
+  lookback_days_first_run:  1095     # 3y on cold start
+  lookback_days_per_run:    180      # incremental window each run
+  ignore_txn_types:         ["other"]   # filtered at write time
+
+# Storage.
+db_path: "data/fundamentals.db"

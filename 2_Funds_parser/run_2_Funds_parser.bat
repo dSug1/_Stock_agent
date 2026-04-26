@@ -93,6 +93,19 @@ if /i "%RUN_M3%"=="y" (
             echo.
             echo [2_Funds_parser] Open Outputs\ranking_report_*.html
 
+            REM --- Module 4c: fundamentals enrichment (D54, free SEC EDGAR) ---
+            REM Default Y; skipping is harmless (M5 emits packs without
+            REM fundamentals block; M6 falls back to web_search).
+            echo.
+            set /p RUN_M4C="Proceed to Module 4c (free SEC fundamentals enrichment)? [Y/n]: "
+            if /i not "!RUN_M4C!"=="n" (
+                echo [2_Funds_parser] Module 4c: enriching fundamentals from SEC EDGAR...
+                python scripts\4c_enrich_fundamentals.py -v
+                if errorlevel 1 (
+                    echo [WARN] Module 4c reported errors; continuing to M5.
+                )
+            )
+
             REM --- Module 5: build context packs (user-gated) ---
             echo.
             set /p RUN_M5="Proceed to Module 5 (build context packs)? [y/N]: "

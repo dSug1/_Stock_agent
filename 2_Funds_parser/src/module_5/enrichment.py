@@ -25,6 +25,10 @@ import yaml
 from module_1 import ConfigError, PROJECT_ROOT, PipelineConfig, ensure_dir, resolve_quarter
 
 from . import packs_db
+from .fundamentals import (
+    fundamentals_fetched_at_for_hash,
+    load_fundamentals_for_tickers,
+)
 from .packs import (
     build_context_pack,
     compute_source_rank_hash,
@@ -145,6 +149,24 @@ def run_enrichment(
             prices_db_path,
         )
 
+    # ---- D54: fundamentals (bulk query against data/fundamentals.db)
+    fundamentals_db_path = config.paths.data_dir / "fundamentals.db"
+    fundamentals_by_ticker: dict[str, dict] = {}
+    if fundamentals_db_path.exists() and tickers:
+        fundamentals_by_ticker = load_fundamentals_for_tickers(
+            fundamentals_db_path, tickers,
+        )
+        n_avail = sum(1 for v in fundamentals_by_ticker.values() if v.get("available"))
+        log.info(
+            "fundamentals: %d/%d tickers have M4c data (db=%s)",
+            n_avail, len(tickers), fundamentals_db_path,
+        )
+    else:
+        log.info(
+            "fundamentals: %s missing — packs will omit the fundamentals block",
+            fundamentals_db_path,
+        )
+
     # ---- packs DB
     store_cfg = enrichment_cfg["store"]
     db_path = PROJECT_ROOT / str(store_cfg.get("db_path", "context_packs.db"))
@@ -161,7 +183,11 @@ def run_enrichment(
         # Single transaction over the whole run (D24): atomicity + speed.
         for _, row in to_enrich.iterrows():
             ticker = str(row["ticker"])
-            src_hash = compute_source_rank_hash(row)
+            fundamentals = fundamentals_by_ticker.get(ticker)
+            src_hash = compute_source_rank_hash(
+                row,
+                fundamentals_fingerprint=fundamentals_fetched_at_for_hash(fundamentals),
+            )
 
             cached = None
             if cache_enabled and not force_refresh:
@@ -190,6 +216,7 @@ def run_enrichment(
                         pack_config=pack_cfg,
                         source_rank_hash=src_hash,
                         built_at=built_at,
+                        fundamentals=fundamentals,
                     )
                 except Exception as e:
                     log.exception("Failed to build pack for %s: %s", ticker, e)

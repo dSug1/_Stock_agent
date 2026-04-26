@@ -1077,6 +1077,33 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D54 — Module 4c fundamentals enrichment (biotech, financials-only)
+
+**Status: 📋 Draft specification (2026-04-26). Build authorised.**
+Spec: [module_4c_spec.md](module_4c_spec.md). New step between M4b (rank) and M5 (packs). Pre-fetches **financial** data only — SEC EDGAR companyfacts XBRL (cash, R&D, G&A, op CF, shares), submissions, Form 4 insider transactions, 8-K Items 1.01/3.02 capital raises, S-3 shelf capacity — for tickers in `biotech_industries:`, into a new `data/fundamentals.db` with four tables (`financials`, `capital_raises`, `insider_transactions`, `fetch_log`).
+
+**Clinical-trial data is OUT of scope.** M4c does NOT call ClinicalTrials.gov; does NOT parse `past_failures`; does NOT collect interim/final readouts. Those continue to be populated by M6's `web_search`. Rationale: M6 is better positioned for clinical synthesis — multi-source weighting, recency checks against IR press releases, mechanism interpretation, and the structured `final_results[]`/`interim_results[]` arrays that HARD RULE #19 (D45) requires citing inline. Pre-fetching clinical data would either duplicate that effort or break the citation contract.
+
+**Why this design:**
+- **Free retrieval, structured cache for the determinable bits.** SEC is free. Cash, runway, raises, insiders are deterministic — XBRL + Form 4 + 8-K parsing is reliable. LLM web_search occasionally hallucinated runway months in early m6-v3 runs; XBRL pinned to a specific period is auditable and won't drift run-to-run.
+- **Cost win is modest.** ~20% per-ticker reduction (~$0.95 → ~$0.78), full feed ~$93 → ~$76. The big chunk of M6's budget (clinical trials, catalysts, moat, TAM) stays in M6 by design.
+- **Per-row TTL, not per-quarter wholesale refresh.** Mirrors M4a (`ticker_snapshot.fetched_at` + 7-day TTL) and M2 (append-only filings). Per-source TTLs: companyfacts 30d, submissions 7d, Form 4 / capital_raises append-only-by-accession-#.
+- **EDGAR limiter is reused, not duplicated.** `src/layer_1/edgar_13f._EDGAR_LIMITER` is already process-global at 9 req/s under SEC's 10 req/s cap. M4c imports it directly so concurrent M2+M4c runs share the same bucket.
+- **All raw responses live in TEXT columns inside `data/fundamentals.db`** per D32 (no `*.json` files on disk).
+- **Biotech-only first build.** Industries gated to `Biotechnology`, `Drug Manufacturers - Specialty & Generic`, `Drug Manufacturers - General`. Non-biotech tickers logged as `skipped_non_biotech`; M5 emits packs without the fundamentals block; M6 falls back to web_search.
+- **Fail-open everywhere.** A 404 / 5xx / parse failure on one (ticker, source) writes `fetch_log.last_status='failed'` and continues. Re-runs retry the failed pairs.
+
+**M5 wiring landed in this build:**
+- New `src/module_5/fundamentals.py::load_fundamentals_for_tickers` reads `data/fundamentals.db` per quarter run.
+- `build_context_pack(..., fundamentals=...)` adds a top-level `fundamentals` block to the pack (omitted when missing → backwards-compatible).
+- `_HASH_FIELDS` extends with `fundamentals_fetched_at` (one ISO string per ticker) so refreshes invalidate M5 cache for that ticker only.
+
+**Deferred to a separate paid session — m6-v4 prompt revision** that has the LLM read `pack.fundamentals.financials.*` as authoritative for cash/runway/raises/insiders and lower `max_uses` from 12 to ~10. Out of scope for M4c itself. Clinical-trial fields stay LLM-emitted in m6-v4.
+
+**Build trigger:** Now (2026-04-26 session). Predecessor to M7-α — both modules build "data infrastructure that compounds over time"; M4c data feeds richer M5 packs immediately, M7-α data accrues for future calibration reports.
+
+---
+
 ### D53 — Module 7 outcome tracking + per-component calibration feedback loop
 
 **Status: 📋 Draft specification (2026-04-25). Not implemented.**
