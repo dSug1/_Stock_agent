@@ -1077,6 +1077,46 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D55 — Module 7-alpha implementation (snapshot + forward-price collection)
+
+**Status: ✅ Implemented 2026-04-26.** Phase α of D53's three-phase plan. Spec: [module_7_spec.md](module_7_spec.md). M7-β (outcome classification + per-archetype/decile reports) and M7-γ (per-component calibration with co-firing-aware regression) deferred until 1q+ of α data has accrued.
+
+**What was built:**
+- New `data/outcomes.db` with three tables (`predictions`, `forward_prices`, `outcomes`). M7-α writes the first two; `outcomes` table is created (M7-β fills it).
+- `src/module_7/{__init__.py, outcomes_db.py, snapshot.py, collect.py}`.
+- `scripts/7_track_outcomes.py` — CLI with `--asof`, `--quarter`, `--backfill-runs all|N,M,...`, `--collect`, `--no-collect`, `--dry-run`, `-v`.
+- `config/module_7.yaml` — windows `[1, 4, 12, 26, 52]` weeks, lookup max 5 forward days, delist grace 90 days, classification + calibration thresholds (used by M7-β/γ when those land).
+
+**Snapshot hooks landed in three M6 entry points (all fail-open with try/except):**
+- `scripts/6_score.py` step 10, after `apply_modifiers_to_run` and before `close_run`. Captures live LLM dispatches into `outcomes.db.predictions` immediately.
+- `scripts/6b_apply_modifiers.py` after each `apply_modifiers_to_run` per (run, quarter) — re-snapshots so the predictions table tracks the latest `score_modifier_json` whenever `scoring_modifier.yaml` is tuned and the offline reapply runs.
+- `scripts/6_recompute_scores.py` after the D46 score recompute + modifier re-apply per (run, quarter).
+- All three are idempotent — re-snapshotting wipes prior rows for the same run_id and re-inserts.
+
+**`score_modifier_json` is snapshotted verbatim.** Per spec: this is the canonical record of "what factors fired with what values AT THE TIME of the prediction." Required because `scoring_modifier.yaml` edits + `6b_apply_modifiers.py` reruns can retroactively rewrite the live `llm_scores.score_modifier_json`. Without M7's snapshot, the audit trail evaporates and per-component calibration (M7-γ) becomes meaningless.
+
+**Backfill 2026-04-26.** Snapshots written for all 10 historical runs (run_id 1-10). Runs 1/2/3/5/6/10 had no scoreable rows (estimate-only or pre-D46 schema). Runs 4/7/8/9 produced 14 prediction rows total covering all 7 dispatched tickers (NTLA, TCRX, BCYC, GLUE, GRAL, LEGN, ABEO) × both horizons.
+
+**Forward-price collection** (`collect_forward_prices`):
+- Reads `data/prices.db` (M4b's authoritative source); no yfinance fallback yet (yfinance retired-imminent per memory `project_data_provider_switch`).
+- Idempotent — only writes missing cells whose `target_asof = scoring_date + weeks_offset × 7d` has already elapsed.
+- Per (ticker, scoring_date, weeks_offset) writes the closest forward trading-day close (within `price_lookup_max_forward_days = 5`), max-close over the [scoring_date, asof] window, return_pct, return_per_month.
+- Tickers with no `prices.db` rows newer than `delist_grace_days = 90d` are flagged `delisted = 1` so the cell isn't retried forever.
+- First sweep on 2026-04-26: 0 cells eligible (all 14 predictions are < 2 days old; the +1w window hasn't elapsed yet for any of them). Expected.
+
+**Bat wiring:** `scripts\7_track_outcomes.py -v` runs after Module 6 inside `run_2_Funds_parser.bat`. Free, idempotent, fail-open — never blocks the M6 path even if `prices.db` is missing or empty.
+
+**Why this design (recap of D53 + observed in α build):**
+- **Snapshot first, report later.** Without snapshots starting NOW, M7-β/γ have nothing to chew on. The half-day cost of M7-α is the price of admission for any future calibration work.
+- **Decoupled phases.** M7-β and M7-γ add only read-side code; the schema doesn't change between phases. M7-α can ship months before β/γ are even started, with no rework.
+- **Persisted modifier snapshots solve the temporal problem.** YAML edits + reapplies otherwise overwrite the live `score_modifier_json`. M7's snapshot is immutable per (run, ticker, horizon) until the next deliberate re-snapshot.
+- **Advisory only (D12 reaffirmed).** M7 never auto-modifies `archetypes.yaml`, `scoring_modifier.yaml`, or M6 prompts. Reports surface evidence; the user decides.
+- **No paid API spend.** M7 reads `prices.db` (M4b) only; no yfinance-fallback yet. Future delisted-ticker fallback may add yfinance; deferred until M7-β.
+
+**Build trigger:** Now (2026-04-26 session). Predecessor to M7-β/γ which require ≥1 quarter / ≥30 predictions per band of accumulated data before they're meaningful.
+
+---
+
 ### D54 — Module 4c fundamentals enrichment (biotech, financials-only)
 
 **Status: 📋 Draft specification (2026-04-26). Build authorised.**

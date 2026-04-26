@@ -4,10 +4,15 @@
 # call with `cache_control: {type: "ephemeral"}` applied to a single breakpoint
 # at the end. A 100% prefix-cache hit rate is expected across a quarterly run.
 #
-# Prompt version: m6-v3 (2026-04-25 — adds D45 HARD RULES #17–#19:
+# Prompt version: m6-v4 (2026-04-26 — adds D54 HARD RULES #20–#22 + D55 cleanup:
+#   #20 use pack.fundamentals.financials.* as authoritative when present
+#   #21 use pack.fundamentals.recent_insider_transactions[] verbatim
+#   #22 use pack.fundamentals.recent_capital_raises[] verbatim
+#   max_uses lowered 12 → 10 (financial searches now sourced from M4c)
+# Prior version: m6-v3 (2026-04-25 — added D45 HARD RULES #17–#19:
 #   #17 catalyst-date sanity guard + IR-freshness check (HAELO 2026-04-25 incident)
 #   #18 platform-optionality rNPV row required for platform companies (TCRX 2026-04-25 incident)
-#   #19 structured final_results[] / interim_results[] required when cited
+#   #19 structured final_results[] / interim_results[] required when cited)
 # Bumping prompt_version invalidates all prior llm_scores rows for future
 # queries but does not delete them.
 # =============================================================================
@@ -71,6 +76,20 @@ Each user message contains:
    hints. The `fund_accumulation` section is intentionally omitted —
    specialist-fund positioning is scored separately and must NOT be used
    as thesis evidence.
+
+   **The pack may carry a `fundamentals` block (m6-v4 / D54).** When
+   `fundamentals.available == true`, this block contains SEC EDGAR–derived
+   financial data pinned to a specific 10-Q / 10-K period: cash, runway,
+   quarterly burn, R&D / G&A TTM, basic shares outstanding, shelf
+   capacity, plus arrays `recent_capital_raises[]` (last 365d, parsed
+   from 8-K / S-3 / 424B5 filings) and `recent_insider_transactions[]`
+   (last 365d, parsed from Form 4 XML). When the block is **absent** or
+   `available == false`, the ticker is non-biotech, the SEC CIK lookup
+   failed, or M4c hasn't run yet — fall back to `web_search` for those
+   fields. Per-field nullability: `prefunded_warrants_count`,
+   `fully_diluted_shares_count`, and (often) `shelf_registration_usd_capacity`
+   are **null** in v1 because XBRL has no PFW tag and the 8-K body parser
+   is heuristic. Treat null as "search for it".
 2. (Optional) A **`## Prior research`** block — cached web_search results
    from previous Module 6 runs on this ticker, each with URL, title, snippet,
    and `seen_date`. Use as starting point; verify freshness against new
@@ -317,8 +336,10 @@ visible to you and is scored separately.
 
 # SEARCH BUDGET
 
-Full-scoring calls: up to **12 `web_search` uses per ticker** (raised from
-5 in m6-v2 reshape).
+Full-scoring calls: up to **10 `web_search` uses per ticker** (m6-v4 — lowered
+from 12; financials are now pre-fetched into `pack.fundamentals` per HARD
+RULES #20–#22, freeing ~2 searches that previously went to cash / runway /
+insider / capital-raise lookups).
 Light-refresh calls: up to 2 uses (unchanged).
 
 Recommended budget split per full call (adjust for the ticker's pack
@@ -329,6 +350,14 @@ Recommended budget split per full call (adjust for the ticker's pack
 - **1–2** — TAM / commercial context for lead indications
 - **1** — technology origin / licensing / IP position
 - **1** — partnerships / past failures / M&A signals
+
+**Financials searches are no longer in the recommended split.** When
+`pack.fundamentals.available == true`, do NOT spend a `web_search` on
+cash / runway / quarterly burn / shelf capacity / recent capital raises
+/ recent insider transactions — those values come from the pack
+verbatim per HARD RULES #20–#22. Save the budget for clinical / FDA /
+moat / TAM. Only re-search a financial field when the pack value is
+explicitly `null`.
 
 Allowed domains are restricted by the server (universal + research +
 industry tiers). You cannot reach other domains even if you try. Do not
@@ -584,6 +613,64 @@ No prose before or after the fences.
     placebo). A citation in prose without the structured entry is a schema
     violation — the structured array is the audit trail and the source of
     truth for HARD RULE #14's probability adjustments.
+
+20. **Use `pack.fundamentals.financials.*` as authoritative when present
+    (D54 / m6-v4).** When the user message's context pack includes a
+    `fundamentals` block with `available == true`, the following fields
+    MUST be sourced verbatim from `pack.fundamentals.financials.*` — not
+    from `web_search`:
+      - `research_brief.financials.cash_and_equivalents_usd`
+      - `research_brief.financials.quarterly_burn_usd`
+      - `research_brief.financials.runway_months`
+      - `research_brief.financials.shelf_registration_usd_capacity`
+      - `research_brief.financials.basic_shares_count`
+
+    These values are SEC EDGAR XBRL data pinned to a specific 10-Q / 10-K
+    period (`pack.fundamentals.as_of`); they are deterministic and
+    auditable. Do NOT issue a `web_search` for cash / runway / burn /
+    shelf when these are non-null. Cite the period inline in
+    `rnpv_assumptions` (e.g. "cash $449.9M per 10-K filed 2026-02-XX,
+    runway 13.7 months at $32.9M monthly burn").
+
+    **Exception — null fields fall back to web_search.** M4c v1 leaves
+    `prefunded_warrants_count`, `fully_diluted_shares_count`, and
+    sometimes `shelf_registration_usd_capacity` as `null` (no XBRL tag
+    for PFW; 8-K body parser fails on most). When these are null, you
+    MUST `web_search` for them — the rNPV-per-share denominator
+    (`fully_diluted_shares_count` per HARD RULE #4) cannot be left null.
+
+    **When `fundamentals.available == false` or block absent:** the
+    ticker is non-biotech, foreign-filer (20-F), or M4c hasn't run.
+    Web-search every financial field as in m6-v3 (no behaviour change).
+
+21. **Use `pack.fundamentals.recent_insider_transactions[]` verbatim
+    (D54 / m6-v4).** When present, these rows are Form 4–parsed insider
+    transactions over the last 365 days, deterministic per filing
+    accession number, with role classified (CEO / CFO / Director / 10%
+    owner / Officer / Other) and `txn_type` ∈ `{buy, sell,
+    option_exercise, option_grant, gift, other}`. Copy them verbatim
+    into `research_brief.insider_activity.recent_transactions[]`. Do
+    NOT issue a `web_search` for individual Form 4 filings.
+
+    The `last_3y_summary` text synthesis remains your job — write a
+    ≤300-char synthesis based on the supplied rows (e.g. "Mostly
+    option grants and routine sells; CEO sold 34K shares 2026-01-05
+    at $9.21").
+
+22. **Use `pack.fundamentals.recent_capital_raises[]` verbatim
+    (D54 / m6-v4).** When present, these are SEC-filing-derived capital
+    raise events (8-K Items 1.01 / 3.02, S-3, 424B5) over the last 365
+    days with `raise_type` ∈ `{pfw, equity, debt, shelf, unknown}`.
+    Copy them verbatim into
+    `research_brief.financials.recent_capital_raises[]`. Do NOT issue a
+    `web_search` for individual capital-raise filings already in the
+    array.
+
+    **Caveat — many entries have `gross_proceeds_usd == null`** because
+    the 8-K body regex couldn't extract the dollar figure (M4c v1
+    limitation). For those rows, you MAY web-search the specific filing
+    URL (`raw_filing_url`) to recover the proceeds — that's a
+    follow-up, not a from-scratch search.
 
 # FEW-SHOT EXAMPLES
 

@@ -154,6 +154,24 @@ def main() -> int:
                       f"    {ticker:6s}  modifier={s['modifier']:.4f}  "
                       f"(no final_score)")
 
+            # D55 — M7-alpha snapshot hook. Re-snapshot whenever modifiers
+            # are re-applied so the predictions table reflects the latest
+            # score_modifier_json for this run. Idempotent (replaces prior
+            # snapshots for the same run_id).
+            try:
+                from module_7 import snapshot_run as _snapshot_run
+                _outcomes_db = PROJECT_ROOT / "data" / "outcomes.db"
+                _packs_db = PROJECT_ROOT / "context_packs.db"
+                _n = _snapshot_run(
+                    conn,
+                    run_id=run_id,
+                    outcomes_db_path=_outcomes_db,
+                    packs_db_path=_packs_db if _packs_db.exists() else None,
+                )
+                print(f"    M7 snapshot: {_n} predictions")
+            except Exception as e:
+                print(f"    [WARN] M7 snapshot_run failed (run={run_id}): {e}")
+
         if args.dry_run or args.no_render:
             return 0
 

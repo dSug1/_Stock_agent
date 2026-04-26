@@ -145,6 +145,18 @@ if /i "%RUN_M3%"=="y" (
                     echo.
                     echo [2_Funds_parser] Final ranking written to Outputs\final_ranking_*.html
                     echo.
+                    REM --- Module 7-alpha: forward-price collection (D55) ---
+                    REM Snapshots are auto-captured by 6_score.py step 10. Here
+                    REM we just sweep forward_prices for elapsed windows. Free,
+                    REM idempotent, fail-open.
+                    echo.
+                    echo [2_Funds_parser] Module 7-alpha: collecting forward prices...
+                    python scripts\7_track_outcomes.py -v
+                    if errorlevel 1 (
+                        echo [WARN] Module 7 reported errors; continuing.
+                    )
+
+                    echo.
                     set /p RUN_M6_EDIT="Open the selection editor (local HTTP server)? [y/N]: "
                     if /i "!RUN_M6_EDIT!"=="y" (
                         REM D49 — local HTTP server + sidecar JSON. Serves the HTML

@@ -6,7 +6,7 @@
 
 # ---------------- Prompt / model ----------------
 model: claude-opus-4-7
-prompt_version: m6-v3                                  # m6-v3 (D45) adds: catalyst-date sanity + IR-freshness check + platform-rNPV row + structured final_results citation
+prompt_version: m6-v4                                  # m6-v4 (D54) adds HARD RULES #20-22: use pack.fundamentals.{financials,recent_insider_transactions,recent_capital_raises} verbatim; m6-v3 (D45) added catalyst-date sanity + IR-freshness check + platform-rNPV row + structured final_results citation
 max_output_tokens: 10000      # raised after 3-ticker live test showed 6000 truncated mid-thesis
 system_prompt_path: config/module_6_system_prompt.md
 few_shot_examples_path: config/module_6_few_shots.md
@@ -35,7 +35,7 @@ gates:
 # ---------------- Web search (D22 / D35) ----------------
 web_search:
   enabled: true
-  max_uses: 12                     # full-scoring cap per ticker (D40 reshape)
+  max_uses: 10                     # m6-v4: lowered 12 → 10 (D54 — financials now in pack.fundamentals); m6-v3 had 12 (D40 reshape)
   max_uses_tier_b: 2               # light-refresh cap (D39)
   whitelists_path: config/module_6_web_search_whitelists.yaml
 

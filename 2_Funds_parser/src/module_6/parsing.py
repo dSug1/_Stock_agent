@@ -227,9 +227,15 @@ def _validate_research_brief(brief: dict) -> None:
     fin = _require(brief, "financials", "research_brief")
     if not isinstance(fin, dict):
         raise ParseError("schema_violation", "research_brief.financials must be a dict")
-    fdsc = float(_require(fin, "fully_diluted_shares_count", "financials"))
+    # m6-v4 (D54): the LLM may emit null for prefunded_warrants_count when
+    # M4c didn't extract PFW data and the LLM judged there are none. Coerce
+    # null → 0 so HARD RULE #4 still validates with pfw=0. Same for FDSC
+    # null → basic_shares_count (degenerate but writable).
+    pfw_raw = fin.get("prefunded_warrants_count")
+    pfw = 0.0 if pfw_raw is None else float(pfw_raw)
     bsc = float(_require(fin, "basic_shares_count", "financials"))
-    pfw = float(_require(fin, "prefunded_warrants_count", "financials"))
+    fdsc_raw = fin.get("fully_diluted_shares_count")
+    fdsc = (bsc + pfw) if fdsc_raw is None else float(fdsc_raw)
     # HARD RULE #4 — fully diluted MUST include PFWs (allow 1% slack for vested options inclusion)
     if fdsc + 1.0 < bsc + pfw:
         raise ParseError(

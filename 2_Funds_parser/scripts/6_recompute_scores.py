@@ -329,6 +329,24 @@ def main() -> int:
                     )
                 except Exception as e:
                     _LOG.warning("apply_modifiers_to_run failed (run=%s): %s", run_id, e)
+
+                # D55 — M7-alpha snapshot hook. Re-snapshot every touched
+                # run so historical predictions reflect the recomputed
+                # scores + modifiers.
+                try:
+                    from module_7 import snapshot_run as _snapshot_run
+                    _outcomes_db = PROJECT_ROOT / "data" / "outcomes.db"
+                    _packs_db = PROJECT_ROOT / "context_packs.db"
+                    _n = _snapshot_run(
+                        conn,
+                        run_id=run_id,
+                        outcomes_db_path=_outcomes_db,
+                        packs_db_path=_packs_db if _packs_db.exists() else None,
+                    )
+                    _LOG.info("M7 snapshot re-written: %d predictions for run %d",
+                              _n, run_id)
+                except Exception as e:
+                    _LOG.warning("M7 snapshot_run failed (run=%s): %s", run_id, e)
                 conn.commit()
                 # Re-render the merged HTML (with arrow-expand details) + XLSX.
                 conn.row_factory = sqlite3.Row

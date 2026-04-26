@@ -376,7 +376,7 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         + ["match_confidence"]
         + composite_cols
         + ["best_horizon", "composite_best",
-           "fund_count", "market_cap", "sector",
+           "fund_count", "market_cap", "sector", "industry",
            "R_4", "R_12", "R_26", "R_52",
            "R_4_over_R_12", "R_12_over_R_26", "R_26_over_R_52",
            "young_ticker_flag"]
@@ -422,14 +422,19 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         fc_val = r.get("fund_count")
         mc_val = r.get("market_cap")
         sec_val = r.get("sector")
+        ind_val = r.get("industry")
         fc_attr = f" data-fund-count='{int(fc_val)}'" if pd.notna(fc_val) else ""
         mc_attr = f" data-market-cap='{int(mc_val)}'" if pd.notna(mc_val) else ""
         if pd.notna(sec_val) and str(sec_val).strip():
             sec_attr = f" data-sector='{html.escape(str(sec_val))}'"
         else:
             sec_attr = " data-sector='__missing__'"
+        if pd.notna(ind_val) and str(ind_val).strip():
+            ind_attr = f" data-industry='{html.escape(str(ind_val))}'"
+        else:
+            ind_attr = " data-industry='__missing__'"
         rows_html.append(
-            f"<tr style='background:{bg}'{fc_attr}{mc_attr}{sec_attr}>"
+            f"<tr style='background:{bg}'{fc_attr}{mc_attr}{sec_attr}{ind_attr}>"
             + "".join(cells) + "</tr>"
         )
 
@@ -453,6 +458,18 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         if df["sector"].isna().any() or (df["sector"].astype(str).str.strip() == "").any():
             sector_opts.append("<option value='__missing__'>(no sector)</option>")
     sector_options_html = "".join(sector_opts)
+
+    # Industry dropdown: same shape as sector, sourced from df["industry"].
+    industry_opts = ["<option value=''>(all industries)</option>"]
+    if "industry" in df.columns:
+        uniq_industries = sorted(
+            {str(s).strip() for s in df["industry"].dropna().tolist() if str(s).strip()}
+        )
+        for s in uniq_industries:
+            industry_opts.append(f"<option value='{html.escape(s)}'>{html.escape(s)}</option>")
+        if df["industry"].isna().any() or (df["industry"].astype(str).str.strip() == "").any():
+            industry_opts.append("<option value='__missing__'>(no industry)</option>")
+    industry_options_html = "".join(industry_opts)
 
     body = f"""<!doctype html>
 <html lang='en'><head><meta charset='utf-8'>
@@ -493,6 +510,7 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   <label>Min cap $M: <input type='number' id='f-min-mc' min='0' step='10' style='width:90px' placeholder='0'></label>
   <label>Max cap $M: <input type='number' id='f-max-mc' min='0' step='100' style='width:90px' placeholder='∞'></label>
   <label>Sector: <select id='f-sector'>{sector_options_html}</select></label>
+  <label>Industry: <select id='f-industry'>{industry_options_html}</select></label>
   <button id='f-reset' type='button'>Reset</button>
   <span id='row-count'></span>
 </div>
@@ -508,6 +526,7 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   var minMc = document.getElementById('f-min-mc');
   var maxMc = document.getElementById('f-max-mc');
   var secSel = document.getElementById('f-sector');
+  var indSel = document.getElementById('f-industry');
   var reset = document.getElementById('f-reset');
   var counter = document.getElementById('row-count');
   var rows = document.querySelectorAll('tbody tr');
@@ -520,12 +539,14 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
     var minMcRaw = isNaN(minMcVal) ? 0 : minMcVal * 1e6;
     var maxMcRaw = isNaN(maxMcVal) ? Infinity : maxMcVal * 1e6;
     var secVal = secSel ? secSel.value : '';
+    var indVal = indSel ? indSel.value : '';
     var visible = 0;
     for (var i = 0; i < rows.length; i++) {{
       var tr = rows[i];
       var fc = parseFloat(tr.dataset.fundCount);
       var mc = parseFloat(tr.dataset.marketCap);
       var rowSec = tr.dataset.sector || '__missing__';
+      var rowInd = tr.dataset.industry || '__missing__';
       var fcOk = isNaN(fc) ? minFcVal === 0 : fc >= minFcVal;
       var mcOk;
       if (isNaN(mc)) {{
@@ -534,7 +555,8 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
         mcOk = mc >= minMcRaw && mc <= maxMcRaw;
       }}
       var secOk = (secVal === '') || (rowSec === secVal);
-      var ok = fcOk && mcOk && secOk;
+      var indOk = (indVal === '') || (rowInd === indVal);
+      var ok = fcOk && mcOk && secOk && indOk;
       tr.style.display = ok ? '' : 'none';
       if (ok) visible++;
     }}
@@ -545,9 +567,11 @@ def generate_ranking_report_html(df: pd.DataFrame, quarter: str,
   minMc.addEventListener('input', applyFilters);
   maxMc.addEventListener('input', applyFilters);
   if (secSel) secSel.addEventListener('change', applyFilters);
+  if (indSel) indSel.addEventListener('change', applyFilters);
   reset.addEventListener('click', function() {{
     minFc.value = ''; minMc.value = ''; maxMc.value = '';
     if (secSel) secSel.value = '';
+    if (indSel) indSel.value = '';
     applyFilters();
   }});
   applyFilters();

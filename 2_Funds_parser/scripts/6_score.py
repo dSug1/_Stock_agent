@@ -1168,6 +1168,29 @@ def main() -> int:
         except Exception as e:
             _LOG.warning("apply_modifiers_to_run failed (run=%s): %s", run_id, e)
 
+        # D55 — M7-alpha snapshot hook. Runs after modifiers are written so
+        # the snapshot captures the final score_modifier_json. Fail-open:
+        # never blocks the M6 write path (an exception here is logged but
+        # doesn't roll back llm_scores writes).
+        try:
+            from module_7 import snapshot_run as _snapshot_run
+            _outcomes_db = (
+                Path(__file__).resolve().parents[1] / "data" / "outcomes.db"
+            )
+            _packs_db = (
+                Path(__file__).resolve().parents[1] / "context_packs.db"
+            )
+            _n_snap = _snapshot_run(
+                scores_conn,
+                run_id=run_id,
+                outcomes_db_path=_outcomes_db,
+                packs_db_path=_packs_db if _packs_db.exists() else None,
+            )
+            _LOG.info("M7 snapshot: %d predictions captured for run %d",
+                      _n_snap, run_id)
+        except Exception as e:
+            _LOG.warning("M7 snapshot_run failed (run=%s): %s", run_id, e)
+
         # Build the rows that actually feed the rendered HTML/XLSX.
         # ALWAYS use the merged latest-per-ticker view across the whole
         # quarter, never just this run. Reasons:
