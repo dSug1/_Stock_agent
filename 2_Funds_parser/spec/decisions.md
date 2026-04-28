@@ -1077,6 +1077,67 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D56 — Module 4c performance pass (parallelism + connection pooling + Form 4 URL discovery + rate bump + ETag)
+
+**Status: ✅ Implemented 2026-04-28.** Five-part optimization to M4c HTTP layer + per-ticker loop. Triggered by an empirical observation: cold-start enrichment of 214 biotech tickers on 2026-04-27 took **2.9 hours wall** (~73 k HTTP calls under the 9 req/s limiter). All five changes are isolated to `src/module_4c/{edgar_client.py, enrich.py, fundamentals_db.py}` and `src/layer_1/edgar_13f.py`. No schema-breaking changes; one additive migration adds two columns to `fetch_log`.
+
+**1. Parallel ticker processing (`ThreadPoolExecutor`, max_workers from `fundamentals.yaml`).** The yaml has carried `edgar.max_workers: 5` since D54 but [enrich.py](../src/module_4c/enrich.py) iterated tickers sequentially. Now wired through. Each worker opens its own SQLite connection (WAL handles concurrent writers); the rate limiter is process-global thread-safe (lock-protected token bucket, [edgar_13f.py:45-68](../src/layer_1/edgar_13f.py#L45-L68)) so 5 workers share the 9.5 req/s budget without exceeding it. Result mutations serialize through `result_lock`. Hides per-ticker parsing + DB-write latency behind network — workers stay saturated against the rate-limit floor.
+
+**2. Connection pooling via `requests.Session`.** Replaced `urllib.request.urlopen` (one fresh TCP+TLS handshake per request) with a module-level `_SESSION = requests.Session()` mounted on an `HTTPAdapter(pool_connections=8, pool_maxsize=16)`. With 73 k requests × ~30 ms handshake removed, this alone saves ~30 minutes on cold-start runs. Session is thread-safe per requests/urllib3 docs.
+
+**3. Form 4 URL discovery via `index.json` fallback.** Old code in [edgar_client.py::fetch_form4](../src/module_4c/edgar_client.py) tried up to 4 candidate URLs (`primary_doc` basename → `primary_doc.xml` → `ownership.xml` → legacy `wf-form4_*.xml`), eating 2-3 wasted 404s per filing on average because SEC's `primaryDocument` is the XSL-styled path. New strategy:
+  1. Optimistic: try `primary_doc` basename (modern filings — 1 call when it works).
+  2. On 404: fetch `<accession>/index.json` once (~5 KB) and pick the actual `.xml` file.
+  3. Fetch that exact URL.
+
+  Best case: 1 call. Worst case: 3 (basename → index → real XML). Average ~1.5 vs old ~2-3. Smoke-tested against real NTLA filing where basename was wrong: index.json correctly identified `ownership.xml`; end-to-end succeeded with 2 transactions parsed.
+
+**4. Rate bump 9.0 → 9.5 req/s.** SEC fair-use cap is 10/s; we leave a thinner margin now. Worth ~5% wallclock on its own.
+
+**5. Conditional GET (`If-None-Match` / `If-Modified-Since`) on companyfacts — built but inert.** Schema migration adds `etag` + `last_modified` columns to `fetch_log`; `_http_request` accepts conditional headers; `fetch_companyfacts` returns `status='not_modified'` on 304. **However: empirical probe of the SEC endpoint (2026-04-28) shows it explicitly disables caching:**
+
+  ```
+  GET https://data.sec.gov/api/xbrl/companyfacts/CIK<...>.json
+  ← Cache-Control: max-age=0, no-cache, no-store
+  ← Pragma: no-cache
+  ← (no ETag, no Last-Modified)
+  ```
+
+  The same is true for the `/submissions/` endpoint. SEC's `Archives/edgar/data/...` Form 4 XML *does* expose ETags, but those filings are append-only by accession — we never re-fetch them, so it wouldn't help anyway. The infrastructure ships as defensive future-readiness: if SEC ever flips caching on, we benefit automatically with no code change. Cost: 2 nullable DB columns + 4 bytes of always-null request headers per call. Considered rolling back; kept on the basis that the implementation cost is sunk and the future-ready value is non-zero.
+
+**Expected impact** (extrapolating from the smoke test, which ran 3 force-refresh tickers in 4.8 s wall):
+- **Cold-start full feed (214 biotechs, fresh DB)**: ~2.9 h → **~50-90 min** (3× speedup primarily from parallelism + Form 4 fix; conn pooling + rate bump add ~10-15%).
+- **Steady-state quarterly re-run** (same tickers, only new filings): unchanged from D54's prediction of ~30-50 min, but now floored by the rate limit rather than per-call overhead.
+
+**Re-runs of TTL-fresh tickers** (no force-refresh): still 0.0 s wall — TTL gate is checked before any HTTP calls, parallelism just makes the gate-check loop faster.
+
+**What was NOT changed:**
+- Parsing logic for companyfacts/Form 4/capital_raises is byte-identical.
+- TTLs, biotech allow-list, source toggles in `fundamentals.yaml` — all unchanged.
+- D54's append-only-by-accession-# semantics for `form4` and `capital_raises` — unchanged. Re-running still fetches only new filings.
+- M6 prompt and pack contract — completely unaffected. M5 still reads the same `data/fundamentals.db` schema.
+
+**Smoke test (this session):**
+- `--tickers NTLA,TCRX,BCYC --force-refresh -v`: 3 tickers, wall 4.8 s, 32 financials rows + 2 capital_raises written. Workers ran in parallel (visible from interleaved log timestamps).
+- Re-run without `--force-refresh`: wall 0.0 s, all 12 (ticker, source) pairs TTL-skipped.
+- Form 4 helpers verified directly: `_list_accession_files` + `_pick_form4_xml_name` correctly resolve `primary_doc.xml`, `ownership.xml`, `wf-form4_*.xml`, and synthetic edge cases.
+
+**Files touched:**
+- `src/layer_1/edgar_13f.py` — `EDGAR_RATE_PER_SEC = 9.0 → 9.5`.
+- `src/module_4c/fundamentals_db.py` — additive migration (`fetch_log.etag`, `fetch_log.last_modified`); `upsert_fetch_log` accepts the new fields.
+- `src/module_4c/edgar_client.py` — module-level `requests.Session` + `HTTPAdapter`; `_http_request` (returns `_HttpResponse` with status/etag/last_modified); `fetch_companyfacts` accepts conditional headers, returns `not_modified` on 304; `fetch_form4` rewritten with index.json fallback (`_list_accession_files`, `_pick_form4_xml_name`).
+- `src/module_4c/enrich.py` — `_run_companyfacts` returns etag/last_modified tuple; per-ticker work hoisted into `_enrich_one(t, cik)` worker; `ThreadPoolExecutor(max_workers=fcfg.edgar.max_workers)`; result mutations under `threading.Lock`.
+
+**Alternatives considered and rejected:**
+- **Roll back the inert ETag plumbing.** Two extra nullable columns and four header bytes per request was judged cheaper than re-implementing if SEC ever enables caching.
+- **Multi-process instead of multi-thread.** Sequential bottleneck is HTTP wait, not CPU. Threads are sufficient and avoid IPC for the shared rate limiter and SQLite WAL writer coordination.
+- **Pre-fetch all index.json files in a separate pass before Form 4 XML.** Would let us avoid the basename fast-path entirely and pipeline better, but doubles the call count for the common case where basename works. Rejected.
+- **Bump rate to 10/s exactly.** SEC's 10/s is the *hard* limit; leaving 0.5/s of margin protects against clock jitter and other tooling on the same IP.
+
+**Build trigger:** User asked for the optimization in this session after observing the 2.9 h cold-start time. M4c is unchanged in behaviour — only its performance shape.
+
+---
+
 ### D55 — Module 7-alpha implementation (snapshot + forward-price collection)
 
 **Status: ✅ Implemented 2026-04-26.** Phase α of D53's three-phase plan. Spec: [module_7_spec.md](module_7_spec.md). M7-β (outcome classification + per-archetype/decile reports) and M7-γ (per-component calibration with co-firing-aware regression) deferred until 1q+ of α data has accrued.

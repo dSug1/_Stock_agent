@@ -22,12 +22,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
+
+import requests
+from requests.adapters import HTTPAdapter
 
 # Reuse the existing M2 EDGAR limiter — single process-global bucket, shared
 # across M2 (layer_1/edgar_13f) and M4c (this file). Importing the module
@@ -44,6 +45,32 @@ log = logging.getLogger(__name__)
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
+
+# D56 — module-level requests.Session with a pool sized for the M4c worker
+# count. requests.Session is thread-safe (urllib3 PoolManager underneath),
+# so a single shared session is correct here. Keep-alive eliminates the
+# ~30 ms TCP+TLS handshake per request that raw urllib paid before.
+_SESSION = requests.Session()
+_ADAPTER = HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=0)
+_SESSION.mount("https://", _ADAPTER)
+_SESSION.mount("http://",  _ADAPTER)
+_SESSION.headers.update({"User-Agent": EDGAR_USER_AGENT})
+
+
+@dataclass
+class _HttpResponse:
+    body: bytes
+    status: int                      # 200 / 304 / etc.
+    etag: Optional[str]
+    last_modified: Optional[str]
+
+
+class _HttpError(Exception):
+    """Raised for non-2xx, non-304 responses. Carries `code` for caller fork."""
+    def __init__(self, code: int, reason: str) -> None:
+        super().__init__(f"HTTP {code}: {reason}")
+        self.code = code
+        self.reason = reason
 
 # US-GAAP concepts we extract per company.
 _GAAP_CONCEPTS = {
@@ -72,16 +99,38 @@ _GAAP_CONCEPTS = {
 
 # ─── HTTP helper ─────────────────────────────────────────────────────────────
 
-def _http_get(url: str, *, accept: str = "application/json") -> bytes:
-    """Rate-limited GET that raises urllib.error.HTTPError on non-2xx.
-    Caller wraps in try/except to fail-open."""
+def _http_request(
+    url: str,
+    *,
+    accept: str = "application/json",
+    if_none_match: Optional[str] = None,
+    if_modified_since: Optional[str] = None,
+) -> _HttpResponse:
+    """Rate-limited GET via the shared keep-alive session. Returns the body
+    plus ETag / Last-Modified for callers that want conditional re-fetches.
+    Raises _HttpError for non-2xx, non-304. 304 returns body=b'' status=304."""
     _EDGAR_LIMITER.acquire()
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": EDGAR_USER_AGENT, "Accept": accept},
+    headers = {"Accept": accept}
+    if if_none_match:
+        headers["If-None-Match"] = if_none_match
+    if if_modified_since:
+        headers["If-Modified-Since"] = if_modified_since
+    resp = _SESSION.get(url, headers=headers, timeout=30)
+    if resp.status_code == 304:
+        return _HttpResponse(b"", 304, resp.headers.get("ETag"),
+                             resp.headers.get("Last-Modified"))
+    if not (200 <= resp.status_code < 300):
+        raise _HttpError(resp.status_code, resp.reason or "")
+    return _HttpResponse(
+        resp.content, resp.status_code,
+        resp.headers.get("ETag"),
+        resp.headers.get("Last-Modified"),
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+
+
+def _http_get(url: str, *, accept: str = "application/json") -> bytes:
+    """Backward-compat wrapper used by sources that don't care about ETags."""
+    return _http_request(url, accept=accept).body
 
 
 # ─── Ticker → CIK map (inverse of layer_1/sec_ticker_resolver) ───────────────
@@ -108,9 +157,11 @@ def load_ticker_cik_map(
 
 @dataclass
 class CompanyFactsResult:
-    status: str                          # 'ok' | 'partial' | 'failed'
+    status: str                          # 'ok' | 'partial' | 'failed' | 'not_modified'
     error: Optional[str]
-    rows: list[dict]                     # one per period
+    rows: list[dict]
+    etag: Optional[str] = None
+    last_modified: Optional[str] = None                     # one per period
 
 
 @dataclass
@@ -185,23 +236,36 @@ def _ttm_sum(rows: list[dict]) -> Optional[int]:
 
 def fetch_companyfacts(
     ticker: str, cik: str, *, now_iso: str,
+    if_none_match: Optional[str] = None,
+    if_modified_since: Optional[str] = None,
 ) -> CompanyFactsResult:
     """Fetch + parse SEC companyfacts XBRL into per-period financials rows.
     Returns up to 8 most recent periods (most recent first). TTM aggregates
     are populated only on the latest row.
+
+    D56: pass `if_none_match`/`if_modified_since` from the prior fetch_log
+    row to use SEC's CDN conditional-GET. A 304 response returns
+    status='not_modified' (caller skips the parse + write entirely).
     """
     url = COMPANYFACTS_URL.format(cik=cik)
     try:
-        body = _http_get(url)
-    except urllib.error.HTTPError as e:
+        resp = _http_request(url, if_none_match=if_none_match,
+                             if_modified_since=if_modified_since)
+    except _HttpError as e:
         if e.code == 404:
             return CompanyFactsResult(status="partial", error="no companyfacts (404)", rows=[])
         return CompanyFactsResult(status="failed", error=f"HTTP {e.code}: {e.reason}", rows=[])
     except Exception as e:  # noqa: BLE001
         return CompanyFactsResult(status="failed", error=f"{type(e).__name__}: {e}", rows=[])
 
+    if resp.status == 304:
+        return CompanyFactsResult(
+            status="not_modified", error=None, rows=[],
+            etag=if_none_match, last_modified=if_modified_since,
+        )
+
     try:
-        facts = json.loads(body)
+        facts = json.loads(resp.body)
     except json.JSONDecodeError as e:
         return CompanyFactsResult(status="failed", error=f"JSON: {e}", rows=[])
 
@@ -292,7 +356,10 @@ def fetch_companyfacts(
         })
 
     status = "ok" if out_rows else "partial"
-    return CompanyFactsResult(status=status, error=None, rows=out_rows)
+    return CompanyFactsResult(
+        status=status, error=None, rows=out_rows,
+        etag=resp.etag, last_modified=resp.last_modified,
+    )
 
 
 # ─── submissions (filings list) ──────────────────────────────────────────────
@@ -446,35 +513,69 @@ def _parse_form4_xml(xml_bytes: bytes) -> tuple[list[dict], Optional[str]]:
     return out, None
 
 
+def _list_accession_files(cik: str, accn_raw: str) -> list[str]:
+    """D56 — fetch the EDGAR index.json directory listing for an accession.
+    Returns the list of file basenames in that accession directory, or [] on
+    any failure. One cheap (~5 KB) call per filing — replaces the previous
+    guess-and-404 chain when the basename heuristic misses."""
+    url = f"{ARCHIVES_BASE}/{int(cik)}/{accn_raw}/index.json"
+    try:
+        body = _http_get(url, accept="application/json")
+    except Exception:  # noqa: BLE001 — fail-open; caller falls back further
+        return []
+    try:
+        obj = json.loads(body)
+    except json.JSONDecodeError:
+        return []
+    return [
+        (it.get("name") or "").strip()
+        for it in obj.get("directory", {}).get("item", [])
+        if it.get("name")
+    ]
+
+
+def _pick_form4_xml_name(files: list[str]) -> Optional[str]:
+    """Choose the Form 4 ownership XML from an accession's file list.
+    Skips index/header artifacts; prefers conventional names."""
+    xmls = [
+        f for f in files
+        if f.lower().endswith(".xml") and "index" not in f.lower()
+    ]
+    if not xmls:
+        return None
+    for preferred in ("primary_doc.xml", "ownership.xml"):
+        if preferred in xmls:
+            return preferred
+    for f in xmls:
+        if f.lower().startswith("wf-form4_"):
+            return f
+    return xmls[0]
+
+
 def fetch_form4(cik: str, accession_number: str, primary_doc: Optional[str]) -> Form4Result:
     """Fetch one Form 4 filing's primary XML and parse out transactions.
 
-    SEC's `primaryDocument` for Form 4 is usually the XSLT-rendered HTML
-    (e.g. `xslF345X05/ownership.xml`). The raw XML lives at the same
-    filename, but at the accession root (no `xslF345X05/` prefix). We
-    try the basename first (most modern filings), then `primary_doc.xml`,
-    then `ownership.xml`, then the legacy `wf-form4_<accn_raw>.xml`.
-    """
+    Strategy (D56):
+      1. Optimistic: try the basename of `primary_doc` (modern filings put
+         the XSL stylesheet under `xslF345X05/<name>` and the raw XML at
+         `<name>` — strip the prefix and try that first).
+      2. On 404, fetch `<accession>/index.json` once and pick the right .xml.
+      3. Fetch that exact URL.
+
+    Best case: 1 HTTP call. Worst case: 3 (basename 404 → index → real XML).
+    Replaces the previous guess-up-to-4-URLs chain that averaged 2–3 calls
+    even when the file existed."""
     accn_raw = accession_number.replace("-", "")
-    candidates: list[str] = []
+    archive_root = f"{ARCHIVES_BASE}/{int(cik)}/{accn_raw}"
+    tried: list[str] = []
 
-    if primary_doc and primary_doc.lower().endswith(".xml"):
-        basename = primary_doc.rsplit("/", 1)[-1]
-        candidates.append(f"{ARCHIVES_BASE}/{int(cik)}/{accn_raw}/{basename}")
-
-    for name in ("primary_doc.xml", "ownership.xml", f"wf-form4_{accn_raw}.xml"):
-        url = f"{ARCHIVES_BASE}/{int(cik)}/{accn_raw}/{name}"
-        if url not in candidates:
-            candidates.append(url)
-
-    last_err: Optional[str] = None
-    for url in candidates:
+    def _attempt(url: str) -> Optional[Form4Result]:
+        tried.append(url)
         try:
             body = _http_get(url, accept="application/xml,text/xml,*/*")
-        except urllib.error.HTTPError as e:
+        except _HttpError as e:
             if e.code == 404:
-                last_err = f"404: {url}"
-                continue
+                return None  # fall through to next candidate
             return Form4Result(status="failed", error=f"HTTP {e.code}", transactions=[])
         except Exception as e:  # noqa: BLE001
             return Form4Result(status="failed", error=f"{type(e).__name__}: {e}", transactions=[])
@@ -483,7 +584,26 @@ def fetch_form4(cik: str, accession_number: str, primary_doc: Optional[str]) -> 
             return Form4Result(status="partial", error=err, transactions=rows)
         return Form4Result(status="ok", error=None, transactions=rows)
 
-    return Form4Result(status="failed", error=last_err or "no Form 4 XML found", transactions=[])
+    # Step 1 — optimistic basename try.
+    if primary_doc and primary_doc.lower().endswith(".xml"):
+        basename = primary_doc.rsplit("/", 1)[-1]
+        result = _attempt(f"{archive_root}/{basename}")
+        if result is not None:
+            return result
+
+    # Step 2 — directory discovery.
+    files = _list_accession_files(cik, accn_raw)
+    name = _pick_form4_xml_name(files)
+    if name:
+        result = _attempt(f"{archive_root}/{name}")
+        if result is not None:
+            return result
+
+    return Form4Result(
+        status="failed",
+        error=f"no Form 4 XML found (tried: {tried})",
+        transactions=[],
+    )
 
 
 # ─── Capital raises (8-K Items 1.01/3.02 + S-3 + 424B5) ──────────────────────

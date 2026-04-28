@@ -1,0 +1,28 @@
+2026-04-27 21:25:48,175 INFO module_4.ranking: Loaded 989 survivors from C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\_intermediate_outputs\survivors_2025Q4.parquet
+2026-04-27 21:25:48,738 INFO module_4.prices: Yahoo session: curl_cffi (impersonate=chrome)
+2026-04-27 21:27:23,723 ERROR yfinance: $GLDD: possibly delisted; no price data found  (1d 2026-04-02 -> 2026-04-28)
+2026-04-27 21:27:23,732 ERROR yfinance: 
+1 Failed download:
+2026-04-27 21:27:23,732 ERROR yfinance: ['GLDD']: possibly delisted; no price data found  (1d 2026-04-02 -> 2026-04-28)
+2026-04-27 21:27:24,793 ERROR yfinance: $HTBK: possibly delisted; no price data found  (1d 2026-04-22 -> 2026-04-28)
+2026-04-27 21:27:24,795 ERROR yfinance: 
+1 Failed download:
+2026-04-27 21:27:24,795 ERROR yfinance: ['HTBK']: possibly delisted; no price data found  (1d 2026-04-22 -> 2026-04-28)
+2026-04-27 21:27:25,900 ERROR yfinance: $TGNA: possibly delisted; no price data found  (1d 2026-03-21 -> 2026-04-28)
+2026-04-27 21:27:25,910 ERROR yfinance: 
+1 Failed download:
+2026-04-27 21:27:25,910 ERROR yfinance: ['TGNA']: possibly delisted; no price data found  (1d 2026-03-21 -> 2026-04-28)
+2026-04-27 21:27:25,913 INFO module_4.ranking: Price fetch: 987 ok / 989 total
+2026-04-27 21:27:27,313 INFO module_4.ranking: Computed ratios for 989 tickers
+2026-04-27 21:27:27,314 INFO module_4.ranking: Excluding 17 young/short-history tickers from ranking
+2026-04-27 21:27:27,443 INFO module_4.ranking: Wrote ranked candidates -> C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\_intermediate_outputs\ranked_candidates_2025Q4.parquet
+2026-04-27 21:27:29,779 INFO module_4.ranking: Wrote ranking reports -> C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\ranking_report_2025Q4.html, C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\ranking_report_2025Q4.xlsx
+Module 4b complete (quarter=2025Q4): 972 ranked candidates.
+  v_recovery                 275
+  mature_uptrend             114
+  early_breakout              96
+  deep_base_breakout          94
+  sustained_decline           69
+  stage2_pullback             66
+  late_stage_extension        61
+  unclassified                56

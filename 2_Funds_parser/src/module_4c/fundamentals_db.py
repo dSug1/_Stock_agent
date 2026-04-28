@@ -117,7 +117,12 @@ CREATE TABLE IF NOT EXISTS fetch_log (
 
 # Additive migrations — append (table, col, decl) tuples here. Each entry is
 # idempotent: probe via PRAGMA table_info first, only ALTER when absent.
-_ADDITIVE_MIGRATIONS: list[tuple[str, str, str]] = []
+_ADDITIVE_MIGRATIONS: list[tuple[str, str, str]] = [
+    # D56 — conditional-GET cache for companyfacts. Stored per (ticker,source);
+    # only companyfacts populates these today.
+    ("fetch_log", "etag",          "TEXT"),
+    ("fetch_log", "last_modified", "TEXT"),
+]
 
 
 def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
@@ -178,19 +183,27 @@ def upsert_fetch_log(
     last_status: str,
     last_error: Optional[str] = None,
     rows_written: int = 0,
+    etag: Optional[str] = None,
+    last_modified: Optional[str] = None,
 ) -> None:
+    """Upsert one fetch_log row. `etag`/`last_modified` are populated by
+    companyfacts (D56 conditional-GET); other sources pass them as None,
+    which preserves any existing values via COALESCE in the UPDATE clause."""
     conn.execute(
         """
         INSERT INTO fetch_log(ticker, source, last_fetched_at, last_status,
-                              last_error, rows_written)
-        VALUES(?, ?, ?, ?, ?, ?)
+                              last_error, rows_written, etag, last_modified)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker, source) DO UPDATE SET
             last_fetched_at=excluded.last_fetched_at,
             last_status=excluded.last_status,
             last_error=excluded.last_error,
-            rows_written=excluded.rows_written
+            rows_written=excluded.rows_written,
+            etag=COALESCE(excluded.etag, fetch_log.etag),
+            last_modified=COALESCE(excluded.last_modified, fetch_log.last_modified)
         """,
-        (ticker, source, last_fetched_at, last_status, last_error, rows_written),
+        (ticker, source, last_fetched_at, last_status, last_error, rows_written,
+         etag, last_modified),
     )
 
 

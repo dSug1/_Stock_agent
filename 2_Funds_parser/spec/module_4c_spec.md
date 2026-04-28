@@ -30,8 +30,15 @@ columns inside `data/fundamentals.db` (queryable via `json_extract`).
 No `*.json` files on disk, no Parquet sidecar.
 
 **Per the existing `_RateLimiter` infrastructure**, M4c reuses
-`src/layer_1/edgar_13f._EDGAR_LIMITER` (9 req/s, process-global token
-bucket). No new SEC limiter. No new User-Agent.
+`src/layer_1/edgar_13f._EDGAR_LIMITER` (**9.5 req/s** since D56,
+process-global token bucket). No new SEC limiter. No new User-Agent.
+
+**Per D56**, the HTTP layer uses a module-level `requests.Session` with
+keep-alive (`pool_connections=8, pool_maxsize=16`) and the per-ticker
+loop runs in a `ThreadPoolExecutor` sized by `fundamentals.yaml`
+`edgar.max_workers` (default 5). Workers share the same rate limiter
+and session; each opens its own SQLite connection (WAL mode handles
+concurrent writes). Result mutations serialize through a `threading.Lock`.
 
 ---
 
@@ -195,9 +202,15 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     ticker                  TEXT NOT NULL,
     source                  TEXT NOT NULL,                      -- 'companyfacts' | 'submissions' | 'form4' | 'capital_raises'
     last_fetched_at         TEXT NOT NULL,
-    last_status             TEXT NOT NULL,                      -- 'ok' | 'partial' | 'failed' | 'skipped_non_biotech'
+    last_status             TEXT NOT NULL,                      -- 'ok' | 'partial' | 'failed' | 'not_modified' | 'skipped_non_biotech'
     last_error              TEXT,
     rows_written            INTEGER NOT NULL DEFAULT 0,
+    -- D56 — conditional-GET cache. Populated only by companyfacts when SEC
+    -- ever returns ETag/Last-Modified. Currently always NULL since SEC's
+    -- data.sec.gov sends Cache-Control: no-cache, no-store. Defensive
+    -- future-readiness.
+    etag                    TEXT,
+    last_modified           TEXT,
     PRIMARY KEY (ticker, source)
 );
 ```
@@ -307,6 +320,17 @@ Edge cases:
 - Concepts missing entirely → write the row with whatever was extracted,
   set `fetch_status = 'partial'`, log to `fetch_log.last_error`
 
+**Conditional GET (D56, infrastructure-only).** `fetch_companyfacts`
+accepts `if_none_match` / `if_modified_since` from the prior fetch_log
+row and stores any returned `ETag` / `Last-Modified` back into
+`fetch_log.etag` / `fetch_log.last_modified`. A 304 response returns
+`status='not_modified'` and skips the parse + write. **However: SEC's
+`data.sec.gov` API explicitly disables caching** (`Cache-Control:
+no-cache, no-store`, no `ETag`/`Last-Modified` in responses). The
+infrastructure ships as a no-op until SEC changes their headers; cost
+is two nullable DB columns and 4 always-null request bytes. See D56
+for the empirical probe results.
+
 ### EDGAR submissions → form 4 + capital raises
 
 `fetch_recent_filings(cik, since_date, forms)` returns the recent filings
@@ -318,11 +342,17 @@ Each filing dispatches to a form-specific parser:
 - **Form 4** → `parse_form4_xml()` reads the OWNERSHIP DOCUMENT XML.
   SEC's `primaryDocument` for Form 4 is usually the XSLT-rendered HTML
   (e.g. `xslF345X05/ownership.xml`). The raw XML lives at the same
-  filename **at the accession root** (no `xslF345X05/` prefix). The fetch
-  helper tries (in order): basename of `primary_doc`, `primary_doc.xml`,
-  `ownership.xml`, `wf-form4_<accn_raw>.xml`. One DB row per
-  `(insider, transaction_date, txn_type, shares)`. Role classified from
-  Form 4 boxes (CEO/CFO/Director/10% owner) + officer-title text.
+  filename **at the accession root** (no `xslF345X05/` prefix). **Per
+  D56**, the fetch helper now: (1) tries the basename of `primary_doc`
+  first (modern filings — succeeds in 1 call); (2) on 404, fetches
+  `<accession>/index.json` once (~5 KB) and picks the actual `.xml`
+  file (`_pick_form4_xml_name` prefers `primary_doc.xml`, then
+  `ownership.xml`, then `wf-form4_*.xml`, then any `.xml`); (3) fetches
+  that exact URL. Best case: 1 call. Worst case: 3. Replaces the prior
+  guess-up-to-4-URLs chain that averaged 2-3 wasted 404s on legacy
+  filings. One DB row per `(insider, transaction_date, txn_type, shares)`.
+  Role classified from Form 4 boxes (CEO/CFO/Director/10% owner) +
+  officer-title text.
 
 - **8-K Items 1.01 / 3.02** → fetch the index, then the primary document
   excerpt (200KB max). Heuristic regex extracts gross proceeds + price
@@ -531,11 +561,11 @@ LLM web_search territory** (per scope decision).
 | 4 | Re-run with `--force-refresh` | Re-fetches; row updated; `fetched_at` advances. |
 | 5 | Non-biotech ticker (e.g. `MMM` or `GRAL`) — `--ticker GRAL` | All 4 sources logged as `skipped_non_biotech` in `fetch_log`. No `financials`/`capital_raises`/`insider_transactions` rows written. |
 | 6 | Ticker absent from SEC ticker map | `fetch_log.last_status = 'failed'` with `'no CIK in SEC ticker map'`. M5 gracefully falls back to empty fundamentals block. |
-| 7 | EDGAR rate-limit shared with M2 layer_1 (run M2 ingest + M4c concurrently) | Combined throughput stays ≤9 req/s (single `_EDGAR_LIMITER`). |
+| 7 | EDGAR rate-limit shared with M2 layer_1 (run M2 ingest + M4c concurrently) | Combined throughput stays ≤9.5 req/s (single `_EDGAR_LIMITER`, rate bumped per D56). |
 | 8 | M5 reads fundamentals for NTLA after M4c populates | Rebuilt pack contains `fundamentals.financials.cash_total_usd > 0`, `fundamentals.recent_insider_transactions` non-empty when Form 4 rows exist. |
 | 9 | M5 cache hash bust on fundamentals refresh | After `4c --force-refresh --ticker NTLA`, M5 rebuilds NTLA pack (cache miss); other 6 tickers stay `cache_hit`. |
 | 10 | EDGAR transient 5xx | `fetch_log.last_status='failed'`, `last_error` populated; the next run retries. |
-| 11 | Form 4 XML rendered-vs-raw URL fallback | Fetcher tries basename first; on 404 falls back to `primary_doc.xml`/`ownership.xml`. |
+| 11 | Form 4 XML rendered-vs-raw URL fallback | Fetcher tries basename first; on 404 fetches `<accession>/index.json` once and picks the right `.xml` (D56). |
 | 12 | Concurrent fundamentals.db writers | SQLite WAL mode (set in `init_fundamentals_db`); single-writer enforcement on inserts. |
 
 ---

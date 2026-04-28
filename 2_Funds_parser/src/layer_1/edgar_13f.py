@@ -27,9 +27,9 @@ from database.db import MARKET_VALUE_RAW_USD_CUTOFF
 log = logging.getLogger(__name__)
 
 EDGAR_USER_AGENT = "StockPicker contact@stockpicker.local"
-# SEC fair-use is 10 req/sec per IP. We target 9 to leave a margin
-# for clock jitter and any concurrent sibling scripts in this repo.
-EDGAR_RATE_PER_SEC = 9.0
+# SEC fair-use is 10 req/sec per IP. We target 9.5 to stay safely under
+# the cap while leaving a thin margin for clock jitter / sibling scripts.
+EDGAR_RATE_PER_SEC = 9.5
 EDGAR_MAX_WORKERS = 5
 EDGAR_SUBMISSIONS_URL = (
     "https://data.sec.gov/submissions/CIK{cik}.json"

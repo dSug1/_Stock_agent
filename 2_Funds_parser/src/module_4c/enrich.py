@@ -22,7 +22,9 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
@@ -159,8 +161,19 @@ def _compute_shelf_capacity(conn: sqlite3.Connection, ticker: str) -> Optional[i
 
 def _run_companyfacts(
     conn: sqlite3.Connection, ticker: str, cik: str, now_iso: str,
-) -> tuple[str, Optional[str], int]:
-    res = edgar_client.fetch_companyfacts(ticker, cik, now_iso=now_iso)
+    *, prior_etag: Optional[str] = None, prior_last_modified: Optional[str] = None,
+) -> tuple[str, Optional[str], int, Optional[str], Optional[str]]:
+    """Returns (status, error, rows_written, etag, last_modified). When
+    SEC's CDN returns 304 (status='not_modified'), we skip the parse +
+    write entirely and just bubble the cached etag/last_modified back so
+    the caller can refresh fetch_log.last_fetched_at."""
+    res = edgar_client.fetch_companyfacts(
+        ticker, cik, now_iso=now_iso,
+        if_none_match=prior_etag,
+        if_modified_since=prior_last_modified,
+    )
+    if res.status == "not_modified":
+        return res.status, res.error, 0, res.etag, res.last_modified
     rows_written = 0
     if res.rows:
         shelf_cap = _compute_shelf_capacity(conn, ticker)
@@ -174,7 +187,7 @@ def _run_companyfacts(
             r.setdefault("companyfacts_raw_json", None)
             upsert_financials_row(conn, r)
             rows_written += 1
-    return res.status, res.error, rows_written
+    return res.status, res.error, rows_written, res.etag, res.last_modified
 
 
 def _run_submissions(
@@ -353,8 +366,10 @@ def run_enrichment_4c(
         result.wall_seconds = time.monotonic() - started
         return result
 
+    # ── Setup writes (non-biotech skips, no-CIK failures) — single conn,
+    # done before launching workers so each worker only sees its own ticker.
+    biotech_with_cik: list[tuple[str, str]] = []
     with db_connect(db_path) as conn:
-        # Mark non-biotech in fetch_log so subsequent runs see the skip reason.
         for t, ind in non_biotech:
             for src in SOURCES_ALL:
                 upsert_fetch_log(
@@ -365,8 +380,6 @@ def run_enrichment_4c(
                     last_error=f"industry={ind!r}",
                     rows_written=0,
                 )
-
-        # Tickers without a SEC CIK get logged-and-skipped.
         for t in biotech:
             cik = ticker_cik.get(t)
             if not cik:
@@ -381,18 +394,23 @@ def run_enrichment_4c(
                     )
                 result.n_no_cik += 1
                 result.failed.append((t, "*", "no CIK in SEC ticker map"))
+            else:
+                biotech_with_cik.append((t, cik))
 
-        for t in biotech:
-            cik = ticker_cik.get(t)
-            if not cik:
-                continue
-            t_started = time.monotonic()
+    # ── Per-ticker worker. Each worker opens its own SQLite connection
+    # (WAL mode handles concurrent writers) and shares the process-global
+    # rate limiter + requests session in edgar_client. Result mutations
+    # serialize through `result_lock` — contention is negligible because
+    # the bottleneck is SEC's 9.5 req/s ceiling, not Python.
+    result_lock = threading.Lock()
 
-            # Fetch existing fetch_log for this ticker (per-source TTL gate).
+    def _enrich_one(t: str, cik: str) -> None:
+        t_started = time.monotonic()
+        with db_connect(db_path) as conn:
             log_rows = {
-                r[0]: dict(zip(["last_fetched_at", "last_status", "rows_written"], r[1:]))
-                for r in conn.execute(
-                    "SELECT source, last_fetched_at, last_status, rows_written "
+                r["source"]: dict(r) for r in conn.execute(
+                    "SELECT source, last_fetched_at, last_status, rows_written, "
+                    "etag, last_modified "
                     "FROM fetch_log WHERE ticker = ?",
                     (t,),
                 ).fetchall()
@@ -413,7 +431,8 @@ def run_enrichment_4c(
             if "submissions" in enabled_sources:
                 ttl_subs = int(ttls.get("submissions_days") or 7)
                 if _ttl_ok("submissions", ttl_subs):
-                    result.skipped_ttl.append((t, "submissions"))
+                    with result_lock:
+                        result.skipped_ttl.append((t, "submissions"))
                     log.info("[%s] submissions TTL fresh — skip", t)
                 else:
                     has_form4 = bool(conn.execute(
@@ -432,30 +451,40 @@ def run_enrichment_4c(
                         rows_written=sum(len(v) for v in by_form.values()),
                     )
                     if s_status == "failed":
-                        result.failed.append((t, "submissions", s_error or ""))
+                        with result_lock:
+                            result.failed.append((t, "submissions", s_error or ""))
 
-            # ── companyfacts ──
+            # ── companyfacts (D56 conditional-GET via prior etag) ──
             if "companyfacts" in enabled_sources:
                 ttl_cf = int(ttls.get("companyfacts_days") or 30)
                 if _ttl_ok("companyfacts", ttl_cf):
-                    result.skipped_ttl.append((t, "companyfacts"))
+                    with result_lock:
+                        result.skipped_ttl.append((t, "companyfacts"))
                 else:
-                    cf_status, cf_error, n = _run_companyfacts(conn, t, cik, now_iso)
+                    prior = log_rows.get("companyfacts") or {}
+                    cf_status, cf_error, n, cf_etag, cf_lm = _run_companyfacts(
+                        conn, t, cik, now_iso,
+                        prior_etag=prior.get("etag"),
+                        prior_last_modified=prior.get("last_modified"),
+                    )
                     upsert_fetch_log(
                         conn,
                         ticker=t, source="companyfacts",
                         last_fetched_at=now_iso, last_status=cf_status,
                         last_error=cf_error, rows_written=n,
+                        etag=cf_etag, last_modified=cf_lm,
                     )
-                    result.rows_written["companyfacts"] += n
-                    if cf_status == "failed":
-                        result.failed.append((t, "companyfacts", cf_error or ""))
+                    with result_lock:
+                        result.rows_written["companyfacts"] += n
+                        if cf_status == "failed":
+                            result.failed.append((t, "companyfacts", cf_error or ""))
 
             # ── capital_raises ──
             if "capital_raises" in enabled_sources:
                 ttl_cr = int(ttls.get("capital_raises_days") or 30)
                 if _ttl_ok("capital_raises", ttl_cr) and not forms_by:
-                    result.skipped_ttl.append((t, "capital_raises"))
+                    with result_lock:
+                        result.skipped_ttl.append((t, "capital_raises"))
                 else:
                     raise_filings: list[dict] = []
                     for f in _FORMS_FOR_RAISES:
@@ -469,15 +498,17 @@ def run_enrichment_4c(
                         last_fetched_at=now_iso, last_status=cr_status,
                         last_error=cr_error, rows_written=n,
                     )
-                    result.rows_written["capital_raises"] += n
-                    if cr_status == "failed":
-                        result.failed.append((t, "capital_raises", cr_error or ""))
+                    with result_lock:
+                        result.rows_written["capital_raises"] += n
+                        if cr_status == "failed":
+                            result.failed.append((t, "capital_raises", cr_error or ""))
 
             # ── form4 ──
             if "form4" in enabled_sources:
                 ttl_f4 = int(ttls.get("form4_days") or 30)
                 if _ttl_ok("form4", ttl_f4) and not forms_by:
-                    result.skipped_ttl.append((t, "form4"))
+                    with result_lock:
+                        result.skipped_ttl.append((t, "form4"))
                 else:
                     form4_filings = forms_by.get("4", [])
                     f4_status, f4_error, n = _run_form4(
@@ -489,12 +520,32 @@ def run_enrichment_4c(
                         last_fetched_at=now_iso, last_status=f4_status,
                         last_error=f4_error, rows_written=n,
                     )
-                    result.rows_written["form4"] += n
-                    if f4_status == "failed":
-                        result.failed.append((t, "form4", f4_error or ""))
+                    with result_lock:
+                        result.rows_written["form4"] += n
+                        if f4_status == "failed":
+                            result.failed.append((t, "form4", f4_error or ""))
 
             conn.commit()
-            log.info("[%s] done in %.1fs", t, time.monotonic() - t_started)
+        log.info("[%s] done in %.1fs", t, time.monotonic() - t_started)
+
+    edgar_cfg = fcfg.get("edgar") or {}
+    max_workers = max(1, int(edgar_cfg.get("max_workers") or 1))
+    log.info("M4c worker pool: max_workers=%d (rate-limited at process scope)", max_workers)
+
+    if max_workers == 1:
+        for t, cik in biotech_with_cik:
+            _enrich_one(t, cik)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="m4c") as pool:
+            futures = {pool.submit(_enrich_one, t, cik): t for t, cik in biotech_with_cik}
+            for fut in as_completed(futures):
+                t = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:  # noqa: BLE001 — fail-open per ticker
+                    log.exception("[%s] worker crashed: %s", t, e)
+                    with result_lock:
+                        result.failed.append((t, "*", f"{type(e).__name__}: {e}"))
 
     result.wall_seconds = time.monotonic() - started
     return result
