@@ -1,0 +1,23 @@
+2026-04-28 17:44:12,584 INFO httpx: HTTP Request: POST https://api.anthropic.com/v1/messages/batches "HTTP/1.1 200 OK"
+2026-04-28 17:44:12,587 INFO module_6.dispatch: Submitted batch msgbatch_0115TU5qEuAXrnfDJ2uTfhjL with 15 requests
+Explicit ticker list: ['RARE', 'CRMD', 'RZLT', 'VSTM', 'RXRX', 'BHVN', 'JANX', 'MLYS', 'MNKD', 'BNTC', 'CRBP', 'LENZ', 'TCRX', 'ABCL', 'AGIO']
+Feed size: 15 tickers
+Tier breakdown: A=0  B=1  C=14
+Wrote C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\cost_estimate_2025Q4.html
+Estimated production cost: $9.05  (worst-case: $9.58)
+
+--yes specified: dispatching 15 API call(s) for ~$9.05 without confirmation.
+
+Dispatching 15 calls in mode=batch...
+
+Batch submitted: batch_id=msgbatch_0115TU5qEuAXrnfDJ2uTfhjL  run_id=12
+Traceback (most recent call last):
+  File "C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\scripts\6_score.py", line 1344, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\scripts\6_score.py", line 1001, in main
+    print(f"  \u2192 if this script crashes during poll, recover with:")
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 2: character maps to <undefined>

@@ -1,0 +1,64 @@
+2026-04-28 18:05:13,581 INFO httpx: HTTP Request: POST https://api.anthropic.com/v1/messages/batches "HTTP/1.1 200 OK"
+2026-04-28 18:05:13,581 INFO module_6.dispatch: Submitted batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR with 30 requests
+2026-04-28 18:05:14,436 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:05:14,437 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=0s
+2026-04-28 18:05:44,910 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:05:44,910 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=31s
+2026-04-28 18:06:15,419 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:06:15,419 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=61s
+2026-04-28 18:06:45,892 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:06:45,909 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=92s
+2026-04-28 18:07:16,445 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:07:16,445 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=122s
+2026-04-28 18:07:46,955 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:07:46,955 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=153s
+2026-04-28 18:08:17,460 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:08:17,476 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=183s
+2026-04-28 18:08:47,968 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:08:47,968 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=214s
+2026-04-28 18:09:18,473 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:09:18,474 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=244s
+2026-04-28 18:09:49,020 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:09:49,020 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=275s
+2026-04-28 18:10:19,570 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:10:19,571 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=305s
+2026-04-28 18:10:50,089 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:10:50,089 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=336s
+2026-04-28 18:11:20,588 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:11:20,588 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=366s
+2026-04-28 18:11:51,109 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:11:51,125 INFO module_6.dispatch: Batch msgbatch_01NvuNMepTwg4dj3g9XEDDHR status=in_progress elapsed=397s
+2026-04-28 18:12:21,671 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:12:21,993 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR "HTTP/1.1 200 OK"
+2026-04-28 18:12:22,527 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01NvuNMepTwg4dj3g9XEDDHR/results "HTTP/1.1 200 OK"
+2026-04-28 18:12:23,699 INFO 6_score: Modifier applied to 27 ticker(s) in run 13
+2026-04-28 18:12:23,715 WARNING 6_score: M7 snapshot_run failed (run=13): UNIQUE constraint failed: predictions.ticker, predictions.scoring_date, predictions.horizon
+Explicit ticker list: ['RARE', 'CRMD', 'RZLT', 'VSTM', 'RXRX', 'BHVN', 'JANX', 'MLYS', 'MNKD', 'BNTC', 'CRBP', 'LENZ', 'TCRX', 'ABCL', 'AGIO', 'AKBA', 'AVXL', 'BCYC', 'NAGE', 'PLRX', 'PRGO', 'PRQR', 'VOR', 'ZLAB', 'RCKT', 'SPRY', 'PBH', 'XFOR', 'PCRX', 'PALI']
+Feed size: 30 tickers
+Tier breakdown: A=0  B=15  C=15
+Wrote C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\cost_estimate_2025Q4.html
+Estimated production cost: $11.23  (worst-case: $19.18)
+
+--yes specified: dispatching 30 API call(s) for ~$11.23 without confirmation.
+
+Dispatching 30 calls in mode=batch...
+
+Batch submitted: batch_id=msgbatch_01NvuNMepTwg4dj3g9XEDDHR  run_id=13
+  -> if this script crashes during poll, recover with:
+    python scripts/6_score.py --resume-run 13
+
+
+----------------------------------------------------------------------
+Module 6 run complete: run_id=13, quarter=2025Q4
+  Calls dispatched:     30
+  Successful parses:    27
+  Errors:               3
+  Wall time:            432.8s
+  Tokens (in / out):    389,527 / 253,570
+  Cache (read / create):3,971,088 / 2,318,958
+  Web searches:         112
+  USD cost (paid):      $15.35
+  USD if list-price:    $25.98
+  Reports:              C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\final_ranking_2025Q4.html
+                        C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\final_ranking_2025Q4.xlsx
+----------------------------------------------------------------------

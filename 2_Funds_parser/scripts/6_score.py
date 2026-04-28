@@ -998,7 +998,7 @@ def main() -> int:
                 finally:
                     _early_conn.close()
                 print(f"\nBatch submitted: batch_id={batch_id}  run_id={run_id}")
-                print(f"  → if this script crashes during poll, recover with:")
+                print(f"  -> if this script crashes during poll, recover with:")
                 print(f"    python scripts/6_score.py --resume-run {run_id}")
                 print()
                 results = poll_and_collect_batch(
