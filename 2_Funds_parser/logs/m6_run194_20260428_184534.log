@@ -1,0 +1,75 @@
+2026-04-28 18:45:41,116 INFO httpx: HTTP Request: POST https://api.anthropic.com/v1/messages/batches "HTTP/1.1 200 OK"
+2026-04-28 18:45:41,118 INFO module_6.dispatch: Submitted batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 with 169 requests
+2026-04-28 18:45:41,907 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:45:41,908 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=0s
+2026-04-28 18:46:12,420 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:46:12,422 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=30s
+2026-04-28 18:46:42,933 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:46:42,934 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=61s
+2026-04-28 18:47:13,469 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:47:13,470 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=92s
+2026-04-28 18:47:44,015 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:47:44,016 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=122s
+2026-04-28 18:48:14,539 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:48:14,543 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=153s
+2026-04-28 18:48:45,092 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:48:45,093 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=183s
+2026-04-28 18:49:15,694 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:49:15,695 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=214s
+2026-04-28 18:49:46,238 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:49:46,238 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=244s
+2026-04-28 18:50:16,773 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:50:16,774 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=275s
+2026-04-28 18:50:47,273 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:50:47,273 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=305s
+2026-04-28 18:51:17,774 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:51:17,774 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=336s
+2026-04-28 18:51:48,350 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:51:48,351 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=366s
+2026-04-28 18:52:18,861 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:52:18,862 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=397s
+2026-04-28 18:52:49,405 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:52:49,406 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=427s
+2026-04-28 18:53:19,913 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:53:19,914 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=458s
+2026-04-28 18:53:50,452 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:53:50,453 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=488s
+2026-04-28 18:54:20,950 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:54:20,951 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=519s
+2026-04-28 18:54:51,492 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:54:51,492 INFO module_6.dispatch: Batch msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 status=in_progress elapsed=550s
+2026-04-28 18:55:22,032 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:55:22,301 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8 "HTTP/1.1 200 OK"
+2026-04-28 18:55:23,200 INFO httpx: HTTP Request: GET https://api.anthropic.com/v1/messages/batches/msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8/results "HTTP/1.1 200 OK"
+2026-04-28 18:55:29,002 INFO 6_score: Modifier applied to 160 ticker(s) in run 14
+2026-04-28 18:55:29,051 INFO module_7.snapshot: snapshot_run: wrote 320 predictions for run_id=14 (quarter=2025Q4)
+2026-04-28 18:55:29,051 INFO 6_score: M7 snapshot: 320 predictions captured for run 14
+Explicit ticker list: ['RARE', 'CRMD', 'RZLT', 'VSTM', 'RXRX', 'BHVN', 'JANX', 'MLYS', 'MNKD', 'BNTC', 'CRBP', 'LENZ', 'TCRX', 'ABCL', 'AGIO', 'AVXL', 'BCYC', 'NAGE', 'PLRX', 'PRQR', 'VOR', 'ZLAB', 'RCKT', 'SPRY', 'XFOR', 'PALI', 'ZYME', 'SLDB', 'BCAX', 'CAMP', 'ALEC', 'GERN', 'IOVA', 'KURA', 'IKT', 'IRON', 'DYN', 'FDMT', 'XNCR', 'ADCT', 'ASMB', 'NUVB', 'PGEN', 'ACIU', 'FATE', 'NTLA', 'PHAT', 'PRME', 'AVTX', 'IDYA', 'IVVD', 'CTNM', 'NRIX', 'SION', 'SVRA', 'TARS', 'WVE', 'EYPT', 'IMNM', 'ORIC', 'TARA', 'FHTX', 'OCUL', 'PMVP', 'ARQT', 'DBVT', 'DNLI', 'FTRE', 'FULC', 'IVA', 'XERS', 'ABOS', 'ABUS', 'ADPT', 'AUPH', 'GLPG', 'HRMY', 'LYEL', 'NVAX', 'TBPH', 'VCEL', 'VYGR', 'CGEM', 'PHVS', 'TECX', 'KALV', 'ENTA', 'TRDA', 'INVA', 'GPCR', 'BEAM', 'MLTX', 'SEPN', 'URGN', 'CPRX', 'LRMR', 'OBIO', 'ZBIO', 'EWTX', 'DAWN', 'LONA', 'STOK', 'VIR', 'CLDX', 'ELVN', 'IMTX', 'ABSI', 'ARVN', 'AVBP', 'CCCC', 'IBIO', 'QTTB', 'SLN', 'SNDX', 'SRPT', 'CNTX', 'KPTI', 'NKTX', 'XOMA', 'ABEO', 'TYRA', 'TENX', 'CAPR', 'RCUS', 'DSGN', 'SRZN', 'DMRA', 'EQ', 'OLMA', 'MBX', 'ALMS', 'CRVS', 'FBRX', 'GLUE', 'KYTX', 'LXEO', 'BBOT', 'IMCR', 'NGNE', 'MNPR', 'UPB', 'KLRS', 'SANA', 'ELDN', 'NBP', 'SGMT', 'VTVT', 'JBIO', 'CBIO', 'ANNX', 'INBX', 'PVLA', 'ANRO', 'IMMX', 'RLMD', 'IRD', 'NAUT', 'NERV', 'RAPP', 'GHRS', 'TSHA', 'KOD', 'DRUG', 'ANAB', 'NKTR', 'RLAY', 'ARTV', 'OVID', 'PRLD', 'STTK', 'TRVI', 'WHWK', 'IMUX', 'ZNTL', 'CTMX', 'ARDX', 'VERA', 'SABS', 'ZURA', 'CMPX', 'PEPG', 'VRDN', 'IMA', 'ADMA', 'MAZE', 'REPL', 'INO', 'MDXG', 'SLNO', 'ACET', 'ACRV', 'HELP', 'MIST', 'DNA']
+Feed size: 194 tickers
+Tier breakdown: A=25  B=3  C=166
+Wrote C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\cost_estimate_2025Q4.html
+Estimated production cost: $12.10  (worst-case: $12.29)
+
+--yes specified: dispatching 169 API call(s) for ~$12.10 without confirmation.
+
+Dispatching 169 calls in mode=batch...
+
+Batch submitted: batch_id=msgbatch_01JxiJ2gUwKrbXvUzG7DA6u8  run_id=14
+  -> if this script crashes during poll, recover with:
+    python scripts/6_score.py --resume-run 14
+
+
+----------------------------------------------------------------------
+Module 6 run complete: run_id=14, quarter=2025Q4
+  Calls dispatched:     169
+  Successful parses:    160
+  Errors:               9
+  Wall time:            590.5s
+  Tokens (in / out):    1,771,929 / 1,492,183
+  Cache (read / create):27,954,529 / 15,621,243
+  Web searches:         774
+  USD cost (paid):      $9.64
+  USD if list-price:    $14.62
+  Reports:              C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\final_ranking_2025Q4.html
+                        C:\Users\sugit\Documents\Claude\_Stock_agent\2_Funds_parser\Outputs\final_ranking_2025Q4.xlsx
+----------------------------------------------------------------------

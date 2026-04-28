@@ -112,8 +112,18 @@ def _build_detail_row(
     by_ticker_horizon: dict,
     colspan: int,
     final_horizon: str = "either",
-) -> str:
-    """Build the inline detail panel <tr> for one ticker.
+) -> tuple[str, str]:
+    """Build the lazy-loadable detail panel for one ticker.
+
+    Returns ``(placeholder_tr, inner_html)``:
+      * ``placeholder_tr`` — a tiny ``<tr class='detail-row' …><td colspan=N></td></tr>``
+        emitted into the page body. Cheap for the browser to parse + lay out.
+      * ``inner_html`` — the heavy detail content (horizon cards + raw LLM reply
+        + research_brief JSON), packed into ``TICKER_DETAILS[ticker]`` as a JS
+        string and lazily injected into the placeholder ``<td>`` on first
+        click. D58 — solves the 7.6 MB / 20 s page-load freeze on 194-ticker
+        feeds where 191 detail panels were emitted upfront, each containing
+        the full LLM response inline.
 
     Renders only the horizon card matching ``final_horizon`` (3mo or 12mo).
     When ``final_horizon == 'either'`` (model couldn't decide) both are shown.
@@ -158,10 +168,12 @@ def _build_detail_row(
     else:                                                       # 'either' or unknown
         horizons_html = horizon_card("3mo", h3) + horizon_card("12mo", h12)
 
-    return (
+    placeholder_tr = (
         f"<tr class='detail-row' data-for='{html.escape(ticker)}' "
         f"id='detail-{html.escape(ticker)}' style='display:none'>"
-        f"<td colspan='{colspan}'>"
+        f"<td colspan='{colspan}'></td></tr>"
+    )
+    inner_html = (
         f"<div class='detail-panel'>"
         f"<div class='horizons'>{horizons_html}</div>"
         # Per user request 2026-04-25: raw LLM reply first (the primary
@@ -171,8 +183,9 @@ def _build_detail_row(
         f"<pre>{html.escape(raw_text)}</pre></details>"
         f"<details><summary>research_brief (parsed JSON)</summary>"
         f"<pre>{html.escape(rb_pretty)}</pre></details>"
-        f"</div></td></tr>"
+        f"</div>"
     )
+    return placeholder_tr, inner_html
 
 
 # D47 / D50 / D52 — composite score modifier component order. Mirrored in
@@ -270,6 +283,7 @@ def render_final_ranking_html(
                    min(float(bounds.get("max", 1.5)), prod))
 
     body_rows = []
+    ticker_details: dict[str, str] = {}     # D58 — lazy-loaded into TICKER_DETAILS
     for r in rows:
         # Highlight final_horizon
         h = r.get("final_horizon", "")
@@ -355,13 +369,16 @@ def render_final_ranking_html(
         # Detail row — emitted only when score_rows is provided. Filter by the
         # row's final_horizon so the user sees only the recommended horizon's
         # thesis (per user request 2026-04-25).
+        # D58 — placeholder <tr> goes into the body; the heavy inner HTML lives
+        # in `ticker_details` and is embedded as TICKER_DETAILS[ticker] in the
+        # script. JS click handler injects on first open (lazy-load).
         if score_rows:
-            body_rows.append(
-                _build_detail_row(
-                    ticker, by_ticker_horizon,
-                    colspan=22, final_horizon=h or "either",
-                )
+            placeholder_tr, inner_html = _build_detail_row(
+                ticker, by_ticker_horizon,
+                colspan=22, final_horizon=h or "either",
             )
+            body_rows.append(placeholder_tr)
+            ticker_details[ticker] = inner_html
 
     table_rows = "\n".join(body_rows) or "<tr><td colspan=22>(empty)</td></tr>"
     headers = (
@@ -439,6 +456,11 @@ def render_final_ranking_html(
         },
         "ticker_factors": factors_for_js,
     })
+    # D58 — lazy-loaded detail panel inner HTML, keyed by ticker. Embedded as
+    # a JS string constant so the browser doesn't have to parse + lay out
+    # 100+ inline detail panels at page load. Click handler injects on first
+    # open. Without this, 194-ticker reports take ~20 s to become responsive.
+    ticker_details_js = json.dumps(ticker_details)
 
     # Hamburger button + slide-out panel HTML, only when we have factors.
     if show_modifier_panel:
@@ -677,15 +699,28 @@ const SERVE_COMMAND = {serve_command_js};
 // by the hamburger panel; recomputes table cells on every slider tick.
 const MODIFIER_DATA = {modifier_data_js};
 const CURRENT_WEIGHTS = Object.assign({{}}, MODIFIER_DATA.weights || {{}});
+// D58 — per-ticker detail panel inner HTML, lazy-injected on first
+// expand-toggle click. Heavy LLM responses live here as strings instead
+// of as inline DOM, cutting page-load layout cost by ~95%.
+const TICKER_DETAILS = {ticker_details_js};
 
 // ─────────────────────────────────────────────────────────────────
 // Expand-arrow click handler: toggle the matching detail row.
+// First click on a row also injects its inner HTML from TICKER_DETAILS
+// (D58 lazy-load).
 // ─────────────────────────────────────────────────────────────────
 document.querySelectorAll('.expand-toggle').forEach(btn => {{
   btn.addEventListener('click', e => {{
     e.stopPropagation();
     const target = document.getElementById(btn.dataset.target);
     if (!target) return;
+    if (target.dataset.loaded !== '1') {{
+      const ticker = target.dataset.for;
+      const td = target.querySelector('td');
+      const html = (TICKER_DETAILS && TICKER_DETAILS[ticker]) || '';
+      if (td && html) td.innerHTML = html;
+      target.dataset.loaded = '1';
+    }}
     const isOpen = target.style.display !== 'none';
     target.style.display = isOpen ? 'none' : 'table-row';
     btn.innerHTML = isOpen ? '&#9654;' : '&#9660;';

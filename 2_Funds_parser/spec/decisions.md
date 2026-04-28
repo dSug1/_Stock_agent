@@ -1077,6 +1077,51 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D58 — Lazy-load detail panels in `final_ranking_*.html` (page-load freeze fix)
+
+**Status: ✅ Implemented 2026-04-28.** Symptom: after the 194-biotech dispatch (run 14) the local-server-served `final_ranking_2025Q4.html` took **~20 seconds to become responsive** — buttons (expand-toggle, drawer hamburger, copy-CLI, checkboxes) all visible but unresponsive during that window. User reported via the local server (`http://127.0.0.1:4609/2025Q4`), so it wasn't a `file://` issue.
+
+**Diagnosis.** The HTML was **7.6 MB / 86,334 lines / ~85k DOM nodes** with 191 detail panels emitted upfront. Each detail panel contained the full LLM `raw_text` response (~25 KB per ticker × 191 ≈ 5 MB) plus the parsed `research_brief` JSON pretty-printed. Although every detail row had `style='display:none'`, browsers still parse, style-resolve, and partially lay out hidden DOM. With 191 large `<pre>` blocks containing the full thesis, that adds up to seconds of pre-interactive layout work.
+
+**Fix.** Refactor `_build_detail_row` in [src/module_6/reports.py:110-180](../src/module_6/reports.py#L110-L180) to return `(placeholder_tr, inner_html)` instead of one big `<tr>...</tr>`. The main render loop in [src/module_6/reports.py:286+](../src/module_6/reports.py#L286) accumulates `inner_html` strings into a Python `dict[str, str]` keyed by ticker. After the table, that dict is emitted as a JS string constant:
+
+```js
+const TICKER_DETAILS = {"AKBA": "<div class='detail-panel'>...</div>", ...};
+```
+
+The placeholder `<tr>` in the body becomes a one-liner:
+
+```html
+<tr class='detail-row' data-for='AKBA' id='detail-AKBA' style='display:none'>
+  <td colspan='22'></td>
+</tr>
+```
+
+The expand-toggle click handler at [reports.py:684-694](../src/module_6/reports.py#L684-L702) now lazy-injects `TICKER_DETAILS[ticker]` into the placeholder `<td>` on first open (gated by `target.dataset.loaded`). Subsequent toggles only flip `display:none`/`table-row` — the inner HTML is only built once per opened ticker.
+
+**Why this works.** JS string literals are inert until accessed — the browser doesn't allocate DOM, run CSS rules, or compute layout for a 5 MB string sitting in `const TICKER_DETAILS`. Only the placeholders (≤200 bytes each × 160 tickers = ≤32 KB) participate in initial layout. The user only pays the parse-and-inject cost for the panels they actually open.
+
+**Acceptance.** Re-rendered the run-14 report (160 successful tickers) via `scripts/6_recompute_scores.py` — no LLM calls, just static regen:
+
+| | Before D58 | After D58 |
+|---|---:|---:|
+| Total file size | 7.6 MB | 6.4 MB |
+| HTML body size (parsed by browser into DOM) | ~7.5 MB | **180 KB** |
+| Script block size (JS string, inert until accessed) | ~70 KB | 6.5 MB |
+| Body line count | 85,792 | 745 |
+| Placeholder detail rows | 0 (all inline) | 160 |
+
+Body DOM cost is now **97.6 % smaller**. Expected wallclock-to-interactive on a 194-ticker page: **~1–3 s** (down from ~20 s). User to confirm.
+
+**Side effects.** None for users who only browse the table — the detail panel renders identically when clicked (just slightly later, but only once per ticker). The original "click → toggle visibility" behavior is preserved, just with a one-time injection on first open.
+
+**Why not a more aggressive fix?** Other options considered and rejected:
+- *Lazy-render via Intersection Observer* — overkill for a ranked list a user scrolls through manually.
+- *Strip `raw_text` from the report* — user explicitly wanted raw LLM reply visible per D45 / 2026-04-25 request. Lazy-load preserves it without the freeze.
+- *Defer event listener attachment in `requestIdleCallback`* — fixes the listener-attach phase but not the layout phase, which dominates here.
+
+---
+
 ### D57 — M6/M7 follow-ups from run 12 + run 13 (snapshot UNIQUE, max_output_tokens, cost calibration, resume-mode hash bug)
 
 **Status: ✅ Implemented 2026-04-28.** Four small but important fixes triggered by observations during the first user-driven dispatches under m6-v4 (run 12 = 15-ticker dispatch, run 13 = 30-ticker dispatch). Each is isolated and independently revertable.
