@@ -28,15 +28,15 @@
   Quarter: <code>2025Q4</code> &middot;
   Prompt version: <code>m6-v4</code> &middot;
   Model: <code>claude-opus-4-7</code> &middot;
-  Generated: 2026-04-28T15:05:10+00:00
+  Generated: 2026-04-28T15:41:21+00:00
 </div>
 
 <div class="summary">
   <b>Feed size:</b> 30 tickers.<br>
   <b>Production cost (cache + batch):</b>
-    $11.23<br>
+    $0.1466<br>
   <b>Worst case if all Tier B escalate:</b>
-    <span class="worst">$19.18</span>
+    <span class="worst">$0.1466</span>
 </div>
 
 <h2>Active gates (D21 / D27 / D28 / D29)</h2>
@@ -49,7 +49,7 @@
     <th>Avg input tokens / call</th><th>Avg output tokens / call</th>
     <th>Avg search calls / call</th>
   </tr>
-  <tr><td><b>Tier A</b></td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td><b>Tier B</b></td><td>15</td><td>15</td><td>8,330</td><td>400</td><td>2</td></tr><tr><td><b>Tier C</b></td><td>15</td><td>15</td><td>20,330</td><td>10,000</td><td>10</td></tr>
+  <tr><td><b>Tier A</b></td><td>28</td><td>0</td><td>0</td><td>0</td><td>0</td></tr><tr><td><b>Tier B</b></td><td>0</td><td>0</td><td>8,330</td><td>400</td><td>2</td></tr><tr><td><b>Tier C</b></td><td>2</td><td>2</td><td>20,330</td><td>12,500</td><td>10</td></tr>
 </table>
 
 <h2>Pricing scenarios</h2>
@@ -64,7 +64,7 @@
     <th>Web-search fee (upper bound)</th>
     <th>Total</th>
   </tr>
-  <tr><td>no-optim</td><td>897,720</td><td>0</td><td>0</td><td>156,000</td><td>$25.17</td><td>$1.8000</td><td><b>$26.97</b></td></tr><tr><td>cache-only</td><td>445,494</td><td>452,226</td><td>15,594</td><td>156,000</td><td>$18.85</td><td>$1.8000</td><td><b>$20.65</b></td></tr><tr style="background:#e8f5e9; font-weight:600"><td>cache+batch (production)</td><td>445,494</td><td>452,226</td><td>15,594</td><td>156,000</td><td>$9.4251</td><td>$1.8000</td><td><b>$11.23</b></td></tr>
+  <tr><td>no-optim</td><td>71,848</td><td>0</td><td>0</td><td>25,000</td><td>$2.9527</td><td>$0.2000</td><td><b>$0.3153</b></td></tr><tr><td>cache-only</td><td>56,254</td><td>15,594</td><td>15,594</td><td>25,000</td><td>$2.5317</td><td>$0.2000</td><td><b>$0.2732</b></td></tr><tr style="background:#e8f5e9; font-weight:600"><td>cache+batch (production)</td><td>56,254</td><td>15,594</td><td>15,594</td><td>25,000</td><td>$1.2658</td><td>$0.2000</td><td><b>$0.1466</b></td></tr>
 </table>
 
 <h2>Token-count assumptions</h2>
@@ -80,6 +80,6 @@
 </table>
 
 <h2>Notes</h2>
-<div class="notes"><ul><li>Token counts are heuristic (chars / 3.6); actual Anthropic billing may differ ±10%.</li><li>Pricing values from scoring.yaml::pricing — verify against Anthropic&#x27;s pricing page before dispatch.</li><li>Web search fees do not benefit from the batch 50% discount (per Anthropic docs).</li><li>Search-result tokens are estimated at 1500 tokens per snippet × max_uses; actual snippets vary by domain (paywalled domains return shorter content).</li><li>&#x27;Worst-case if all Tier B escalate&#x27; assumes every Tier B&#x27;s light-refresh call returns material_change=true and the second-batch escalation runs at Tier C cost.</li></ul></div>
+<div class="notes"><ul><li>Token counts are heuristic (chars / 3.6); actual Anthropic billing may differ ±10%.</li><li>Pricing values from scoring.yaml::pricing — verify against Anthropic&#x27;s pricing page before dispatch.</li><li>Web search fees do not benefit from the batch 50% discount (per Anthropic docs).</li><li>Search-result tokens are estimated at 1500 tokens per snippet × max_uses; actual snippets vary by domain (paywalled domains return shorter content).</li></ul></div>
 
 </body></html>

@@ -110,6 +110,11 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
     batch_disc = float(pricing["batch_discount"])
     search_per_1k = float(pricing["web_search_per_1k"])
     search_avg_tokens = int(pricing.get("search_result_avg_tokens", 1500))
+    # 2026-04-28 — empirical calibration vs real Anthropic invoices. Applied
+    # to every scenario's `total_usd` (and the worst-case ceiling) so the
+    # number the user sees pre-dispatch matches what they'll actually be billed.
+    # Source data + rationale in scoring.yaml::pricing.cost_calibration_factor.
+    calibration = float(pricing.get("cost_calibration_factor", 1.0))
 
     cached_prefix_tokens = _approx_tokens(inputs.cached_prefix_text)
     if not inputs.pack_jsons_sample:
@@ -200,7 +205,7 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
         cache_creation_tokens_total=0,
         token_cost_usd=no_optim_token_cost,
         search_fee_usd_upper_bound=search_fee_upper_bound,
-        total_usd=no_optim_token_cost + search_fee_upper_bound,
+        total_usd=(no_optim_token_cost + search_fee_upper_bound) * calibration,
     )
 
     # ---------- Scenario B: cache-only (no batch) ----------
@@ -218,7 +223,7 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
         cache_creation_tokens_total=cache_creation_tokens,
         token_cost_usd=cache_only_token_cost,
         search_fee_usd_upper_bound=search_fee_upper_bound,
-        total_usd=cache_only_token_cost + search_fee_upper_bound,
+        total_usd=(cache_only_token_cost + search_fee_upper_bound) * calibration,
     )
 
     # ---------- Scenario C: cache + batch (production default) ----------
@@ -232,7 +237,7 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
         cache_creation_tokens_total=cache_creation_tokens,
         token_cost_usd=cache_batch_token_cost,
         search_fee_usd_upper_bound=search_fee_upper_bound,
-        total_usd=cache_batch_token_cost + search_fee_upper_bound,
+        total_usd=(cache_batch_token_cost + search_fee_upper_bound) * calibration,
     )
 
     # ---------- Worst case: every Tier B escalates to Tier C ----------
@@ -254,7 +259,7 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
         )
         extra_token_cost_batched = extra_token_cost_full_price * batch_disc
         extra_search_fee = (b_to_c_extra_search_calls / 1000.0) * search_per_1k
-        worst_case = scenario_cache_batch.total_usd + extra_token_cost_batched + extra_search_fee
+        worst_case = scenario_cache_batch.total_usd + (extra_token_cost_batched + extra_search_fee) * calibration
     else:
         worst_case = scenario_cache_batch.total_usd
 

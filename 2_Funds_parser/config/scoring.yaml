@@ -7,7 +7,7 @@
 # ---------------- Prompt / model ----------------
 model: claude-opus-4-7
 prompt_version: m6-v4                                  # m6-v4 (D54) adds HARD RULES #20-22: use pack.fundamentals.{financials,recent_insider_transactions,recent_capital_raises} verbatim; m6-v3 (D45) added catalyst-date sanity + IR-freshness check + platform-rNPV row + structured final_results citation
-max_output_tokens: 10000      # raised after 3-ticker live test showed 6000 truncated mid-thesis
+max_output_tokens: 12500      # 2026-04-28: 10000 was scraped (3 of 30 trunc in run 13: BHVN/NAGE plus run-12 RARE); raised to 12500 with headroom
 system_prompt_path: config/module_6_system_prompt.md
 few_shot_examples_path: config/module_6_few_shots.md
 
@@ -79,3 +79,11 @@ pricing:
   web_search_per_1k: 10.00         # $10 per 1000 web_search queries
   search_result_avg_tokens: 1500   # heuristic: avg tokens per web_search snippet result
                                    # (used to estimate the input-token cost of search results)
+  # 2026-04-28 — empirical calibration. Two real Anthropic invoices vs script-computed:
+  #   run 12: script $8.90, actual $0.45, ratio 0.051
+  #   run 13: script $15.35, actual $1.49, ratio 0.097
+  # The script over-counts cache_creation across batch members, and there appears to be
+  # an account-tier discount the published rates don't expose. Single global multiplier
+  # applied to the FINAL cost (token + search) in both _usd_cost_per_call and the
+  # cost estimator. Re-tune as more billing data accumulates.
+  cost_calibration_factor: 0.10

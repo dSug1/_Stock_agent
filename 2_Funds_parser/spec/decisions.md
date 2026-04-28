@@ -1077,6 +1077,72 @@ Walk-back math at `cache_creation_multiplier = 0.10`:
 
 ---
 
+### D57 — M6/M7 follow-ups from run 12 + run 13 (snapshot UNIQUE, max_output_tokens, cost calibration, resume-mode hash bug)
+
+**Status: ✅ Implemented 2026-04-28.** Four small but important fixes triggered by observations during the first user-driven dispatches under m6-v4 (run 12 = 15-ticker dispatch, run 13 = 30-ticker dispatch). Each is isolated and independently revertable.
+
+**1. M7-α `predictions` UNIQUE collision on same-day re-dispatch.** [src/module_7/snapshot.py:198-209](../src/module_7/snapshot.py#L198-L209)
+
+Run 13 dispatched 30 tickers on the same calendar day as run 12; 14 of them overlapped. The `predictions` table PK is `(ticker, scoring_date, horizon)` — not `run_id` — so re-snapshotting hit `UNIQUE constraint failed`. Worse: `executemany INSERT ...` rolled back the **entire transaction** on first conflict, so 0 rows landed for run 13 — including the 13 *new* (non-overlap) tickers that wouldn't have collided.
+
+**Fix.** One-line change: `INSERT INTO predictions(...)` → `INSERT OR REPLACE INTO predictions(...)`. "Latest dispatch wins" matches D55's documented re-snapshot intent (per the canonical-snapshot rule in D55: re-snapshotting via `6b_apply_modifiers.py` overwrites prior; same logic applies to a fresh dispatch on the same scoring_date). Backfill: `7_track_outcomes.py --backfill-runs 13 --no-collect` then wrote 54 predictions for run 13 (27 successful tickers × 2 horizons), of which 28 replaced run-12's overlap rows and 26 are new. BHVN's run-12 predictions survived (BHVN errored in run 13, so no replacement was attempted).
+
+**Side-note for M7-β/γ.** Multiple same-day dispatches now leave only the latest in the predictions table. If the user retunes modifiers and re-dispatches the same day, the prior prediction with prior modifiers is gone. Reading the historical sequence requires `llm_scores.score_modifier_json` (which IS run-id-keyed). M7-β/γ readers should JOIN against `llm_scores` for full audit, not rely solely on `predictions`.
+
+**2. `max_output_tokens` 10000 → 12500.** [config/scoring.yaml:10](../config/scoring.yaml#L10)
+
+Run 13 produced 3 errors (BHVN `json_parse_fail`, NAGE `schema_violation`, RARE in run 12 also schema_violation) all stamped `[stop_reason=max_tokens]`. The remaining 27 successful Tier-C calls used between 7,295 and 10,898 output tokens — average 9,500, max scraping the 10,000 cap. The m6-v4 prompt is genuinely token-hungry (HARD RULES #20-22 add structured `pack.fundamentals.*` echoing on top of the existing `research_brief` schema). Bumped to 12,500 with comment retaining the empirical history. Cost impact: marginal — output tokens scale linearly so worst-case ~25% more output cost on truncating tickers, but most calls stay well under the new cap.
+
+**Note on PBH (run 13's third error).** PBH was a `schema_violation` with `[stop_reason=end_turn]` (not `max_tokens`) — the model correctly emitted an empty `rnpv_by_indication` because Prestige Consumer Healthcare is OTC consumer goods (Advil/Dramamine), not a developer with rNPV indications. Schema requires non-empty list. Domain mismatch, not a token issue. Future fix would be to make `rnpv_by_indication` optional when industry suggests non-developer (out of scope here; flagged for spec update).
+
+**3. Cost calibration factor — bridge between published rates and actual Anthropic invoices.** [config/scoring.yaml::pricing.cost_calibration_factor](../config/scoring.yaml), [scripts/6_score.py::_usd_cost_per_call](../scripts/6_score.py), [src/module_6/cost_estimate.py::estimate_cost](../src/module_6/cost_estimate.py)
+
+The user reported real billed costs after the first two paid runs:
+- Run 12: script computed $8.90, **actual bill $0.45** (ratio 5.1%)
+- Run 13: script computed $15.35, **actual bill $1.49** (ratio 9.7%)
+
+The script implements the published per-token rates correctly per Anthropic's docs ($15/$75 per MTok, 10% cache-read multiplier, 50% batch discount). The published math doesn't match real invoices for two likely reasons:
+- **Cache-creation accounting.** The script accumulates `cache_creation_input_tokens` across every batch member that reports a non-zero value. In practice, Anthropic appears to charge cache-write only once per batch (the first-call write that subsequent calls read from), making the script over-count by N-1 calls' worth of cache creation.
+- **Account-tier discount.** The user's actual rate appears further reduced beyond published list-price + cache + batch optimizations. Without a per-line-item invoice we can't isolate which component is discounted.
+
+**Fix.** Added `pricing.cost_calibration_factor: 0.10` to [scoring.yaml](../config/scoring.yaml#L82). Applied as a final multiplier in:
+- `_usd_cost_per_call` ([6_score.py:282-307](../scripts/6_score.py#L282-L307)) — affects `usd_cost_total` and `usd_cost_list_price` written to `llm_runs` after every dispatch.
+- `estimate_cost` ([cost_estimate.py:102-260](../src/module_6/cost_estimate.py#L102-L260)) — affects all three pricing scenarios' `total_usd` plus the worst-case ceiling shown in the pre-flight HTML estimate.
+
+**Why 0.10 specifically.** Run 13's ratio (0.097) is the closer fit for a fresh-cold dispatch with active cache writes. Run 12's lower ratio (0.051) reflects heavier cache reuse and would under-estimate future runs. Erring slightly high (the $1.49 ground truth becomes a $1.53 estimate at factor 0.10) is the safer default — under-estimating before a user pays is the worse direction. Re-tune as more billing data lands; comment in YAML explicitly says "re-tune as more billing data accumulates" and shows the source data points so future-me can update with one number change.
+
+**Acceptance.** Calibrated cost estimator on the same 30-ticker feed now reports $0.16 (worst $0.22) — though that's not directly comparable to run 13's $1.49 actual because the re-estimate sees 27 of 30 as Tier A (cache hits from the just-completed run 13). For directly-comparable validation, the next cold-feed dispatch will be the empirical check.
+
+**4. Resume-mode `pack_source_rank_hash = NULL` bug (the reason all 30 of run 13 hit Anthropic).** [scripts/6_score.py:659, 691-700, 1119](../scripts/6_score.py#L691-L700)
+
+**Symptom.** Run 13 saw `Tier breakdown: A=0 B=15 C=15` even though 14 of the 30 tickers had been successfully scored 30 minutes earlier in run 12. Tier A should have fired for those 14, skipping the API call entirely. Instead they were classified as Tier B (light-refresh, billed) — the user paid ~$0.70 of the $1.49 invoice for what should have been free.
+
+**Root cause.** Run 12's python script crashed on a Unicode arrow print (`→` in cp1252 console — separately fixed in this session). The batch was already submitted to Anthropic and processed normally, but the post-dispatch parse + write happened only when we ran `--resume-run 12`. The resume code path at [6_score.py:659](../scripts/6_score.py#L659) set `per_ticker = []` (with comment "prep_index will be empty") because resume mode can't rebuild full prep entries (no system prompt context, no token budget, no tier classification at submit time). At write-time the lookup `prep["pack_source_rank_hash"] if prep else ""` collapsed to empty string for every result row, and the DB stored NULL hash for all 14 successful run-12 tickers.
+
+When run 13 ran, [tier.py::_classify_one_horizon](../src/module_6/tier.py#L62-L86) checked each prior's `pack_source_rank_hash` against the current pack hash. NULL never matches → fell through to refresh-window check → all 14 demoted to Tier B (recent-but-can't-confirm-pack-match path). Tier A (the "free" classification) is **gated solely on pack-hash match**, so a NULL hash permanently breaks Tier A for that prior until backfilled.
+
+**Fix.** Three lines added to the resume path. After `_load_packs_for_tickers` returns at [6_score.py:691](../scripts/6_score.py#L691) (which already loads packs for the result tickers anyway), build a minimal `per_ticker` of just `{ticker, pack_source_rank_hash}` dicts:
+
+```python
+per_ticker = [
+    {
+        "ticker": t,
+        "pack_source_rank_hash": (pack_lookup.get(t) or {}).get("source_rank_hash", ""),
+    }
+    for t in result_tickers
+]
+```
+
+`prep_index` at [6_score.py:1043](../scripts/6_score.py#L1043) is built from `per_ticker`, so `prep["pack_source_rank_hash"]` at the write site now resolves correctly. Other prep fields (system prompt, tier classification, budgets) are not needed by the write path — only the hash is consumed there.
+
+**Backfill.** BHVN is the only run-12 row that survived run 13's overwrite (because BHVN errored in run 13 — `INSERT OR REPLACE` only rewrote the 13 tickers that succeeded). Manual UPDATE pulled the live pack hash from `context_packs.json_extract("$.source_rank_hash")` and patched both BHVN horizons. Other run-12 NULL rows are gone (overwritten by run 13's correct hashes).
+
+**Acceptance.** Pre-fix dry-run on the same 30-ticker feed reported `Tier breakdown: A=27 B=1 C=2` (BHVN was B due to NULL hash). Post-fix + backfill: `A=28 B=0 C=2` — exactly right (28 priors, the 2 Tier C are NAGE + PBH which errored in run 13 with no successful prior). Future re-dispatches of these tickers within the same quarter + same pack hash will be **$0** at the dispatch layer.
+
+**Why this matters going forward.** `--resume-run` is the documented recovery path (D51) for any batch crash. Without this fix, *every* resume run silently broke Tier A for its tickers, which would compound badly over time. Anyone re-dispatching the same feed after a resume would re-pay full Tier-B cost when they should have paid $0.
+
+---
+
 ### D56 — Module 4c performance pass (parallelism + connection pooling + Form 4 URL discovery + rate bump + ETag)
 
 **Status: ✅ Implemented 2026-04-28.** Five-part optimization to M4c HTTP layer + per-ticker loop. Triggered by an empirical observation: cold-start enrichment of 214 biotech tickers on 2026-04-27 took **2.9 hours wall** (~73 k HTTP calls under the 9 req/s limiter). All five changes are isolated to `src/module_4c/{edgar_client.py, enrich.py, fundamentals_db.py}` and `src/layer_1/edgar_13f.py`. No schema-breaking changes; one additive migration adds two columns to `fetch_log`.

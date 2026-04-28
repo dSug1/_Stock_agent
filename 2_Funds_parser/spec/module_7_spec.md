@@ -87,8 +87,12 @@ write side; they only read.
 
 ### `predictions` schema
 
-One row per `(ticker, scoring_date, horizon)`. Replaced on re-snapshot of the
-same `(ticker, run_id, horizon)` (e.g., when `6b_apply_modifiers.py` reruns).
+One row per `(ticker, scoring_date, horizon)`. **Replaced** on any re-snapshot
+that targets the same key (per D57: `INSERT OR REPLACE`). This includes:
+(a) `6b_apply_modifiers.py` rerunning the same `run_id`; (b) a fresh dispatch
+on the same calendar day for an already-snapshotted ticker. "Latest dispatch
+wins" semantics — readers needing the historical chain JOIN against
+`llm_scores.score_modifier_json` (which is `run_id`-keyed and never overwritten).
 
 ```sql
 CREATE TABLE predictions (

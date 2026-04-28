@@ -295,6 +295,7 @@ def _usd_cost_per_call(
     cache_create_mult = float(pricing["cache_creation_multiplier"])
     batch_disc = float(pricing["batch_discount"]) if batch_mode else 1.0
     search_per_1k = float(pricing["web_search_per_1k"])
+    calibration = float(pricing.get("cost_calibration_factor", 1.0))
     non_cached_input = max(0, input_tokens - cache_read_tokens - cache_creation_tokens)
     token_cost = (
         (non_cached_input / 1_000_000.0) * in_per_mtok
@@ -303,7 +304,7 @@ def _usd_cost_per_call(
         + (output_tokens / 1_000_000.0) * out_per_mtok
     ) * batch_disc
     search_fee = (web_search_calls / 1000.0) * search_per_1k
-    return token_cost + search_fee
+    return (token_cost + search_fee) * calibration
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -655,7 +656,7 @@ def main() -> int:
         all_input_tickers = None
         prior_selection = None
         feed_rows = []                                  # synthetic; not used in step 9
-        per_ticker = []                                 # prep_index will be empty; pack_source_rank_hash defaults to ""
+        per_ticker = []                                 # populated from pack_lookup after load (D57 fix)
         counts = {Tier.A: int(run_row["tier_a_count"] or 0),
                   Tier.B: int(run_row["tier_b_count"] or 0),
                   Tier.C: int(run_row["tier_c_count"] or 0)}
@@ -688,7 +689,20 @@ def main() -> int:
         elapsed = time.time() - started
         result_tickers = sorted({r.ticker for r in results})
         pack_lookup = _load_packs_for_tickers(context_packs_db, quarter, result_tickers)
-        # Fall through to step 9 with run_id, results, pack_lookup all set.
+        # D57 — backfill per_ticker so prep_index can resolve pack_source_rank_hash
+        # at write time. Resume mode can't rebuild full prep entries (no system
+        # prompt, no tier classification, no token budget), but the score-write
+        # path only needs `pack_source_rank_hash` for Tier-A cache routing on
+        # subsequent runs. Without this, all resumed scores get NULL hash and
+        # never qualify for Tier A.
+        per_ticker = [
+            {
+                "ticker": t,
+                "pack_source_rank_hash": (pack_lookup.get(t) or {}).get("source_rank_hash", ""),
+            }
+            for t in result_tickers
+        ]
+        # Fall through to step 9 with run_id, results, pack_lookup, per_ticker all set.
     else:
         run_id = None                                   # opened later in step 9
         quarter = _resolve_quarter(context_packs_db, args.quarter)

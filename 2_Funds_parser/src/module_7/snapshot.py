@@ -195,8 +195,13 @@ def snapshot_run(
     with _outcomes_db_connect(outcomes_db_path) as oconn:
         # Idempotent re-snapshot: wipe prior rows for this run_id, then insert.
         delete_snapshots_for_run(oconn, run_id)
+        # `INSERT OR REPLACE` is required: the predictions PK is
+        # (ticker, scoring_date, horizon) — not run_id. Same-day re-dispatch
+        # for an overlapping ticker would otherwise hit UNIQUE and roll back
+        # the entire transaction (D55 bug surfaced 2026-04-28). "Latest
+        # dispatch wins" matches the documented D55 intent for re-snapshots.
         oconn.executemany(
-            f"INSERT INTO predictions({','.join(_PREDICTIONS_COLS)}) "
+            f"INSERT OR REPLACE INTO predictions({','.join(_PREDICTIONS_COLS)}) "
             f"VALUES({placeholder_str})",
             payloads,
         )
