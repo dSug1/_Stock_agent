@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang='en'><head><meta charset='utf-8'>
+<title>Module 4a Filter Summary — 2026Q1</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 980px; color: #222; }
+  h1 { margin-bottom: 0.2rem; }
+  .meta { color: #666; font-size: 0.9rem; margin-bottom: 1rem; }
+  .funnel { display: flex; gap: 0.5rem; align-items: center; margin: 1.5rem 0; flex-wrap: wrap; }
+  .funnel .stage { padding: 0.6rem 1rem; background: #eef; border-radius: 6px; }
+  .funnel .arrow { color: #999; font-size: 1.2rem; }
+  .funnel .pct { font-weight: 600; color: #045; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 0.4rem 0.7rem; border-bottom: 1px solid #eee; text-align: left; }
+  th { background: #f6f6f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+</style></head><body>
+<h1>Filter Summary — 2026Q1</h1>
+<div class='meta'>Generated 2026-05-17T17:44:07 UTC</div>
+<div class='meta'>Fetch ceiling: $10.0B · User-selected max cap: <b>$3.700B</b></div>
+
+<div class='funnel'>
+  <div class='stage'>Universe<br><b>2,368</b></div>
+  <div class='arrow'>→</div>
+  <div class='stage'>Rejected<br><b>1,394</b></div>
+  <div class='arrow'>→</div><div class='stage'>Candidate pool<br><b>1,413</b></div>
+  <div class='arrow'>→</div>
+  <div class='stage'>Survivors<br><b>974</b> <span class='pct'>(41.1%)</span></div>
+</div>
+
+<h2>Rejection breakdown</h2>
+<table>
+  <thead><tr><th>Reason</th><th class='num'>Count</th><th>Sample tickers</th></tr></thead>
+  <tbody>
+<tr><td><code>exclude_lonely_seller</code></td><td class='num'>487</td><td>AAPL, ABNB, ADBE, ADP, ADSK, AES, AGI, AGYS</td></tr>
+<tr><td><code>user_market_cap_max</code></td><td class='num'>439</td><td>AAL, ABCB, ABVX, ACA, ACHR, ACI, ACIW, ACLS</td></tr>
+<tr><td><code>market_cap_fetch_ceiling_usd</code></td><td class='num'>428</td><td>A, AA, AAOI, AAON, ABBV, ABT, ADI, ADM</td></tr>
+<tr><td><code>require_min_price_usd</code></td><td class='num'>17</td><td>ADGM, ALIT, ENSC, GOSS, HOWL, HRTX, HUMAW, KTTA</td></tr>
+<tr><td><code>market_cap_min_usd</code></td><td class='num'>11</td><td>ALGS, BOLD, BOLT, MODD, NSPR, NXTC, PTN, SER</td></tr>
+<tr><td><code>market_cap_missing</code></td><td class='num'>7</td><td>EMB, EMXC, IAGG, IBIT, JAAA, RVMDW, VXUS</td></tr>
+<tr><td><code>adv_30d_min_usd</code></td><td class='num'>3</td><td>DOYU, MOLN, SERA</td></tr>
+<tr><td><code>require_ticker_resolved</code></td><td class='num'>1</td><td>—</td></tr>
+<tr><td><code>snapshot_unavailable</code></td><td class='num'>1</td><td>GME/WS</td></tr>
+  </tbody>
+</table>
+</body></html>
