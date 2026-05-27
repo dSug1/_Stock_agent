@@ -215,9 +215,10 @@ CREATE TABLE bpc_insider_supplement (
     shares_change_pct     REAL,
     trade_price           REAL,
     cost                  REAL,
-    final_shares          INTEGER,
+    final_shares          INTEGER NOT NULL,
     no_of_shares          INTEGER,
-    PRIMARY KEY (snapshot_date, ticker, insider_name, filing_date, buy_sell, stock_or_option, shares)
+    PRIMARY KEY (snapshot_date, ticker, insider_name, filing_date, buy_sell,
+                 stock_or_option, shares, final_shares)
 );
 ```
 
@@ -396,7 +397,7 @@ PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_2_ingest_edgar_form4.py [--
 - All SEC requests use a single `requests.Session` configured with:
   - `User-Agent: <EDGAR_USER_AGENT>` (from env)
   - `Accept: application/json` for JSON endpoints
-- Token-bucket rate limit at `EDGAR_RATE_LIMIT_PER_SEC` (default 5/sec).
+- Token-bucket rate limit at `EDGAR_RATE_LIMIT_PER_SEC` (default 9.5/sec — matches `2_Funds_parser`'s setting; safely under SEC's 10/sec fair-use cap). Spec originally specified 5/sec; bumped per D5 update for cross-project consistency.
 - Retry with exponential backoff on 429 and 5xx (max 3 retries).
 - Hard fail on 403 (likely missing User-Agent).
 
@@ -548,12 +549,16 @@ Schema validation identical philosophy to Module 1: missing or extra columns →
 
 ### 6.5 Idempotency
 
-`INSERT OR REPLACE` on the composite PK. Re-loading the same file with the same snapshot date is a no-op.
+`INSERT OR REPLACE` on the composite **8-column** PK
+`(snapshot_date, ticker, insider_name, filing_date, buy_sell, stock_or_option, shares, final_shares)`. Re-loading the same file with the same snapshot date is a no-op.
+
+`final_shares` is in the PK (calibration per D4) because the BPC source data contains legitimate same-day partial fills — same insider buying or selling the same number of shares twice on the same day, ending at different post-trade positions. Without `final_shares` in the PK those rows silently coalesce.
 
 ### 6.6 Acceptance criteria
 
-- Loading `_csv_source/insider_data3.csv` (the current reference file, dated 2026-05-27) with snapshot `2026-05-27` inserts exactly **1,608** rows.
-- Re-running the same command updates 1,608 rows, inserts 0.
+- Loading `_csv_source/insider_data3.csv` (the current reference file, dated 2026-05-27) with snapshot `2026-05-27` reports `rows_in=1608, rows_inserted=1556, rows_updated=52, rows_rejected=0`, ending in `bpc_insider_supplement` with **1,556 distinct rows**.
+  - The 52-row delta is **true within-CSV duplicates** in the BPC source (bit-for-bit identical across all 14 columns). 7 *additional* buckets where rows shared the 7-column-PK key but differed in `final_shares` are correctly preserved as distinct rows now that `final_shares` is in the PK.
+- Re-running the same command reports `rows_in=1608, rows_inserted=0, rows_updated=1608, rows_rejected=0`. DB row count stays at 1,556.
 - A diff query (see §6.7) returns disagreements between this table and EDGAR Form 4 for the same ticker+insider+date.
 
 **Reference-file note:** the spec was originally drafted against a 696-row `insider_data.csv`; the current BPC pull is larger (`insider_data3.csv`, 1,608 rows). Update this count when a newer reference file replaces it.

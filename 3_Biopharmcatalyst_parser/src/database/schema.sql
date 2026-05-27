@@ -89,6 +89,9 @@ CREATE INDEX IF NOT EXISTS idx_ownership_ticker_date ON edgar_ownership_filings 
 
 -- §2.5 bpc_insider_supplement — manually-extracted BPC insider CSV,
 -- kept separate from EDGAR data so disagreements are auditable.
+-- PK includes final_shares per D4 (spec calibration): otherwise legitimate
+-- same-day partial fills that end at different post-trade positions
+-- collide and get silently coalesced.
 CREATE TABLE IF NOT EXISTS bpc_insider_supplement (
     snapshot_date         DATE    NOT NULL,
     ticker                TEXT    NOT NULL,
@@ -102,9 +105,10 @@ CREATE TABLE IF NOT EXISTS bpc_insider_supplement (
     shares_change_pct     REAL,
     trade_price           REAL,
     cost                  REAL,
-    final_shares          INTEGER,
+    final_shares          INTEGER NOT NULL,
     no_of_shares          INTEGER,
-    PRIMARY KEY (snapshot_date, ticker, insider_name, filing_date, buy_sell, stock_or_option, shares)
+    PRIMARY KEY (snapshot_date, ticker, insider_name, filing_date, buy_sell,
+                 stock_or_option, shares, final_shares)
 );
 
 -- §2.6 ingest_log — audit table written by every ingest run.
@@ -152,3 +156,74 @@ CREATE TABLE IF NOT EXISTS catalyst_timing (
 
 CREATE INDEX IF NOT EXISTS idx_timing_dates ON catalyst_timing (date_min, date_max);
 CREATE INDEX IF NOT EXISTS idx_timing_tier  ON catalyst_timing (precision_tier);
+
+-- ============================================================
+-- Views (spec §6.7) — created by Module 4's schema bootstrap, but
+-- live in schema.sql so M0's init applies them on every connect.
+-- ============================================================
+
+-- v_latest_catalysts: most recent snapshot per (ticker, drug, nct, type).
+-- Downstream modules read this when they want "current best truth" without
+-- having to GROUP BY MAX(snapshot_date) themselves.
+DROP VIEW IF EXISTS v_latest_catalysts;
+CREATE VIEW v_latest_catalysts AS
+SELECT s.*
+FROM catalyst_snapshots s
+JOIN (
+    SELECT ticker, drug, nct_number, next_catalyst_type,
+           MAX(snapshot_date) AS latest
+    FROM catalyst_snapshots
+    GROUP BY ticker, drug, nct_number, next_catalyst_type
+) m
+  ON s.ticker             = m.ticker
+ AND s.drug               = m.drug
+ AND s.nct_number         = m.nct_number
+ AND s.next_catalyst_type = m.next_catalyst_type
+ AND s.snapshot_date      = m.latest;
+
+-- v_insider_signal_combined: union of EDGAR Form 4 (open-market only) +
+-- BPC insider supplement (stock only), tagged by source so disagreements
+-- between the two feeds remain auditable. Column harmonisation notes:
+--   * EDGAR keeps both filed_date (the SEC-stamped legal record) AND
+--     transaction_date (the trade day, usually 1-2 days earlier).
+--   * BPC only captures the filing date; transaction_date is NULL.
+--   * source_ref lets you trace back: EDGAR accession_number, or the
+--     BPC snapshot_date that supplied the row.
+DROP VIEW IF EXISTS v_insider_signal_combined;
+CREATE VIEW v_insider_signal_combined AS
+SELECT
+    'edgar' AS source,
+    f.ticker,
+    f.reporting_owner_name AS insider_name,
+    f.officer_title         AS insider_position,
+    f.filed_date            AS filing_date,
+    t.transaction_date,
+    CASE t.acquired_disposed
+         WHEN 'A' THEN 'Buy'
+         WHEN 'D' THEN 'Sell'
+         ELSE NULL
+    END                     AS buy_sell,
+    'Stock'                 AS stock_or_option,
+    t.shares,
+    t.price_per_share       AS trade_price,
+    f.accession_number      AS source_ref
+FROM edgar_form4_transactions t
+JOIN edgar_form4_filings f USING (accession_number)
+WHERE t.is_open_market = 1
+
+UNION ALL
+
+SELECT
+    'bpc' AS source,
+    ticker,
+    insider_name,
+    insider_position,
+    filing_date,
+    NULL                    AS transaction_date,
+    buy_sell,
+    stock_or_option,
+    shares,
+    trade_price,
+    CAST(snapshot_date AS TEXT) AS source_ref
+FROM bpc_insider_supplement
+WHERE stock_or_option = 'Stock';

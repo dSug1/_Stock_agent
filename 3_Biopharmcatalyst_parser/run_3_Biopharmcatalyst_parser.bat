@@ -82,23 +82,33 @@ if /i "%RUN_M5%"=="y" (
 
 REM ============================================================
 REM Module 4 — ingest BPC insider supplement CSV
+REM Default: most recent *insider*.csv in _csv_source/ at today's UTC date.
+REM Override the snapshot date with --snapshot-date YYYY-MM-DD if back-loading.
 REM ============================================================
-REM echo.
-REM set /p RUN_M4="Proceed to Module 4 (BPC insider supplement)? [y/N]: "
-REM if /i "%RUN_M4%"=="y" (
-REM     python scripts\3_4_ingest_bpc_insider.py
-REM     if errorlevel 1 ( echo [FATAL] Module 4 failed. & endlocal ^& exit /b 1 )
-REM )
+echo.
+set /p RUN_M4="Proceed to Module 4 (ingest BPC insider supplement from _csv_source/)? [y/N]: "
+if /i "%RUN_M4%"=="y" (
+    python scripts\3_4_ingest_bpc_insider.py
+    if errorlevel 1 (
+        echo [FATAL] Module 4 failed.
+        endlocal ^& exit /b 1
+    )
+)
 
 REM ============================================================
 REM Module 2 — EDGAR Form 4 ingest
+REM Default: every ticker in the most recent catalyst snapshot,
+REM 365-day lookback, incremental (skips accessions already in DB).
 REM ============================================================
-REM echo.
-REM set /p RUN_M2="Proceed to Module 2 (EDGAR Form 4)? [y/N]: "
-REM if /i "%RUN_M2%"=="y" (
-REM     python scripts\3_2_ingest_edgar_form4.py --lookback-days 365
-REM     if errorlevel 1 ( echo [FATAL] Module 2 failed. & endlocal ^& exit /b 1 )
-REM )
+echo.
+set /p RUN_M2="Proceed to Module 2 (EDGAR Form 4, ~9.5 req/sec to SEC)? [y/N]: "
+if /i "%RUN_M2%"=="y" (
+    python scripts\3_2_ingest_edgar_form4.py --lookback-days 365
+    if errorlevel 1 (
+        echo [FATAL] Module 2 failed.
+        endlocal ^& exit /b 1
+    )
+)
 
 REM ============================================================
 REM Module 3 — EDGAR 13D/13G metadata

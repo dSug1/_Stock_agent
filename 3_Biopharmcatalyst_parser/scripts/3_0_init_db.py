@@ -30,6 +30,10 @@ EXPECTED_TABLES = [
     "ticker_cik_map",
     "catalyst_timing",
 ]
+EXPECTED_VIEWS = [
+    "v_latest_catalysts",
+    "v_insider_signal_combined",
+]
 
 
 def main() -> int:
@@ -46,26 +50,40 @@ def main() -> int:
     is_new = not db_path.exists()
     conn = get_connection(db_path)
 
-    actual = {
+    actual_tables = {
         row[0]
         for row in conn.execute(
             "SELECT name FROM sqlite_master "
             "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
     }
-    missing = [t for t in EXPECTED_TABLES if t not in actual]
-    extra = sorted(actual - set(EXPECTED_TABLES))
+    actual_views = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='view'"
+        ).fetchall()
+    }
+    missing_tables = [t for t in EXPECTED_TABLES if t not in actual_tables]
+    missing_views = [v for v in EXPECTED_VIEWS if v not in actual_views]
 
     print(f"[3_0_init_db] DB: {db_path}")
-    print(f"[3_0_init_db] {'created' if is_new else 'opened existing'}; {len(actual)} table(s) present")
+    print(f"[3_0_init_db] {'created' if is_new else 'opened existing'}; "
+          f"{len(actual_tables)} table(s), {len(actual_views)} view(s) present")
     for t in EXPECTED_TABLES:
-        marker = "OK " if t in actual else "MISSING"
-        print(f"  [{marker}] {t}")
-    if extra:
-        print(f"  unexpected tables present: {extra}")
+        marker = "OK " if t in actual_tables else "MISSING"
+        print(f"  [{marker}] table   {t}")
+    for v in EXPECTED_VIEWS:
+        marker = "OK " if v in actual_views else "MISSING"
+        print(f"  [{marker}] view    {v}")
+    extra_t = sorted(actual_tables - set(EXPECTED_TABLES))
+    extra_v = sorted(actual_views - set(EXPECTED_VIEWS))
+    if extra_t:
+        print(f"  unexpected tables present: {extra_t}")
+    if extra_v:
+        print(f"  unexpected views present:  {extra_v}")
 
     conn.close()
-    return 0 if not missing else 1
+    return 0 if not (missing_tables or missing_views) else 1
 
 
 if __name__ == "__main__":
