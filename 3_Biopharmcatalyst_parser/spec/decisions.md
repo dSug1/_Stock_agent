@@ -290,3 +290,200 @@ BPC's heavy "Other" bucket is the 28% blank-`insider_position` rate from the sou
 - Sample MBX (Canvuparatide) still shows the single CEO buy worth $525,663 from 2026-03-13 — the wider window adds older trades to the expanded-row panel without disturbing the recency ranking.
 
 ---
+
+## D8 — Module 6 (Scoring & ranking) design pinned (2026-05-27)
+
+**Status:** spec only — implementation pending. This decision freezes the hard filters, signal set, and weights so coding can start.
+
+**Why this needs a decision entry before any code:** the original spec §12 was a 3-line preview. The user reviewed real-data filter sensitivities (see "Empirical sizing" below) and locked an unusually narrow design — only 2 soft signals, several signals from the original sketch explicitly rejected. That divergence from the original spec needs to be recorded before the gap reopens.
+
+### Empirical sizing that drove the decision (latest snapshot 2026-05-27, 572 catalyst rows)
+
+| Filter cascade | Tickers surviving |
+|---|---:|
+| Universe (catalyst_snapshots latest) | ~296 |
+| + market_cap_usd < $2B | 204 |
+| + precision_tier ≠ 'unknown' AND date_min ∈ [snapshot+14, snapshot+180]d | ~86 |
+| + any insider buy in last 90d (no gross floor) | 20 |
+| + insider gross_usd ≥ $100k | 9 |
+| + CEO/CFO/Chair/President role only | 7 |
+
+The user's portfolio target is 20 tickers. Hardest gate is the insider gross floor — too aggressive and there's no slack for Claude to disqualify candidates in M7. Adopted design moves the insider signal from hard gate to soft score so the universe entering M7 is determined by H1–H5 only (clinical-readout-driven filter).
+
+### Hard filters (H1–H5) — locked
+
+| # | Rule | Predicate |
+|---|---|---|
+| H1 | Market cap band | `30e6 <= market_cap_usd < 2e9` (mid-cap ceiling user-locked; $30M floor avoids dead-pool) |
+| H2 | Timing resolvable | `precision_tier != 'unknown'` |
+| H3 | Forward-looking window | `date_min >= snapshot_date + 14` |
+| H4 | Window not entirely past | `date_max >= snapshot_date` (BPC stale-row removal) |
+| H5 | Clinical readout event | `stage IN ('phase1','phase2','phase3') AND next_catalyst_type IN ('Interim Data','Initial Data','Topline Data','Full Results','Conference Presentation')` |
+
+**H3 timing bucket — partition not filter:**
+
+The user wanted hard-passing rows split (not dropped) by precision class. Hard-passing rows are tagged into one of two buckets and ranked within bucket:
+
+| `timing_bucket` | precision_tier values | Width |
+|---|---|---|
+| `catalyst_date_defined` | specific, conference, month, quarter | ≤ 90 days |
+| `catalyst_date_undefined` | half, year | > 90 days |
+
+User's mental model: "we know roughly when this happens" vs "this is sometime in 2H 2026." Quarter is on the "defined" side because the regex resolver derives a 90-day window which is still actionable. Half/year sit on the "undefined" side because the window is wide enough that timing cannot drive sizing — these need other corroboration (Claude deep-dive, news).
+
+**H5 explicit exclusions:**
+- `Regulatory Decision` (PDUFA-tier) — user not interested in approval-decision plays.
+- `Submission` (NDA/BLA filing events) — process milestone, not data.
+- `End of Phase Meeting` — FDA process, not a data readout (despite occurring at phase1–3 stage).
+- `stage = phase4` (post-pivotal commercial) and `stage = phase5` (already approved).
+- NULL `next_catalyst_type` rows (BPC's no-imminent-event placeholders for big-pharma pipelines).
+
+### Soft scoring — only two signals, locked
+
+**Insider score** (50% weight default):
+- Sum gross_usd of buys from `v_executive_open_market_trades` where `buy_sell='Buy' AND filing_date >= snapshot_date - 365 AND executive_role IN ('CEO','CFO')`.
+- Role multipliers: CEO × 2.0, CFO × 1.0. All other roles (President, Chair, Director, 10% owner, COO, CMO, CSO, Other officer, Other) weight **0**.
+- **No recency decay.** Day-360 buy counts equal to day-5 buy.
+- Both EDGAR and BPC sources count (view union).
+- Log-scale to 0–100 with $5M weighted gross as the 100-point cap.
+
+**Momentum score** (50% weight default):
+- Parse `price_history_30d` semicolon string → 30d return%.
+- Piecewise curve, peak (100) at -10% to +10%, falling to 0 at -50% or +60%.
+- NULL price history → neutral 50 (do not penalize missing data).
+- **No hard exclusion** based on momentum (no momentum cap). Even +100% movers stay in the shortlist with score 0.
+
+**Composite = `w_insider * insider_score + w_momentum * momentum_score`**, default `w_insider = w_momentum = 0.5`. Tiebreaker: higher `insider_score` wins (user-signaled preference for the insider channel as the higher-conviction signal even though formula weights them equally).
+
+### User-rejected signals (logged so they don't sneak back in)
+
+The user actively rejected the following from the original sketched scoring. Each is a future-revisit candidate, not a "TODO" — they are decisions, not omissions:
+
+- **Recency decay on insider buys** — user wants flat 365d window.
+- **Buy/sell ratio / sell-pressure penalty** — out of scope.
+- **Director and Chair buys** — out (only CEO + CFO count).
+- **10% owner buys** — out (PIPE noise per earlier analysis; correctly excluded by user too).
+- **CMO / COO / CSO / Other officer / President buys** — out (per the role weights = 0).
+- **13D/G ownership activity** — out of automated scoring. User will cross-reference filings against their curated fund list manually. Module 3's `edgar_ownership_filings` stays as a reference dataset.
+- **BPC sentiment string** — out.
+- **Catalyst-date-slip detection** — out (and currently impossible — only 1 snapshot exists; was conditionally planned).
+- **Multi-catalyst optionality bonus** — out.
+- **Timing precision bonus / stage bonus / Historical LOA-POP** — out (precision is reflected in the `timing_bucket` partition only; no additional score weight).
+
+### Pipeline shape
+
+```
+M6a (filter)    572 catalyst rows → ~20-60 hard_pass=1 rows partitioned across two timing buckets
+M6b (score)     composite_score 0..100 per hard-passing row
+M6 output       catalyst_scores table (all rows; hard_pass=0 included for audit) + ranked HTML option
+M7 (Claude API) USER picks the slice (no automatic top-N cap per user decision D12-rejected)
+Portfolio       user selects 20 from Claude-validated shortlist
+```
+
+### Configuration
+
+All thresholds, role weights, momentum curve points and composite weights live in `config/scoring.yaml` (pydantic-validated, content-hash → rules_version). See spec §12.6 for the initial values.
+
+### Re-litigation policy
+
+Anything in this decision is open to revisit AFTER a first live run on real data and the user has reviewed the ranked output. Until then, treat the defaults as user-locked; do not infer "the user probably meant something more permissive" from a quiet run with few candidates — surface the count and ask.
+
+### Implementation status
+
+Not started. New tables/modules planned per spec §12:
+- `catalyst_scores` table (8 columns scored + 5-col PK + rules_version + computed_at) — see D9 for fund-accumulation columns added on top of D8's two-signal design
+- `src/module_6/{config, filters, scoring, ingest}.py` (+ `funds_reader.py` per D9)
+- `scripts/3_6_score_catalysts.py` CLI
+- `config/scoring.yaml`
+- `tests/{test_module6_filters, test_module6_scoring, test_module6_funds_reader, test_module6_ingest}.py`
+
+---
+
+## D9 — Module 6 adds fund-accumulation as a third soft-scoring signal (2026-05-27)
+
+**Status:** spec only — extends D8 before any code lands.
+
+**Why this is a separate decision and not a D8 amendment:** D8 explicitly locked "two signals only" with a list of user-rejected features. After D8 the user added the funds-data signal back on top of that list. Recording it as D9 makes the change traceable: D8 = "no funds signal," D9 = "funds signal added with these explicit calibrations." Anyone reading later sees the deliberate sequence rather than a quietly mutated D8.
+
+**Trigger:** user wants to leverage the quarterly fund-holdings dataset they already maintain via `2_Funds_parser`. That pipeline parses 13F filings for 22 specialist biotech funds (Baker Brothers, Deerfield, OrbiMed, BVF, Perceptive, RA Capital, RTW, Redmile, Cormorant, EcoR1, SIO, Avoro, PFM Health Sciences, ARCH, Atlas, 5AM, Versant, Janus Henderson Biotech, Boxer, Sofinnova, Athos) into `2_Funds_parser/2_fundparser.db::holdings`. The user observes that net positive accumulation by these funds is a relevant conviction signal alongside CEO/CFO insider buying — but slightly lower confidence (managers reshuffle for portfolio reasons; CEOs / CFOs put cash in their own company on personal conviction).
+
+### Empirical sizing (Q1 2026 vs Q4 2025, BPC small/mid cap tickers)
+
+Computed via `ATTACH DATABASE` cross-DB join. Per ticker, sum across funds of `MAX(0, shares_Q - shares_Q_prev) × (market_value_Q / shares_Q)` (price proxy from the same quarter's MV/shares):
+
+| Net accumulation USD | Tickers |
+|---|---:|
+| zero / not held by any fund | ~80 (38% of BPC small/mid cap) |
+| > 0 to $5M | 26 |
+| $5M – $25M | 27 |
+| $25M – $100M | 17 |
+| > $100M | 1 (SNDX at $110M) |
+
+185 of 296 BPC tickers (~62%) are held by at least one tracked fund in the latest quarter — strong cross-database overlap.
+
+### Signal definition
+
+For each BPC ticker scored on a given snapshot:
+1. Identify the two most recent quarters in `funds.holdings.period_of_report` (e.g., `2026-03-31` and `2025-12-31`).
+2. For each (ticker, fund_id) in those quarters: `share_delta = shares_latest - shares_previous`; missing rows treated as 0 shares.
+3. Per-fund contribution: `MAX(0, share_delta) × (mv_latest / shares_latest)` — positive deltas only, mirroring the insider "buys only" convention.
+4. Sum across all funds → `fund_accumulation_usd`.
+5. Log-scale to 0..100: `log10(1 + fund_accumulation_usd) / log10(1 + fund_norm_cap) × 100`, capped at 100.
+6. Score = 0 when ticker absent from funds DB or `fund_accumulation_usd == 0`.
+
+Also recorded for audit (not scored): `funds_holding_latest` and `funds_holding_previous` (count of funds with positive position each quarter).
+
+### Configuration defaults
+
+```yaml
+funds:
+  db_path_relative_to_repo_root: "2_Funds_parser/2_fundparser.db"
+  normalisation_cap_usd: 50_000_000   # $50M = 100-point ceiling
+  stale_warning_days: 180             # warn if quarter_latest > 180d before snapshot
+composite:
+  weight_insider:  0.35
+  weight_momentum: 0.35
+  weight_funds:    0.30               # "slightly lower than CEO/CFO" per user
+```
+
+User intent: weights sum to 1.0 so composite stays in [0, 100]. The funds weight is intentionally **slightly** lower than insider (0.30 vs 0.35), not half — the user described it as "slightly lower," not "secondary." Tiebreak chain: composite_score DESC → insider_score DESC → fund_accumulation_score DESC.
+
+### Architectural decision: ATTACH DATABASE, not separate ETL
+
+The user maintains the funds DB independently on a quarterly cadence via `run_2_Funds_parser.bat`. Two paths were considered:
+
+| Option | Verdict |
+|---|---|
+| **Snapshot funds data into `biotech.db`** via a new ingest module (e.g., M4c-style copy of per-ticker accumulation) | **Rejected.** Adds permanent tables and an extra orchestration step; funds data would mostly be stale (quarterly refresh vs M6's weekly run); reconciling the two snapshots gets messy. |
+| **`ATTACH DATABASE` read-only at Module 6 runtime** | **Adopted.** Zero new tables in `biotech.db`. Always uses the live funds DB. Per-connection ephemeral ATTACH — `schema.sql` is unaffected. The funds_reader module handles all the cross-DB queries; rest of M6 stays self-contained. |
+
+The ATTACH path opens a clean fallback for cases where the funds DB is missing, locked, or being refreshed: `--skip-funds` CLI flag bypasses the read and rescales the remaining two weights (insider + momentum, total 0.70) so composite still lands in [0, 100]. Stale funds DB (>180d old vs snapshot_date) emits a warning and writes `ingest_log.status = 'partial'` but still scores.
+
+### Schema additions to `catalyst_scores`
+
+Six new columns (vs D8's design):
+
+| Column | Type | Notes |
+|---|---|---|
+| `fund_quarter_latest` | TEXT | e.g. `2026-03-31`; NULL when funds DB skipped/absent |
+| `fund_quarter_previous` | TEXT | e.g. `2025-12-31` |
+| `funds_holding_latest` | INTEGER | breadth metric (informational, not scored) |
+| `funds_holding_previous` | INTEGER | breadth metric (informational, not scored) |
+| `fund_accumulation_usd` | REAL | the scored quantity |
+| `fund_accumulation_score` | REAL | 0..100 |
+
+### Edge cases handled in v1
+
+- **Ticker not in funds DB** → score = 0 (treated as "no signal," not "negative signal"). Matches the insider design where absence of CEO/CFO buys produces 0, not a penalty.
+- **Fund cut its stake** → does not subtract from score. Exits captured via `funds_holding_previous - funds_holding_latest` for audit.
+- **Stale funds DB** (> 180d): warn, score with stale data, `ingest_log.status = 'partial'`.
+- **Funds DB missing/unreadable**: friendly error, ingest aborts unless `--skip-funds`.
+- **Share splits** between quarters: not adjusted in v1. Log-scaling absorbs most of the noise. v2 candidate if a specific ticker's score looks wrong post-split.
+
+### Re-litigation policy
+
+Same as D8: defaults locked until first live run + user review. Calibration candidates for v2:
+- `funds.normalisation_cap_usd = 50_000_000` may be too high; the meaty middle is $5–25M and 17 tickers exceed $25M. Lowering to $25M would compress the top tier but spread the bulk.
+- The composite weight split `0.35 / 0.35 / 0.30` is the user's "slightly lower" interpretation; revisit if rankings feel insider-light or funds-heavy.
+
+---
