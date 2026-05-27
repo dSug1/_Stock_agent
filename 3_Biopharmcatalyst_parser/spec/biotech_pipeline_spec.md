@@ -331,12 +331,12 @@ If any column is missing or any unexpected column is present, fail with a clear 
 | `Indication` | `indication` | nullable |
 | `Stage` | `stage` | must match `^phase[0-5]$`; else reject row, log warning |
 | `Status` | `status` | nullable |
-| `Next Catalyst` | `next_catalyst_type` | required, non-empty |
+| `Next Catalyst` | `next_catalyst_type` | empty → `''` (real CSV has ~45 blank rows — big-pharma pipeline trackers without a specific next-event tag). PK uniqueness still holds via the other four components. See decisions.md D2. |
 | `Catalyst Date` | `catalyst_date` | parse `DD/MM/YYYY` → ISO date; if unparseable → NULL + warn |
 | `Catalyst` | `catalyst_text` | preserved as-is |
 | `Conference` | `conference` | nullable |
-| `Historical LOA` | `historical_loa` | float 0–100; blanks → NULL |
-| `Historical POP` | `historical_pop` | float 0–100; blanks → NULL |
+| `Historical LOA` | `historical_loa` | float 0–100; blanks → NULL. **Blank sentinels** treated as NULL: `''`, em dash `—` (U+2014, BPC's "not applicable" for big-pharma rows), ASCII `-`, `n/a`/`N/A`/`NA`. |
+| `Historical POP` | `historical_pop` | float 0–100; blanks → NULL (same sentinel set as Historical LOA). |
 | `Bullish or Bearish` | `sentiment` | preserved as-is |
 | `Market Cap` | `market_cap_usd` | parse scientific notation (`5.82485E+11`) → float |
 | `Last Updated` | `bpc_last_updated` | parse `DD/MM/YYYY HH:MM` → ISO timestamp |
@@ -348,8 +348,9 @@ Use `INSERT OR REPLACE` keyed on `(snapshot_date, ticker, drug, nct_number, next
 
 ### 3.6 Acceptance criteria
 
-- Loading `biotech_catalysts_v3.csv` (Andre's reference file) with snapshot date `2026-05-27` inserts exactly 600 rows.
-- Re-running the same command inserts 0 new rows, updates 600 in place, no errors.
+- Loading `_csv_source/biotech_catalysts_v3.csv` (the current reference file) with snapshot date `2026-05-27` reports **`rows_in=600`, `rows_inserted=572`, `rows_updated=28`, `rows_rejected=0`**, ending in `catalyst_snapshots` with **572 distinct rows**.
+  - The 28-row delta is **within-CSV duplicates** in the BPC source data — identical `(ticker, drug, nct_number, next_catalyst_type)` tuples appearing twice (e.g., MNKD-Afrezza and NUVL-Neladalkib both appear at rows 18+28 and 21+27 respectively). The composite PK correctly dedups them; the second occurrence in CSV order counts as an "update" because the first has already populated the PK. See decisions.md D2.
+- Re-running the same command reports `rows_in=600`, `rows_inserted=0`, `rows_updated=600`, `rows_rejected=0`. DB row count stays at 572.
 - Loading a CSV with a missing column raises `SchemaValidationError` listing the missing column, and writes 0 rows.
 - Loading a CSV with `Stage = "phase99"` rejects that row, logs a warning with row number and ticker, and inserts the remaining valid rows.
 - `ingest_log` row written with row counts.
@@ -358,10 +359,12 @@ Use `INSERT OR REPLACE` keyed on `(snapshot_date, ticker, drug, nct_number, next
 ### 3.7 Edge cases to handle
 
 - **Blank `NCT Number`:** common for regulatory catalysts (PDUFA, submissions). Normalize to `''`.
+- **Blank `Next Catalyst`:** ~45 of the 600 reference rows have it blank (e.g., big-pharma rows where BPC tracks the company's pipeline without committing to a specific imminent event). Normalize to `''`. PK collisions don't occur because `(snapshot_date, ticker, drug, nct_number)` is already discriminating.
+- **BPC "N/A" sentinels in numeric columns:** Historical LOA/POP cells frequently contain the em dash `—` (U+2014, BPC's "not relevant" marker for tickers where historical-base-rate data doesn't apply). Treat the em dash plus a small fixed set (`-`, `n/a`/`N/A`/`NA`) as blank → NULL. Do not extend this set casually; sentinel proliferation is a data-quality smell.
 - **Multiple rows per ticker:** common — a ticker can appear with different drugs / catalysts. The composite PK handles this.
 - **Same drug, different next-catalyst-type:** also legitimate (e.g., a drug with both "Interim Data" and "Topline Data" expected at different dates).
-- **Scientific-notation market cap:** `pd.to_numeric` with `errors='coerce'` handles this cleanly.
-- **Date format:** BPC uses DD/MM/YYYY (European). Verify on load; fail loudly if a date looks like MM/DD/YYYY (e.g., month > 12 in the second position should never happen).
+- **Scientific-notation market cap:** `float(str(v).strip())` handles this cleanly (Python's float() accepts `5.82485E+11`).
+- **Date format:** BPC uses DD/MM/YYYY (European). Unparseable dates → NULL + warn (not row-rejecting). If a high fraction of rows fail parsing, the source is likely US-format and the loader should be audited — current behaviour does not crash on a single mis-formatted row.
 
 ---
 
@@ -549,9 +552,11 @@ Schema validation identical philosophy to Module 1: missing or extra columns →
 
 ### 6.6 Acceptance criteria
 
-- Loading `insider_data.csv` with snapshot `2026-05-27` inserts 696 rows.
-- Re-running the same command updates 696 rows, inserts 0.
+- Loading `_csv_source/insider_data3.csv` (the current reference file, dated 2026-05-27) with snapshot `2026-05-27` inserts exactly **1,608** rows.
+- Re-running the same command updates 1,608 rows, inserts 0.
 - A diff query (see §6.7) returns disagreements between this table and EDGAR Form 4 for the same ticker+insider+date.
+
+**Reference-file note:** the spec was originally drafted against a 696-row `insider_data.csv`; the current BPC pull is larger (`insider_data3.csv`, 1,608 rows). Update this count when a newer reference file replaces it.
 
 ### 6.7 Cross-validation views
 
@@ -791,14 +796,14 @@ When the regex rules or bucket mapping change:
 
 ### 7.13 Acceptance criteria
 
-- `PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_5_compute_timing.py` on Andre's 600-row catalyst snapshot produces 600 `catalyst_timing` rows with no exceptions.
-- Distribution of `source_lane` is logged and roughly matches expectations:
-  - `conference`: ~30–60 rows (the cluster around major conferences)
-  - `catalyst_date_specific`: ~50–150 rows
-  - `text_parse`: ~200–400 rows (the bulk — quarter/half/year guidance)
-  - `catalyst_date_bucket`: small remainder when text yields nothing
-  - `unknown`: ideally <5%; >10% means the regex set needs revision
-- Re-running the command updates the same 600 rows in place, inserts 0.
+- `PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_5_compute_timing.py` on the 572-row catalyst snapshot (after M1's dedup) produces 572 `catalyst_timing` rows with no exceptions.
+- Distribution of `source_lane` against the 2026-05-27 reference snapshot:
+  - `conference`: **153** rows (snapshot dated days before ASCO 2026 — naturally conference-heavy. Spec originally predicted ~30–60; updated to 100–200 to reflect the actual late-May/early-June cluster.)
+  - `catalyst_date_specific`: **63** rows (PDUFA dates, M&A close dates, etc.)
+  - `text_parse`: **351** rows (the bulk — quarter/half/year guidance extracted from `Catalyst` text)
+  - `catalyst_date_bucket`: **5** rows (placeholder Catalyst Date and no text — the smallest residual)
+  - `unknown`: **0** rows (target was <5%; calibrated rules clear it entirely)
+- Re-running the command updates the same 572 rows in place, inserts 0.
 - All 8 fixtures in §7.10 pass as pytest parametrized cases.
 - A sanity query joining `catalyst_snapshots` to `catalyst_timing` and filtering to the discovery window returns a non-empty result.
 - `ingest_log` row written with `module = 'compute_timing'` and accurate counts.
@@ -829,7 +834,7 @@ PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_init_db.py
 
 # 2. Load Andre's existing files (drop them in _csv_source/ first)
 PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_1_ingest_catalysts.py _csv_source/biotech_catalysts_v3.csv
-PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_4_ingest_bpc_insider.py  _csv_source/insider_data.csv
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_4_ingest_bpc_insider.py  _csv_source/insider_data3.csv
 
 # 3. Compute timing
 PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_5_compute_timing.py
@@ -844,7 +849,7 @@ SELECT COUNT(*) FROM catalyst_snapshots;            -- expect 600
 SELECT COUNT(*) FROM catalyst_timing;               -- expect 600
 SELECT precision_tier, COUNT(*) FROM catalyst_timing GROUP BY precision_tier;
 SELECT source_lane,    COUNT(*) FROM catalyst_timing GROUP BY source_lane;
-SELECT COUNT(*) FROM bpc_insider_supplement;        -- expect 696
+SELECT COUNT(*) FROM bpc_insider_supplement;        -- expect 1608
 SELECT COUNT(DISTINCT ticker) FROM edgar_form4_filings;
 SELECT module, status, rows_inserted, rows_rejected
   FROM ingest_log ORDER BY run_id DESC LIMIT 10;

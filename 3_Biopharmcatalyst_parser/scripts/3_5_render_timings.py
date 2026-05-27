@@ -1,0 +1,823 @@
+"""Render a self-contained HTML report of Module 5's latest output.
+
+Reads ``catalyst_timing`` JOIN ``catalyst_snapshots`` for one snapshot
+(default: most recent) and writes ``Outputs/catalyst_timings.html``.
+The HTML is fully self-contained — embedded CSS, JS, and JSON data;
+no external network dependencies.
+
+Run from `3_Biopharmcatalyst_parser/`:
+    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_5_render_timings.py
+"""
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import sqlite3
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+HERE = Path(__file__).resolve()
+PROJECT_ROOT = HERE.parents[1]
+SRC = PROJECT_ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from database.db import DEFAULT_DB_PATH, get_connection  # noqa: E402
+
+
+OUTPUT_PATH = PROJECT_ROOT / "Outputs" / "catalyst_timings.html"
+
+
+# Match colors across KPI strip + bars + chips + table-cell tags.
+LANE_COLOR = {
+    "conference":             "#3b82f6",  # blue
+    "catalyst_date_specific": "#10b981",  # green
+    "text_parse":             "#f59e0b",  # amber
+    "catalyst_date_bucket":   "#6b7280",  # slate
+    "unknown":                "#ef4444",  # red
+}
+LANE_LABEL = {
+    "conference":             "conference",
+    "catalyst_date_specific": "specific date",
+    "text_parse":             "text-parsed",
+    "catalyst_date_bucket":   "bucket fallback",
+    "unknown":                "unknown",
+}
+LANE_ORDER = ["conference", "catalyst_date_specific", "text_parse",
+              "catalyst_date_bucket", "unknown"]
+
+TIER_ORDER = ["specific", "conference", "month", "quarter", "half", "year", "unknown"]
+
+
+def _fetch_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT
+            t.ticker, t.drug, t.nct_number, t.next_catalyst_type,
+            t.date_min, t.date_max, t.precision_tier, t.source_lane,
+            t.matched_phrase, t.rules_version, t.computed_at,
+            s.name, s.indication, s.stage, s.status,
+            s.catalyst_date, s.catalyst_text, s.conference,
+            s.market_cap_usd, s.price, s.sentiment
+        FROM catalyst_timing t
+        JOIN catalyst_snapshots s USING
+            (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+        WHERE t.snapshot_date = ?
+        ORDER BY
+            CASE WHEN t.date_min IS NULL THEN 1 ELSE 0 END,
+            t.date_min ASC,
+            t.ticker ASC
+        """,
+        (snap.isoformat(),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _build_summary(rows: list[dict], snap: date) -> dict:
+    """Compute KPI numbers — lane / tier counts + window memberships."""
+    n = len(rows)
+    lane_counts = {lane: 0 for lane in LANE_ORDER}
+    tier_counts = {tier: 0 for tier in TIER_ORDER}
+    for r in rows:
+        lane_counts[r["source_lane"]] = lane_counts.get(r["source_lane"], 0) + 1
+        tier_counts[r["precision_tier"]] = tier_counts.get(r["precision_tier"], 0) + 1
+
+    # Window math anchored on snapshot_date (matches M5 resolver semantics).
+    t14 = snap + timedelta(days=14)
+    t60 = snap + timedelta(days=60)
+    t180 = snap + timedelta(days=180)
+    disc = exec_ = past_or_unknown = 0
+    for r in rows:
+        if r["precision_tier"] == "unknown":
+            past_or_unknown += 1
+            continue
+        dmin = date.fromisoformat(r["date_min"]) if r["date_min"] else None
+        dmax = date.fromisoformat(r["date_max"]) if r["date_max"] else None
+        if dmin is None or dmax is None:
+            past_or_unknown += 1
+            continue
+        # Discovery: dmin <= T+180 AND dmax >= T+14
+        if dmin <= t180 and dmax >= t14:
+            disc += 1
+        # Execution: dmin <= T+60 AND dmax >= T+14
+        if dmin <= t60 and dmax >= t14:
+            exec_ += 1
+        # Past (entirely past T+14)
+        if dmax < t14:
+            past_or_unknown += 1
+
+    return {
+        "total": n,
+        "lane_counts": lane_counts,
+        "tier_counts": tier_counts,
+        "windows": {
+            "discovery": disc,
+            "execution": exec_,
+            "past_or_unknown": past_or_unknown,
+        },
+    }
+
+
+def _build_monthly_histogram(rows: list[dict], snap: date) -> list[dict]:
+    """Bucket rows by date_min month for the next 12 months."""
+    months: list[dict] = []
+    for i in range(12):
+        # Walk forward i months from snap
+        y = snap.year + (snap.month - 1 + i) // 12
+        m = (snap.month - 1 + i) % 12 + 1
+        key = f"{y}-{m:02d}"
+        label = date(y, m, 1).strftime("%b %Y")
+        months.append({"key": key, "label": label, "count": 0, "by_tier": {}})
+
+    idx = {m["key"]: m for m in months}
+    for r in rows:
+        if not r["date_min"]:
+            continue
+        dmin = date.fromisoformat(r["date_min"])
+        key = f"{dmin.year}-{dmin.month:02d}"
+        bucket = idx.get(key)
+        if not bucket:
+            continue
+        bucket["count"] += 1
+        tier = r["precision_tier"]
+        bucket["by_tier"][tier] = bucket["by_tier"].get(tier, 0) + 1
+    return months
+
+
+def _row_for_json(r: dict, snap: date) -> dict:
+    days_to_min = None
+    if r["date_min"]:
+        days_to_min = (date.fromisoformat(r["date_min"]) - snap).days
+    return {
+        "ticker": r["ticker"],
+        "drug": r["drug"],
+        "name": r["name"],
+        "indication": r["indication"] or "",
+        "stage": r["stage"] or "",
+        "status": r["status"] or "",
+        "next_catalyst_type": r["next_catalyst_type"] or "",
+        "nct_number": r["nct_number"] or "",
+        "source_lane": r["source_lane"],
+        "precision_tier": r["precision_tier"],
+        "date_min": r["date_min"],
+        "date_max": r["date_max"],
+        "days_to_min": days_to_min,
+        "matched_phrase": r["matched_phrase"] or "",
+        "catalyst_date_raw": r["catalyst_date"] or "",
+        "catalyst_text": r["catalyst_text"] or "",
+        "conference": r["conference"] or "",
+        "market_cap_usd": r["market_cap_usd"],
+        "price": r["price"],
+        "sentiment": r["sentiment"] or "",
+    }
+
+
+def _build_html(
+    *,
+    snap: date,
+    summary: dict,
+    months: list[dict],
+    rows_json: list[dict],
+    rules_version: str,
+    computed_at: str,
+    db_path: Path,
+) -> str:
+    data_blob = json.dumps(
+        {
+            "snapshot_date": snap.isoformat(),
+            "computed_at": computed_at,
+            "rules_version": rules_version,
+            "summary": summary,
+            "months": months,
+            "rows": rows_json,
+            "lane_color": LANE_COLOR,
+            "lane_label": LANE_LABEL,
+            "lane_order": LANE_ORDER,
+            "tier_order": TIER_ORDER,
+            "db_path": str(db_path),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    # Embed escaping for `</script>` paranoia.
+    data_blob_safe = data_blob.replace("</", "<\\/")
+
+    return _HTML_TEMPLATE.replace("__DATA_JSON__", data_blob_safe).replace(
+        "__SNAPSHOT__", html.escape(snap.isoformat())
+    )
+
+
+_HTML_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Catalyst Timing Report — __SNAPSHOT__</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #334155;
+    --border: #475569;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --text-faint: #64748b;
+    --accent: #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+    padding: 16px 24px 64px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  h2 { font-size: 13px; margin: 24px 0 8px; font-weight: 600; color: var(--text-dim);
+       text-transform: uppercase; letter-spacing: .08em; }
+  .meta { color: var(--text-dim); font-size: 12px; margin-bottom: 16px; }
+  .meta code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+               background: var(--panel); padding: 1px 6px; border-radius: 3px; }
+
+  /* KPI strip */
+  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 12px; }
+  .kpi {
+    background: var(--panel); border-radius: 6px; padding: 12px 14px;
+    border-left: 4px solid var(--border);
+  }
+  .kpi .label { color: var(--text-dim); font-size: 11px; text-transform: uppercase;
+                letter-spacing: .06em; }
+  .kpi .value { font-size: 24px; font-weight: 600; margin: 4px 0 0; }
+  .kpi .pct   { color: var(--text-faint); font-size: 12px; }
+
+  .windows {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 24px;
+  }
+  .win { background: var(--panel); border-radius: 6px; padding: 10px 14px; }
+  .win .label { color: var(--text-dim); font-size: 11px; text-transform: uppercase;
+                letter-spacing: .06em; }
+  .win .value { font-size: 18px; font-weight: 600; }
+  .win .sub   { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+
+  /* Distribution bars */
+  .dist-row { display: grid; grid-template-columns: 160px 1fr 60px; gap: 8px;
+              align-items: center; margin: 4px 0; }
+  .dist-row .label { color: var(--text-dim); font-size: 12px; text-align: right; }
+  .dist-bar { height: 18px; background: var(--panel); border-radius: 3px;
+              position: relative; overflow: hidden; }
+  .dist-bar .fill { height: 100%; }
+  .dist-row .count { font-size: 12px; color: var(--text); }
+
+  /* Histogram */
+  .hist { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px;
+          margin-top: 8px; align-items: end; }
+  .hist .bar { display: flex; flex-direction: column-reverse; min-height: 4px;
+               background: var(--panel); border-radius: 3px 3px 0 0;
+               position: relative; }
+  .hist .bar .seg { width: 100%; }
+  .hist .hlbl { font-size: 10px; color: var(--text-faint); text-align: center;
+                margin-top: 4px; }
+  .hist .hcnt { font-size: 11px; color: var(--text); text-align: center;
+                margin-bottom: 2px; }
+
+  /* Legend */
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 0;
+            color: var(--text-dim); font-size: 11px; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* Filters */
+  .filters { display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+             background: var(--panel); padding: 10px 14px; border-radius: 6px;
+             margin: 8px 0; }
+  .filter-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .filter-group label { color: var(--text-dim); font-size: 11px;
+                        text-transform: uppercase; letter-spacing: .06em; }
+  .pill {
+    display: inline-flex; align-items: center; padding: 3px 8px; font-size: 11px;
+    border-radius: 999px; background: var(--panel-2); color: var(--text-dim);
+    border: 1px solid var(--border); cursor: pointer; user-select: none;
+  }
+  .pill.on { color: var(--text); border-color: transparent; }
+  .filters select, .filters input[type=text] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    padding: 4px 8px; border-radius: 4px; font-size: 12px;
+  }
+  .filters input[type=text] { min-width: 200px; }
+  .filters .reset {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  }
+  .footer-count { color: var(--text-dim); font-size: 12px; padding: 8px 4px; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th { position: sticky; top: 0; background: var(--panel); padding: 8px 10px;
+             text-align: left; font-weight: 600; color: var(--text-dim);
+             border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+             white-space: nowrap; }
+  thead th .arrow { color: var(--text-faint); font-size: 10px; margin-left: 4px; }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid #1e293b; vertical-align: top; }
+  tbody tr.row { cursor: pointer; }
+  tbody tr.row:hover { background: #172033; }
+  tbody tr.row.exp { background: #172033; }
+  tbody tr.detail td { padding: 10px 16px 16px; background: #0b1224; color: var(--text-dim); }
+  tbody tr.detail .dgrid { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; }
+  tbody tr.detail .dgrid .k { color: var(--text-faint); font-size: 11px;
+                              text-transform: uppercase; letter-spacing: .06em; }
+  tbody tr.detail .dgrid .v { color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+  tbody tr.detail mark { background: #f59e0b; color: #1e293b; padding: 0 2px; border-radius: 2px; }
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
+    font-weight: 600; color: #fff; white-space: nowrap;
+  }
+  .ttype { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 10px;
+           font-weight: 600; background: var(--panel-2); color: var(--text-dim);
+           text-transform: uppercase; letter-spacing: .04em; }
+  .num { font-variant-numeric: tabular-nums; }
+  .imminent { color: #fbbf24; }
+  .past { color: var(--text-faint); }
+</style>
+</head>
+<body>
+
+<h1>Catalyst Timing Report — <span id="snapshot-label">__SNAPSHOT__</span></h1>
+<div class="meta" id="meta"></div>
+
+<div class="kpis" id="kpis"></div>
+<div class="windows" id="windows"></div>
+
+<h2>Lane distribution</h2>
+<div id="lane-bars"></div>
+
+<h2>Precision tier distribution</h2>
+<div id="tier-bars"></div>
+
+<h2>Catalysts by month (date_min, next 12 months, stacked by tier)</h2>
+<div class="hist" id="hist"></div>
+<div class="legend" id="hist-legend"></div>
+
+<h2>Detail</h2>
+<div class="filters" id="filters">
+  <div class="filter-group" id="lane-pills">
+    <label>Lane</label>
+  </div>
+  <div class="filter-group" id="tier-pills">
+    <label>Tier</label>
+  </div>
+  <div class="filter-group">
+    <label>Stage</label>
+    <select id="f-stage"><option value="">all</option></select>
+  </div>
+  <div class="filter-group">
+    <label>Window</label>
+    <select id="f-window">
+      <option value="all">all</option>
+      <option value="discovery">discovery (T+14..T+180)</option>
+      <option value="execution">execution (T+14..T+60)</option>
+      <option value="past">past or unknown</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <label>Search</label>
+    <input type="text" id="f-search" placeholder="ticker or drug…">
+  </div>
+  <button class="reset" id="reset-filters">reset</button>
+</div>
+<div class="footer-count" id="footer-count"></div>
+<table id="tbl">
+  <thead>
+    <tr id="thead-row"></tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+
+<script>
+const DATA = __DATA_JSON__;
+const LS_KEY = "biotech_m5_filters_v1";
+
+// ---- helpers -----------------------------------------------------------
+const $ = (s, root=document) => root.querySelector(s);
+const fmtPct = (n, total) => total ? (100 * n / total).toFixed(1) + "%" : "—";
+const fmtDate = (s) => s || "";
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, ch => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[ch]));
+const fmtMcap = (v) => {
+  if (v == null) return "—";
+  if (v >= 1e12) return (v/1e12).toFixed(2) + "T";
+  if (v >= 1e9)  return (v/1e9).toFixed(2)  + "B";
+  if (v >= 1e6)  return (v/1e6).toFixed(1)  + "M";
+  return v.toFixed(0);
+};
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// ---- meta line ---------------------------------------------------------
+$("#meta").innerHTML =
+  `Computed <code>${escapeHtml(DATA.computed_at)}</code> · ` +
+  `rules <code>${escapeHtml(DATA.rules_version)}</code> · ` +
+  `<code>${DATA.summary.total}</code> rows from <code>${escapeHtml(DATA.db_path)}</code>`;
+
+// ---- KPI strip ---------------------------------------------------------
+const kpiHtml = DATA.lane_order.map(lane => {
+  const n = DATA.summary.lane_counts[lane] || 0;
+  const color = DATA.lane_color[lane];
+  return `
+    <div class="kpi" style="border-left-color:${color}">
+      <div class="label">${escapeHtml(DATA.lane_label[lane])}</div>
+      <div class="value num">${n}</div>
+      <div class="pct">${fmtPct(n, DATA.summary.total)}</div>
+    </div>`;
+}).join("");
+$("#kpis").innerHTML = kpiHtml;
+
+// ---- window summaries --------------------------------------------------
+const W = DATA.summary.windows;
+const ref = DATA.snapshot_date;
+$("#windows").innerHTML = `
+  <div class="win">
+    <div class="label">Discovery window</div>
+    <div class="value num">${W.discovery}</div>
+    <div class="sub">T+14..T+180 from ${ref}</div>
+  </div>
+  <div class="win">
+    <div class="label">Execution window</div>
+    <div class="value num">${W.execution}</div>
+    <div class="sub">T+14..T+60 from ${ref}</div>
+  </div>
+  <div class="win">
+    <div class="label">Past or unknown</div>
+    <div class="value num">${W.past_or_unknown}</div>
+    <div class="sub">excluded from both windows</div>
+  </div>
+`;
+
+// ---- distribution bars -------------------------------------------------
+function renderDistRows(targetEl, counts, order, colorMap, labelMap) {
+  const max = Math.max(...order.map(k => counts[k] || 0));
+  targetEl.innerHTML = order.map(k => {
+    const n = counts[k] || 0;
+    const pct = max ? (100 * n / max) : 0;
+    const col = colorMap[k] || "#64748b";
+    return `
+      <div class="dist-row">
+        <div class="label">${escapeHtml(labelMap[k] || k)}</div>
+        <div class="dist-bar"><div class="fill" style="width:${pct}%;background:${col}"></div></div>
+        <div class="count num">${n}</div>
+      </div>`;
+  }).join("");
+}
+renderDistRows($("#lane-bars"), DATA.summary.lane_counts, DATA.lane_order,
+               DATA.lane_color, DATA.lane_label);
+
+const TIER_COLOR = {
+  specific:   "#22d3ee",
+  conference: "#3b82f6",
+  month:      "#a78bfa",
+  quarter:    "#f59e0b",
+  half:       "#f97316",
+  year:       "#dc2626",
+  unknown:    "#475569",
+};
+const TIER_LABEL = Object.fromEntries(DATA.tier_order.map(t => [t, t]));
+renderDistRows($("#tier-bars"), DATA.summary.tier_counts, DATA.tier_order,
+               TIER_COLOR, TIER_LABEL);
+
+// ---- monthly histogram (stacked by tier) -------------------------------
+const histMax = Math.max(1, ...DATA.months.map(m => m.count));
+const histHtml = DATA.months.map(m => {
+  const heightPx = Math.round(160 * m.count / histMax);
+  const segs = DATA.tier_order.map(t => {
+    const v = m.by_tier[t] || 0;
+    if (!v) return "";
+    const h = Math.round(160 * v / histMax);
+    return `<div class="seg" style="height:${h}px;background:${TIER_COLOR[t]}" title="${t}: ${v}"></div>`;
+  }).join("");
+  return `
+    <div>
+      <div class="hcnt">${m.count || ""}</div>
+      <div class="bar" style="height:${heightPx}px">${segs}</div>
+      <div class="hlbl">${escapeHtml(m.label)}</div>
+    </div>`;
+}).join("");
+$("#hist").innerHTML = histHtml;
+$("#hist-legend").innerHTML = DATA.tier_order.map(t => `
+  <span><i style="background:${TIER_COLOR[t]}"></i>${t}</span>
+`).join("");
+
+// ---- filter pills ------------------------------------------------------
+const state = {
+  lanes: new Set(DATA.lane_order),
+  tiers: new Set(DATA.tier_order),
+  stage: "",
+  window: "all",
+  search: "",
+  sortKey: "days_to_min",
+  sortDir: 1,
+};
+
+// restore from localStorage
+try {
+  const saved = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+  if (Array.isArray(saved.lanes)) state.lanes = new Set(saved.lanes);
+  if (Array.isArray(saved.tiers)) state.tiers = new Set(saved.tiers);
+  if (typeof saved.stage  === "string") state.stage  = saved.stage;
+  if (typeof saved.window === "string") state.window = saved.window;
+  if (typeof saved.search === "string") state.search = saved.search;
+  if (typeof saved.sortKey === "string") state.sortKey = saved.sortKey;
+  if (typeof saved.sortDir === "number") state.sortDir = saved.sortDir;
+} catch (e) {}
+
+function saveState() {
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    lanes: [...state.lanes], tiers: [...state.tiers],
+    stage: state.stage, window: state.window, search: state.search,
+    sortKey: state.sortKey, sortDir: state.sortDir,
+  }));
+}
+
+function renderPills(containerSel, labelText, order, colorMap, labelMap, set) {
+  const cont = $(containerSel);
+  const labelEl = cont.querySelector("label");
+  cont.innerHTML = "";
+  cont.appendChild(labelEl);
+  order.forEach(k => {
+    const pill = document.createElement("span");
+    pill.className = "pill" + (set.has(k) ? " on" : "");
+    pill.textContent = labelMap[k] || k;
+    if (set.has(k)) pill.style.background = colorMap[k];
+    pill.onclick = () => {
+      if (set.has(k)) set.delete(k); else set.add(k);
+      renderPills(containerSel, labelText, order, colorMap, labelMap, set);
+      saveState(); rerender();
+    };
+    cont.appendChild(pill);
+  });
+}
+renderPills("#lane-pills", "Lane", DATA.lane_order, DATA.lane_color,
+            DATA.lane_label, state.lanes);
+renderPills("#tier-pills", "Tier", DATA.tier_order, TIER_COLOR, TIER_LABEL, state.tiers);
+
+// stage dropdown — populate from data
+const stages = Array.from(new Set(DATA.rows.map(r => r.stage).filter(Boolean))).sort();
+const stageSel = $("#f-stage");
+stages.forEach(s => {
+  const o = document.createElement("option");
+  o.value = s; o.textContent = s;
+  stageSel.appendChild(o);
+});
+stageSel.value = state.stage;
+stageSel.onchange = () => { state.stage = stageSel.value; saveState(); rerender(); };
+
+const winSel = $("#f-window");
+winSel.value = state.window;
+winSel.onchange = () => { state.window = winSel.value; saveState(); rerender(); };
+
+const searchEl = $("#f-search");
+searchEl.value = state.search;
+searchEl.oninput = () => { state.search = searchEl.value; saveState(); rerender(); };
+
+$("#reset-filters").onclick = () => {
+  state.lanes = new Set(DATA.lane_order);
+  state.tiers = new Set(DATA.tier_order);
+  state.stage = ""; state.window = "all"; state.search = "";
+  stageSel.value = ""; winSel.value = "all"; searchEl.value = "";
+  renderPills("#lane-pills", "Lane", DATA.lane_order, DATA.lane_color,
+              DATA.lane_label, state.lanes);
+  renderPills("#tier-pills", "Tier", DATA.tier_order, TIER_COLOR, TIER_LABEL, state.tiers);
+  saveState(); rerender();
+};
+
+// ---- table -------------------------------------------------------------
+const COLS = [
+  { key: "ticker",         label: "Ticker", num: false },
+  { key: "drug",           label: "Drug",   num: false },
+  { key: "stage",          label: "Stage",  num: false },
+  { key: "source_lane",    label: "Lane",   num: false },
+  { key: "precision_tier", label: "Tier",   num: false },
+  { key: "date_min",       label: "date_min", num: true },
+  { key: "date_max",       label: "date_max", num: true },
+  { key: "days_to_min",    label: "Δ days",   num: true },
+  { key: "matched_phrase", label: "matched phrase", num: false },
+];
+
+const thRow = $("#thead-row");
+COLS.forEach(c => {
+  const th = document.createElement("th");
+  th.dataset.key = c.key;
+  th.innerHTML = `${escapeHtml(c.label)}<span class="arrow"></span>`;
+  th.onclick = () => {
+    if (state.sortKey === c.key) state.sortDir *= -1;
+    else { state.sortKey = c.key; state.sortDir = 1; }
+    saveState(); rerender();
+  };
+  thRow.appendChild(th);
+});
+
+function inWindow(r, kind) {
+  const ref = new Date(DATA.snapshot_date);
+  const t14 = new Date(ref); t14.setDate(ref.getDate() + 14);
+  const t60 = new Date(ref); t60.setDate(ref.getDate() + 60);
+  const t180 = new Date(ref); t180.setDate(ref.getDate() + 180);
+  if (kind === "all") return true;
+  if (kind === "past") {
+    if (r.precision_tier === "unknown") return true;
+    if (!r.date_max) return true;
+    return new Date(r.date_max) < t14;
+  }
+  if (!r.date_min || !r.date_max || r.precision_tier === "unknown") return false;
+  const dmin = new Date(r.date_min), dmax = new Date(r.date_max);
+  if (kind === "discovery") return dmin <= t180 && dmax >= t14;
+  if (kind === "execution") return dmin <= t60  && dmax >= t14;
+  return true;
+}
+
+function rerender() {
+  // arrows
+  document.querySelectorAll("thead th").forEach(th => {
+    const arrow = th.querySelector(".arrow");
+    arrow.textContent = th.dataset.key === state.sortKey
+      ? (state.sortDir > 0 ? "▲" : "▼") : "";
+  });
+
+  // filter
+  const q = state.search.trim().toLowerCase();
+  const filtered = DATA.rows.filter(r => {
+    if (!state.lanes.has(r.source_lane)) return false;
+    if (!state.tiers.has(r.precision_tier)) return false;
+    if (state.stage && r.stage !== state.stage) return false;
+    if (!inWindow(r, state.window)) return false;
+    if (q) {
+      const hay = (r.ticker + " " + r.drug + " " + r.name + " " + r.indication).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // sort — when ascending date_min/days_to_min, push past entries to the end
+  // so the most-imminent-future row is on top by default.
+  const key = state.sortKey, dir = state.sortDir;
+  const pushPastLast = (key === "date_min" || key === "days_to_min") && dir > 0;
+  filtered.sort((a, b) => {
+    if (pushPastLast) {
+      const aPast = a.days_to_min != null && a.days_to_min < 0;
+      const bPast = b.days_to_min != null && b.days_to_min < 0;
+      if (aPast && !bPast) return 1;
+      if (!aPast && bPast) return -1;
+    }
+    const va = a[key], vb = b[key];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (va < vb) return -1 * dir;
+    if (va > vb) return  1 * dir;
+    return 0;
+  });
+
+  $("#footer-count").textContent =
+    `Showing ${filtered.length} of ${DATA.rows.length} rows`;
+
+  const tbody = $("#tbody");
+  tbody.innerHTML = filtered.map((r, i) => {
+    const laneColor = DATA.lane_color[r.source_lane] || "#64748b";
+    const dDays = r.days_to_min;
+    const dDaysCls = dDays == null ? "" :
+                     dDays < 0 ? "past" :
+                     dDays < 14 ? "imminent" : "";
+    const dDaysText = dDays == null ? "—"
+                    : (dDays >= 0 ? "+" : "") + dDays;
+    return `
+      <tr class="row" data-idx="${i}">
+        <td>${escapeHtml(r.ticker)}</td>
+        <td>${escapeHtml(r.drug)}</td>
+        <td>${escapeHtml(r.stage)}</td>
+        <td><span class="tag" style="background:${laneColor}">${escapeHtml(DATA.lane_label[r.source_lane])}</span></td>
+        <td><span class="ttype">${escapeHtml(r.precision_tier)}</span></td>
+        <td class="num">${fmtDate(r.date_min)}</td>
+        <td class="num">${fmtDate(r.date_max)}</td>
+        <td class="num ${dDaysCls}">${dDaysText}</td>
+        <td>${escapeHtml(r.matched_phrase)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  // wire row expand
+  tbody.querySelectorAll("tr.row").forEach(tr => {
+    tr.onclick = () => {
+      const next = tr.nextElementSibling;
+      if (next && next.classList.contains("detail")) {
+        next.remove(); tr.classList.remove("exp"); return;
+      }
+      const r = filtered[+tr.dataset.idx];
+      const detail = buildDetail(r);
+      tr.classList.add("exp");
+      tr.insertAdjacentHTML("afterend", detail);
+    };
+  });
+}
+
+function buildDetail(r) {
+  const text = escapeHtml(r.catalyst_text || "(empty)");
+  const matched = r.matched_phrase;
+  let highlighted = text;
+  if (matched) {
+    const re = new RegExp(escapeRegex(escapeHtml(matched)), "i");
+    highlighted = text.replace(re, m => `<mark>${m}</mark>`);
+  }
+  const conf = r.conference ? `<div class="k">Conference</div><div class="v">${escapeHtml(r.conference)}</div>` : "";
+  const ncts = r.nct_number ? `<div class="k">NCT</div><div class="v">${escapeHtml(r.nct_number)}</div>` : "";
+  const ind  = r.indication ? `<div class="k">Indication</div><div class="v">${escapeHtml(r.indication)}</div>` : "";
+  const sent = r.sentiment ? `<div class="k">Sentiment</div><div class="v">${escapeHtml(r.sentiment)}</div>` : "";
+  const mcap = r.market_cap_usd != null ? `<div class="k">Market cap</div><div class="v">$${fmtMcap(r.market_cap_usd)}</div>` : "";
+  const price = r.price != null ? `<div class="k">Price</div><div class="v">$${r.price}</div>` : "";
+  return `
+    <tr class="detail">
+      <td colspan="9">
+        <div class="dgrid">
+          <div class="k">Catalyst text</div>
+          <div class="v">${highlighted}</div>
+          <div class="k">BPC catalyst_date</div>
+          <div class="v">${escapeHtml(r.catalyst_date_raw)}</div>
+          <div class="k">Next catalyst type</div>
+          <div class="v">${escapeHtml(r.next_catalyst_type)}</div>
+          ${conf}${ncts}${ind}${sent}${mcap}${price}
+        </div>
+      </td>
+    </tr>`;
+}
+
+rerender();
+</script>
+</body>
+</html>
+"""
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--snapshot-date", type=date.fromisoformat, default=None,
+        help="ISO snapshot date to render (default: most recent in catalyst_timing)",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=OUTPUT_PATH,
+        help=f"output HTML path (default: {OUTPUT_PATH.relative_to(PROJECT_ROOT)})",
+    )
+    args = parser.parse_args()
+
+    conn = get_connection()
+    try:
+        if args.snapshot_date:
+            snap = args.snapshot_date
+        else:
+            row = conn.execute(
+                "SELECT MAX(snapshot_date) FROM catalyst_timing"
+            ).fetchone()
+            if row is None or row[0] is None:
+                print("error: catalyst_timing is empty — run Module 5 first",
+                      file=sys.stderr)
+                return 2
+            snap = date.fromisoformat(row[0])
+
+        rows = _fetch_rows(conn, snap)
+        if not rows:
+            print(f"error: no catalyst_timing rows at snapshot {snap.isoformat()}",
+                  file=sys.stderr)
+            return 2
+
+        summary = _build_summary(rows, snap)
+        months = _build_monthly_histogram(rows, snap)
+        rows_json = [_row_for_json(r, snap) for r in rows]
+
+        # Pull rules_version + computed_at from the first row (consistent
+        # across the snapshot — same compute-timing run touched all rows).
+        rules_version = rows[0]["rules_version"] or ""
+        computed_at = rows[0]["computed_at"] or ""
+
+        html_out = _build_html(
+            snap=snap,
+            summary=summary,
+            months=months,
+            rows_json=rows_json,
+            rules_version=rules_version,
+            computed_at=computed_at,
+            db_path=DEFAULT_DB_PATH,
+        )
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(html_out, encoding="utf-8")
+
+        print(f"[3_5_render_timings] wrote {args.output.relative_to(PROJECT_ROOT)}")
+        print(f"  snapshot:        {snap.isoformat()}")
+        print(f"  total rows:      {summary['total']}")
+        print(f"  discovery (T+14..T+180):  {summary['windows']['discovery']}")
+        print(f"  execution (T+14..T+60):   {summary['windows']['execution']}")
+        print(f"  past or unknown:          {summary['windows']['past_or_unknown']}")
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
