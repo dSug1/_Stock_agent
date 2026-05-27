@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 class TickerStats:
     ticker: str
     cik: Optional[str] = None
+    mode: str = "new"                       # 'new' | 'incremental' | 'full_refresh'
+    since_floor: Optional[str] = None       # the ISO date floor actually used
     filings_in_window: int = 0
     filings_already_in_db: int = 0
     filings_fetched: int = 0
@@ -44,11 +46,38 @@ class IngestStats:
     tickers_requested: int = 0
     tickers_unresolved: int = 0
     tickers_processed: int = 0
+    tickers_new: int = 0                     # first-time fetch (full 365-day window)
+    tickers_incremental: int = 0             # floored at MAX(filed_date) for the CIK
     filings_inserted: int = 0
     transactions_inserted: int = 0
     status: str = "running"
     error_message: Optional[str] = None
     per_ticker: list[TickerStats] = field(default_factory=list)
+
+
+def _per_ticker_floor(
+    conn: sqlite3.Connection, cik: str, full_window_floor_iso: str,
+) -> tuple[str, str]:
+    """Compute the (since_date_iso, mode) tuple for this CIK.
+
+    - If we already have Form 4 rows for this CIK, floor at MAX(filed_date)
+      so we only fetch filings the SEC has stamped since our last sweep.
+    - Otherwise (first-time fetch), use the full window floor.
+    - The user-supplied --lookback-days still bounds the outer window:
+      we never look further back than `full_window_floor_iso`.
+
+    Spec §4.3.3 + §4.4 (extended by D5 optimization 2026-05-27).
+    """
+    row = conn.execute(
+        "SELECT MAX(filed_date) FROM edgar_form4_filings WHERE cik_issuer = ?",
+        (cik,),
+    ).fetchone()
+    last = row[0] if row else None
+    if last is None:
+        return full_window_floor_iso, "new"
+    # The later of (lookback floor, last filed_date) — so a tightened
+    # --lookback-days can never reach further back than the user asked.
+    return (max(full_window_floor_iso, last), "incremental")
 
 
 _INSERT_FILING_SQL = """
@@ -151,9 +180,18 @@ def ingest_form4_for_tickers(
                 if full_refresh:
                     with conn:
                         _full_refresh_drop(conn, cik)
+                    ticker_since_iso, mode = since_iso, "full_refresh"
+                else:
+                    ticker_since_iso, mode = _per_ticker_floor(conn, cik, since_iso)
+                t_stats.mode = mode
+                t_stats.since_floor = ticker_since_iso
+                if mode == "new":
+                    stats.tickers_new += 1
+                elif mode == "incremental":
+                    stats.tickers_incremental += 1
 
                 filings_result = list_form_filings(
-                    cik, forms=["4", "4/A"], since_date_iso=since_iso,
+                    cik, forms=["4", "4/A"], since_date_iso=ticker_since_iso,
                 )
                 if filings_result.status != "ok":
                     t_stats.error = f"submissions: {filings_result.error}"
@@ -224,8 +262,9 @@ def ingest_form4_for_tickers(
                 log.exception("[%s] unhandled error", ticker)
             stats.tickers_processed += 1
             log.info(
-                "[%s] in_window=%d already=%d fetched=%d failed=%d txns=%d",
-                ticker, t_stats.filings_in_window, t_stats.filings_already_in_db,
+                "[%s] mode=%s since=%s in_window=%d already=%d fetched=%d failed=%d txns=%d",
+                ticker, t_stats.mode, t_stats.since_floor,
+                t_stats.filings_in_window, t_stats.filings_already_in_db,
                 t_stats.filings_fetched, t_stats.filings_failed, t_stats.txns_inserted,
             )
         # Single source of truth for the global transactions count.

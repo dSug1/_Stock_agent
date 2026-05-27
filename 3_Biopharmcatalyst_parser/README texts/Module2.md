@@ -186,23 +186,31 @@ When you run `scripts/3_2_ingest_edgar_form4.py`:
 
 3. **For each resolved ticker** (unresolved ones log a warning and
    skip — common for delisted, foreign, or ETF tickers):
-   1. Fetch the submissions index JSON for the CIK. Walk
+   1. **Compute the per-ticker `since_floor`** (D5 optimization):
+      - If we already have Form 4 rows for this CIK →
+        `floor = max(today - lookback_days, MAX(filed_date) for this CIK)`.
+        Mode = `incremental`.
+      - If no rows yet → `floor = today - lookback_days`. Mode = `new`.
+      - If `--full-refresh` was passed → drop existing rows first,
+        then `floor = today - lookback_days`. Mode = `full_refresh`.
+   2. Fetch the submissions index JSON for the CIK. Walk
       `filings.recent` for Form 4 (and 4/A) filings whose
-      `filingDate >= today - lookback_days`.
-   2. Pre-load the set of accession numbers we already have for
+      `filingDate >= floor`.
+   3. Pre-load the set of accession numbers we already have for
       this CIK from `edgar_form4_filings`.
-   3. For each Form 4 in the window:
+   4. For each Form 4 in the window:
       - **If accession is already in the DB → skip entirely.** No
-        HTTP call, no parsing, no DB write. This is the §4.4
-        incremental contract.
+        XML fetch, no parsing, no DB write. (The incremental floor
+        usually means there are no such filings to skip — but the
+        check is still there as a belt-and-braces.)
       - Otherwise: fetch the primary XML document (with the
         basename-first → `index.json`-fallback trick that handles
         SEC's `xslF345X05/` prefix quirk).
       - Parse the XML into a `(Form4Filing, list[Form4Txn])` tuple.
       - In a single SQLite transaction: `INSERT OR IGNORE` the
         filing row, then `INSERT` every transaction.
-   4. Log a per-ticker summary line: `in_window=N already=M
-      fetched=K failed=F txns=T`.
+   5. Log a per-ticker summary line: `mode=… since=… in_window=N
+      already=M fetched=K failed=F txns=T`.
 
 4. **Per-ticker fail-open.** If any ticker's submissions or parse
    step fails, the error is captured in `TickerStats.error` and we
@@ -306,19 +314,30 @@ The wall time is dominated by the rate limit, not the network. At
 
 - **Refresh `company_tickers.json`** (only if cache > 7 days old): 1
   request, ~0.1s.
-- **Per ticker** (resolved): 1 submissions JSON + N Form 4 XMLs +
-  occasional `index.json` fallback. For biotech small-caps,
-  N typically 5–50 per 365-day window.
-- **Per Form 4** (incremental skip path): 0 requests. Free.
+- **Per ticker** (resolved, first-time `new` mode): 1 submissions JSON
+  + N Form 4 XMLs + occasional `index.json` fallback. For biotech
+  small-caps, N typically 5–50 per 365-day window.
+- **Per ticker** (`incremental` mode, ticker we've seen before): 1
+  submissions JSON + the (usually small) number of Form 4 XMLs filed
+  since the last sweep. Most weekly re-runs will fetch **zero** XMLs
+  per ticker because insider filings don't appear daily.
+- **Per Form 4** (already in DB): 0 requests. Free.
 - **Per Form 4** (first-time fetch): 1–3 requests depending on
   whether the basename guess works first or we need the
   `index.json` fallback.
 
 For the 5-ticker spec acceptance set (175 filings on first run):
 ~180 HTTP calls / 9.5 per sec ≈ **20 seconds**. A full-universe
-run (~300 tickers, 1500–6000 filings on first run): **3–10
-minutes**. Subsequent runs are near-instant — just the per-ticker
-submissions check.
+**first run** (~300 tickers, 1500–6000 filings): **3–10 minutes**.
+
+After that, **subsequent runs are near-instant** even when the
+universe is unchanged: roughly `N_tickers / 9.5 + a few XML fetches
+for whatever's new` — typically under a minute for the full 296-ticker
+universe when nothing has happened (just the per-ticker submissions
+JSON checks), or a couple of minutes if there's a fresh week of
+filings to pick up. The incremental floor is what makes this work —
+without it, every re-run would still iterate through ~5,000 filings
+client-side just to confirm "yep, already have it."
 
 ---
 
@@ -428,6 +447,20 @@ A few that aren't obvious from the code:
   Form 4, its content is immutable. `INSERT OR IGNORE` makes the
   re-run a no-op; `INSERT OR REPLACE` would re-parse and re-write
   unnecessarily.
+
+- **Per-ticker incremental floor at `MAX(filed_date)`** (D5
+  optimization, added 2026-05-27). Without it, every re-run of M2
+  iterates through every Form 4 in the 365-day window per ticker
+  client-side, even though `INSERT OR IGNORE` would just skip the
+  ones we have. With it, the submissions-list scan is narrowed to
+  "filings filed since the last sweep" — usually zero on a weekly
+  cadence. Chose `MAX(filed_date)` over a separate "previous run
+  date" table because it uses data we already have and survives
+  partial-universe runs gracefully. The one v1 limitation: a
+  ticker with 0 Form 4s in the window can't be distinguished from
+  "never queried" — it pays one cheap submissions JSON per run
+  forever. Cost is negligible (~0.1s); not worth a separate
+  audit table.
 
 - **Derivative transactions dropped at parse time.** They're real
   insider events but they don't carry the same signal as

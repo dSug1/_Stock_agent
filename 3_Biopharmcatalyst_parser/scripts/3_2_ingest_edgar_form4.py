@@ -92,6 +92,8 @@ def main() -> int:
     print(f"  tickers_requested:    {stats.tickers_requested}")
     print(f"  tickers_unresolved:   {stats.tickers_unresolved}")
     print(f"  tickers_processed:    {stats.tickers_processed}")
+    print(f"    new (full lookback): {stats.tickers_new}")
+    print(f"    incremental:         {stats.tickers_incremental}")
     print(f"  filings_inserted:     {stats.filings_inserted}")
     print(f"  transactions_inserted:{stats.transactions_inserted}")
     if args.verbose:

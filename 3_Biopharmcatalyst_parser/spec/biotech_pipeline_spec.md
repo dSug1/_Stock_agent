@@ -403,7 +403,17 @@ PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_2_ingest_edgar_form4.py [--
 
 #### 4.3.3 Filings index
 
-For each CIK, fetch `https://data.sec.gov/submissions/CIK{padded_cik}.json` and walk the `filings.recent` arrays to find all Form 4 filings within the lookback window. Filings beyond `recent` (older than ~1000 filings) are in paginated files — for biotech small-caps this is rarely an issue, but the implementation should handle the pagination case (out of scope for v1 if it complicates things; document as a known limitation).
+For each CIK, fetch `https://data.sec.gov/submissions/CIK{padded_cik}.json` and walk the `filings.recent` arrays to find all Form 4 filings within the **per-ticker lookback window**.
+
+**Per-ticker incremental floor (D5 optimization, 2026-05-27):** the window floor is not unconditionally `today - --lookback-days`. Instead:
+
+- If `edgar_form4_filings` already has ≥1 row for the CIK → `since_floor = max(today - lookback_days, MAX(filed_date))`. This skips re-scanning months of filings we've already stored. Mode reported as `incremental` in per-ticker stats.
+- If `edgar_form4_filings` has no rows for the CIK → `since_floor = today - lookback_days`. Full first-time window. Mode reported as `new`.
+- If `--full-refresh` is passed → existing rows for the CIK are deleted first, then the floor is reset to the full window. Mode reported as `full_refresh`.
+
+The user-supplied `--lookback-days` always bounds the outer window — `since_floor` is never older than that, regardless of how recently the ticker was last fetched. This keeps a tightened lookback meaningful and never silently looks further back than asked.
+
+Filings beyond `recent` (older than ~1000 filings) are in paginated files — for biotech small-caps this is rarely an issue, but the implementation should handle the pagination case (out of scope for v1 if it complicates things; document as a known limitation).
 
 #### 4.3.4 Form 4 XML parser (`src/module_2/form4_parser.py`)
 
@@ -448,7 +458,8 @@ Document the full list in a constants module; the table above is the v1 minimum.
 
 - Filings keyed by `accession_number` (PK). `INSERT OR IGNORE` — if accession already in DB, skip the fetch+parse entirely.
 - Transactions: parent filing's accession + autoincrement transaction_id. Because filings are skipped if already present, transactions are too.
-- `--full-refresh` deletes existing rows for the targeted CIKs/accessions before re-loading.
+- **Per-ticker incremental floor** (D5 optimization, §4.3.3): the submissions-list scan is also narrowed to filings filed after `MAX(filed_date)` for each CIK, so a re-run of a stable universe touches each ticker once (just the submissions JSON) without re-iterating already-stored filings client-side.
+- `--full-refresh` deletes existing rows for the targeted CIKs/accessions before re-loading, which resets the incremental floor back to the full window.
 
 ### 4.5 Acceptance criteria
 
