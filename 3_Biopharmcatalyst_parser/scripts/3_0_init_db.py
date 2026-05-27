@@ -33,6 +33,7 @@ EXPECTED_TABLES = [
 EXPECTED_VIEWS = [
     "v_latest_catalysts",
     "v_insider_signal_combined",
+    "v_executive_open_market_trades",
 ]
 
 

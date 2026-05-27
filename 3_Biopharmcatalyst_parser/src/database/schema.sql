@@ -189,6 +189,87 @@ JOIN (
 --   * BPC only captures the filing date; transaction_date is NULL.
 --   * source_ref lets you trace back: EDGAR accession_number, or the
 --     BPC snapshot_date that supplied the row.
+-- v_executive_open_market_trades: same UNION as v_insider_signal_combined,
+-- but adds an `executive_role` classifier column (CEO / CFO / COO / CMO /
+-- CSO / President / Chair / 10% owner / Director / Other officer / Other)
+-- derived from the freeform position text AND, for EDGAR rows, the
+-- structured is_director / is_officer / is_ten_percent_owner flags. Also
+-- adds a pre-computed `gross_usd = shares * trade_price` column for
+-- ranking. Title-pattern detection comes first so a CEO who's also a
+-- director shows up as "CEO" not "Director". See decisions.md D7.
+DROP VIEW IF EXISTS v_executive_open_market_trades;
+CREATE VIEW v_executive_open_market_trades AS
+SELECT
+    source,
+    ticker,
+    insider_name,
+    insider_position,
+    filing_date,
+    transaction_date,
+    buy_sell,
+    shares,
+    trade_price,
+    (shares * trade_price)              AS gross_usd,
+    source_ref,
+    CASE
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%CHIEF EXECUTIVE%'
+          OR UPPER(COALESCE(insider_position, '')) LIKE '%CEO%' THEN 'CEO'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%CHIEF FINANCIAL%'
+          OR UPPER(COALESCE(insider_position, '')) LIKE '%CFO%' THEN 'CFO'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%CHIEF OPERATING%'
+          OR UPPER(COALESCE(insider_position, '')) LIKE '%COO%' THEN 'COO'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%CHIEF MEDICAL%'
+          OR UPPER(COALESCE(insider_position, '')) LIKE '%CMO%' THEN 'CMO'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%CHIEF SCIENTIFIC%'
+          OR UPPER(COALESCE(insider_position, '')) LIKE '%CSO%' THEN 'CSO'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%PRESIDENT%' THEN 'President'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%CHAIR%' THEN 'Chair'
+        WHEN is_ten_percent_owner_flag = 1 THEN '10% owner'
+        WHEN UPPER(COALESCE(insider_position, '')) LIKE '%DIRECTOR%' THEN 'Director'
+        WHEN is_director_flag = 1 THEN 'Director'
+        WHEN is_officer_flag = 1 THEN 'Other officer'
+        ELSE 'Other'
+    END AS executive_role
+FROM (
+    SELECT
+        'edgar' AS source,
+        f.ticker,
+        f.reporting_owner_name AS insider_name,
+        f.officer_title         AS insider_position,
+        f.filed_date            AS filing_date,
+        t.transaction_date,
+        CASE t.acquired_disposed
+             WHEN 'A' THEN 'Buy' WHEN 'D' THEN 'Sell' ELSE NULL END AS buy_sell,
+        t.shares,
+        t.price_per_share       AS trade_price,
+        f.accession_number      AS source_ref,
+        f.is_director           AS is_director_flag,
+        f.is_officer            AS is_officer_flag,
+        f.is_ten_percent_owner  AS is_ten_percent_owner_flag
+    FROM edgar_form4_transactions t
+    JOIN edgar_form4_filings f USING (accession_number)
+    WHERE t.is_open_market = 1
+
+    UNION ALL
+
+    SELECT
+        'bpc' AS source,
+        ticker,
+        insider_name,
+        insider_position,
+        filing_date,
+        NULL                    AS transaction_date,
+        buy_sell,
+        shares,
+        trade_price,
+        CAST(snapshot_date AS TEXT) AS source_ref,
+        NULL                    AS is_director_flag,
+        NULL                    AS is_officer_flag,
+        NULL                    AS is_ten_percent_owner_flag
+    FROM bpc_insider_supplement
+    WHERE stock_or_option = 'Stock'
+);
+
 DROP VIEW IF EXISTS v_insider_signal_combined;
 CREATE VIEW v_insider_signal_combined AS
 SELECT

@@ -161,7 +161,11 @@ def test_foreign_keys_enabled(conn):
     assert row[0] == 1
 
 
-EXPECTED_VIEWS = ("v_latest_catalysts", "v_insider_signal_combined")
+EXPECTED_VIEWS = (
+    "v_latest_catalysts",
+    "v_insider_signal_combined",
+    "v_executive_open_market_trades",
+)
 
 
 def test_views_present(conn):
@@ -217,3 +221,93 @@ def test_insider_signal_view_unions_both_sources(conn):
     assert by_source["edgar"]["ticker"] == "BBB"
     assert by_source["edgar"]["buy_sell"] == "Buy"  # 'A' → 'Buy'
     assert by_source["edgar"]["shares"] == 500
+
+
+@pytest.mark.parametrize("title, flag_director, flag_officer, flag_tenpct, expected_role", [
+    # Title-based detection (case-insensitive, substring)
+    ("Chief Executive Officer",        0, 1, 0, "CEO"),
+    ("CEO",                            0, 1, 0, "CEO"),
+    ("President and CEO",              1, 1, 0, "CEO"),     # CEO wins over President
+    ("Chairperson & CEO",              1, 1, 0, "CEO"),     # CEO wins over Chair
+    ("Chief Financial Officer",        0, 1, 0, "CFO"),
+    ("CFO and Treasurer",              0, 1, 0, "CFO"),
+    ("Chief Operating Officer",        0, 1, 0, "COO"),
+    ("Chief Medical Officer",          0, 1, 0, "CMO"),
+    ("Chief Scientific Officer",       0, 1, 0, "CSO"),
+    ("President",                      0, 1, 0, "President"),
+    ("Chairman",                       1, 0, 0, "Chair"),
+    ("Chairperson",                    1, 0, 0, "Chair"),
+    ("Director",                       1, 0, 0, "Director"),
+    ("",                               1, 0, 0, "Director"),   # blank title → fall to flag
+    (None,                             0, 1, 0, "Other officer"),
+    ("",                               0, 0, 1, "10% owner"),  # flag wins over blank title
+    ("See Remarks",                    1, 0, 0, "Director"),   # opaque title → flag fallback
+    ("",                               0, 0, 0, "Other"),
+])
+def test_executive_role_classification(conn, title, flag_director, flag_officer, flag_tenpct, expected_role):
+    """Pin the role-classifier CASE expression in v_executive_open_market_trades."""
+    conn.execute(
+        "INSERT INTO edgar_form4_filings "
+        "(accession_number, cik_issuer, ticker, reporting_owner_name, "
+        " officer_title, is_director, is_officer, is_ten_percent_owner, "
+        " filed_date, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("ACC", "0000001", "TEST", "Jane Doe", title,
+         flag_director, flag_officer, flag_tenpct,
+         "2026-05-20", "2026-05-27T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO edgar_form4_transactions "
+        "(accession_number, transaction_date, transaction_code, "
+        " acquired_disposed, shares, price_per_share, is_open_market) "
+        "VALUES ('ACC', '2026-05-19', 'P', 'A', 1000, 10.0, 1)"
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT executive_role FROM v_executive_open_market_trades "
+        "WHERE source = 'edgar' AND insider_name = 'Jane Doe'"
+    ).fetchone()
+    assert row is not None
+    assert row["executive_role"] == expected_role
+
+
+def test_executive_view_includes_gross_usd(conn):
+    conn.execute(
+        "INSERT INTO edgar_form4_filings "
+        "(accession_number, cik_issuer, ticker, reporting_owner_name, "
+        " officer_title, is_director, is_officer, is_ten_percent_owner, "
+        " filed_date, fetched_at) "
+        "VALUES ('A1', '0000001', 'XYZ', 'Bob CEO', 'CEO', 0, 1, 0, "
+        "'2026-05-20', '2026-05-27T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO edgar_form4_transactions "
+        "(accession_number, transaction_date, transaction_code, "
+        " acquired_disposed, shares, price_per_share, is_open_market) "
+        "VALUES ('A1', '2026-05-19', 'P', 'A', 1000, 12.50, 1)"
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT gross_usd, executive_role FROM v_executive_open_market_trades"
+    ).fetchone()
+    assert row["gross_usd"] == 12500.0
+    assert row["executive_role"] == "CEO"
+
+
+def test_executive_view_unions_bpc_and_classifies(conn):
+    # BPC rows have no role flags — only the insider_position text drives
+    # classification. Verify the CASE works on that side too.
+    conn.execute(
+        "INSERT INTO bpc_insider_supplement "
+        "(snapshot_date, ticker, insider_name, insider_position, filing_date, "
+        " buy_sell, stock_or_option, shares, final_shares) "
+        "VALUES ('2026-05-27', 'XYZ', 'Alice CFO', 'Chief Financial Officer', "
+        " '2026-05-20', 'Buy', 'Stock', 500, 10000)"
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT source, executive_role FROM v_executive_open_market_trades "
+        "WHERE insider_name = 'Alice CFO'"
+    ).fetchone()
+    assert row["source"] == "bpc"
+    assert row["executive_role"] == "CFO"

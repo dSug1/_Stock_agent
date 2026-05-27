@@ -112,13 +112,18 @@ if /i "%RUN_M2%"=="y" (
 
 REM ============================================================
 REM Module 3 — EDGAR 13D/13G metadata
+REM Lightweight: no XML parsing, just the submissions JSON walk.
+REM Same 9.5 req/sec rate budget as M2; per-ticker incremental floor.
 REM ============================================================
-REM echo.
-REM set /p RUN_M3="Proceed to Module 3 (EDGAR 13D/13G)? [y/N]: "
-REM if /i "%RUN_M3%"=="y" (
-REM     python scripts\3_3_ingest_edgar_13dg.py --lookback-days 365
-REM     if errorlevel 1 ( echo [FATAL] Module 3 failed. & endlocal ^& exit /b 1 )
-REM )
+echo.
+set /p RUN_M3="Proceed to Module 3 (EDGAR 13D/13G, ~9.5 req/sec to SEC)? [y/N]: "
+if /i "%RUN_M3%"=="y" (
+    python scripts\3_3_ingest_edgar_13dg.py --lookback-days 365
+    if errorlevel 1 (
+        echo [FATAL] Module 3 failed.
+        endlocal ^& exit /b 1
+    )
+)
 
 echo.
 echo === run_3_Biopharmcatalyst_parser complete ===

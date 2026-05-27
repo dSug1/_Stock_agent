@@ -494,7 +494,12 @@ PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_3_ingest_edgar_13dg.py [--l
 
 ### 5.3 Behavior
 
-For each CIK, walk `submissions` to find filings where `form` matches: `SC 13D`, `SC 13G`, `SC 13D/A`, `SC 13G/A`.
+For each CIK, walk `submissions` to find filings where `form` matches **any of the 8 ownership-filing form names**:
+
+- Modern format: `SC 13D`, `SC 13G`, `SC 13D/A`, `SC 13G/A`
+- Older/alternative format: `SCHEDULE 13D`, `SCHEDULE 13G`, `SCHEDULE 13D/A`, `SCHEDULE 13G/A`
+
+Both formats coexist inside the same CIK's `recent[]` array — they are not era-stratified. Pfizer's most recent 6 ownership filings (2026-Q1) are all `SCHEDULE 13X` format; its older filings (2022–2024) are `SC 13X`. Filtering only on the `SC` variants silently drops a large fraction of real filings (calibration finding — see decisions.md D6 update 2026-05-27).
 
 For each match, write a row to `edgar_ownership_filings`:
 

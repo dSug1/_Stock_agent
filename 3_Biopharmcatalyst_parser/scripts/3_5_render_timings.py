@@ -50,6 +50,17 @@ LANE_ORDER = ["conference", "catalyst_date_specific", "text_parse",
 
 TIER_ORDER = ["specific", "conference", "month", "quarter", "half", "year", "unknown"]
 
+# Roles that count as "executive" for the insider-activity summary.
+# 10% owners are institutional, not executives — kept in the broader
+# "any insider buy" tally but excluded from the C-suite badge.
+EXECUTIVE_ROLES = ("CEO", "CFO", "COO", "CMO", "CSO", "President", "Chair")
+# How far back the per-ticker insider summary looks. Anchored on the
+# snapshot date, not actual today, so re-renders of an old snapshot
+# reproduce the same insider context. 365d aligns with M2/M3's default
+# `--lookback-days` so any insider activity captured in the EDGAR
+# ingest is also visible in this report.
+INSIDER_WINDOW_DAYS = 365
+
 
 def _fetch_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
     rows = conn.execute(
@@ -73,6 +84,86 @@ def _fetch_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
         (snap.isoformat(),),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _fetch_insider_activity(
+    conn: sqlite3.Connection, snap: date, tickers: list[str],
+) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+    """For each ticker, pull a ``last 90 days from snap`` summary of
+    insider open-market buys from v_executive_open_market_trades.
+
+    Returns (summary_by_ticker, recent_trades_by_ticker).
+
+    * summary_by_ticker[t] -> {
+        'all_buys': int,         # any role
+        'exec_buys': int,        # CEO / CFO / COO / CMO / CSO / President / Chair
+        'director_buys': int,    # plain directors (no exec title)
+        'role_counts': {role: n},
+        'gross_usd_total': float,
+        'latest_buy_date': str | None,
+      }
+    * recent_trades_by_ticker[t] -> [up to 10 most recent trades, each:
+        {source, insider_name, insider_position, executive_role,
+         date, shares, trade_price, gross_usd}]
+    """
+    if not tickers:
+        return {}, {}
+    floor_iso = (snap - timedelta(days=INSIDER_WINDOW_DAYS)).isoformat()
+    qmarks = ",".join("?" * len(tickers))
+    rows = conn.execute(
+        f"""
+        SELECT
+            ticker,
+            source,
+            insider_name,
+            insider_position,
+            executive_role,
+            COALESCE(transaction_date, filing_date) AS event_date,
+            shares,
+            trade_price,
+            gross_usd
+        FROM v_executive_open_market_trades
+        WHERE buy_sell = 'Buy'
+          AND COALESCE(transaction_date, filing_date) >= ?
+          AND ticker IN ({qmarks})
+        ORDER BY event_date DESC, ticker
+        """,
+        [floor_iso, *tickers],
+    ).fetchall()
+
+    summary: dict[str, dict] = {}
+    recent: dict[str, list[dict]] = {}
+    for r in rows:
+        t = r["ticker"]
+        s = summary.setdefault(t, {
+            "all_buys": 0, "exec_buys": 0, "director_buys": 0,
+            "role_counts": {}, "gross_usd_total": 0.0, "latest_buy_date": None,
+        })
+        s["all_buys"] += 1
+        role = r["executive_role"] or "Other"
+        s["role_counts"][role] = s["role_counts"].get(role, 0) + 1
+        if role in EXECUTIVE_ROLES:
+            s["exec_buys"] += 1
+        elif role == "Director":
+            s["director_buys"] += 1
+        if r["gross_usd"] is not None:
+            s["gross_usd_total"] += float(r["gross_usd"])
+        d = r["event_date"]
+        if d and (s["latest_buy_date"] is None or d > s["latest_buy_date"]):
+            s["latest_buy_date"] = d
+
+        if len(recent.setdefault(t, [])) < 10:
+            recent[t].append({
+                "source": r["source"],
+                "insider_name": r["insider_name"],
+                "insider_position": r["insider_position"] or "",
+                "executive_role": role,
+                "date": d,
+                "shares": r["shares"],
+                "trade_price": r["trade_price"],
+                "gross_usd": r["gross_usd"],
+            })
+    return summary, recent
 
 
 def _build_summary(rows: list[dict], snap: date) -> dict:
@@ -146,12 +237,15 @@ def _build_monthly_histogram(rows: list[dict], snap: date) -> list[dict]:
     return months
 
 
-def _row_for_json(r: dict, snap: date) -> dict:
+def _row_for_json(r: dict, snap: date,
+                  insider_summary: dict, recent_trades: dict) -> dict:
     days_to_min = None
     if r["date_min"]:
         days_to_min = (date.fromisoformat(r["date_min"]) - snap).days
+    t = r["ticker"]
+    s = insider_summary.get(t)
     return {
-        "ticker": r["ticker"],
+        "ticker": t,
         "drug": r["drug"],
         "name": r["name"],
         "indication": r["indication"] or "",
@@ -171,6 +265,14 @@ def _row_for_json(r: dict, snap: date) -> dict:
         "market_cap_usd": r["market_cap_usd"],
         "price": r["price"],
         "sentiment": r["sentiment"] or "",
+        # Insider activity (last INSIDER_WINDOW_DAYS days from snapshot).
+        # Snapshots populated per-ticker; nulls when ticker has zero rows.
+        "insider_all_buys": (s or {}).get("all_buys", 0),
+        "insider_exec_buys": (s or {}).get("exec_buys", 0),
+        "insider_director_buys": (s or {}).get("director_buys", 0),
+        "insider_gross_usd": (s or {}).get("gross_usd_total", 0.0),
+        "insider_latest_buy_date": (s or {}).get("latest_buy_date"),
+        "insider_recent_trades": recent_trades.get(t, []),
     }
 
 
@@ -196,6 +298,8 @@ def _build_html(
             "lane_label": LANE_LABEL,
             "lane_order": LANE_ORDER,
             "tier_order": TIER_ORDER,
+            "executive_roles": list(EXECUTIVE_ROLES),
+            "insider_window_days": INSIDER_WINDOW_DAYS,
             "db_path": str(db_path),
         },
         ensure_ascii=False,
@@ -338,6 +442,34 @@ _HTML_TEMPLATE = r"""<!doctype html>
   .num { font-variant-numeric: tabular-nums; }
   .imminent { color: #fbbf24; }
   .past { color: var(--text-faint); }
+
+  /* Insider activity */
+  .insider-badge {
+    display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px;
+    border-radius: 999px; font-size: 10px; font-weight: 600; white-space: nowrap;
+  }
+  .insider-badge.exec     { background: #10b981; color: #052e1f; }
+  .insider-badge.director { background: #6366f1; color: #1e1b4b; }
+  .insider-badge.any      { background: #475569; color: #e2e8f0; }
+  .insider-badge.none     { color: var(--text-faint); }
+  .role-tag {
+    display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 10px;
+    font-weight: 600; background: var(--panel-2); color: var(--text-dim);
+  }
+  .role-tag.exec { background: #10b981; color: #052e1f; }
+  .role-tag.dir  { background: #6366f1; color: #1e1b4b; }
+  .trade-source { font-size: 9px; padding: 0 5px; border-radius: 3px;
+                  background: var(--panel-2); color: var(--text-faint);
+                  text-transform: uppercase; letter-spacing: .04em; }
+  .recent-trades { font-size: 11px; margin-top: 4px; }
+  .recent-trades table { width: 100%; border-collapse: collapse; }
+  .recent-trades th, .recent-trades td {
+    text-align: left; padding: 3px 6px; border-bottom: 1px solid #1e293b;
+    color: var(--text-dim); font-weight: normal;
+  }
+  .recent-trades th { color: var(--text-faint); font-size: 10px;
+                      text-transform: uppercase; letter-spacing: .04em; }
+  .recent-trades td.num { color: var(--text); }
 </style>
 </head>
 <body>
@@ -347,6 +479,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
 
 <div class="kpis" id="kpis"></div>
 <div class="windows" id="windows"></div>
+
+<h2 id="insider-h2">Insider activity (last <span id="insider-window-label">90</span>d, from snapshot date)</h2>
+<div class="windows" id="insider-kpis"></div>
 
 <h2>Lane distribution</h2>
 <div id="lane-bars"></div>
@@ -377,6 +512,14 @@ _HTML_TEMPLATE = r"""<!doctype html>
       <option value="discovery">discovery (T+14..T+180)</option>
       <option value="execution">execution (T+14..T+60)</option>
       <option value="past">past or unknown</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <label>Insider activity</label>
+    <select id="f-insider">
+      <option value="all">all</option>
+      <option value="exec">has C-suite/Chair buy</option>
+      <option value="any">has any insider buy</option>
     </select>
   </div>
   <div class="filter-group">
@@ -418,6 +561,7 @@ $("#meta").innerHTML =
   `Computed <code>${escapeHtml(DATA.computed_at)}</code> · ` +
   `rules <code>${escapeHtml(DATA.rules_version)}</code> · ` +
   `<code>${DATA.summary.total}</code> rows from <code>${escapeHtml(DATA.db_path)}</code>`;
+$("#insider-window-label").textContent = DATA.insider_window_days;
 
 // ---- KPI strip ---------------------------------------------------------
 const kpiHtml = DATA.lane_order.map(lane => {
@@ -450,6 +594,26 @@ $("#windows").innerHTML = `
     <div class="label">Past or unknown</div>
     <div class="value num">${W.past_or_unknown}</div>
     <div class="sub">excluded from both windows</div>
+  </div>
+`;
+
+// ---- insider activity KPI strip ---------------------------------------
+const I = DATA.summary.insider || {};
+$("#insider-kpis").innerHTML = `
+  <div class="win" style="border-left:4px solid #10b981; padding-left:10px">
+    <div class="label">Catalysts with C-suite/Chair buys</div>
+    <div class="value num">${I.catalysts_with_exec_buys || 0}</div>
+    <div class="sub">CEO / CFO / COO / CMO / CSO / President / Chair</div>
+  </div>
+  <div class="win" style="border-left:4px solid #475569; padding-left:10px">
+    <div class="label">Catalysts with any insider buy</div>
+    <div class="value num">${I.catalysts_with_any_insider_buys || 0}</div>
+    <div class="sub">includes directors, 10% owners, other officers</div>
+  </div>
+  <div class="win" style="border-left:4px solid #6366f1; padding-left:10px">
+    <div class="label">Tickers with C-suite/Chair buys</div>
+    <div class="value num">${I.tickers_with_exec_buys || 0}</div>
+    <div class="sub">distinct issuers in our universe</div>
   </div>
 `;
 
@@ -512,6 +676,7 @@ const state = {
   tiers: new Set(DATA.tier_order),
   stage: "",
   window: "all",
+  insider: "all",      // 'all' | 'exec' | 'any'
   search: "",
   sortKey: "days_to_min",
   sortDir: 1,
@@ -522,9 +687,10 @@ try {
   const saved = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
   if (Array.isArray(saved.lanes)) state.lanes = new Set(saved.lanes);
   if (Array.isArray(saved.tiers)) state.tiers = new Set(saved.tiers);
-  if (typeof saved.stage  === "string") state.stage  = saved.stage;
-  if (typeof saved.window === "string") state.window = saved.window;
-  if (typeof saved.search === "string") state.search = saved.search;
+  if (typeof saved.stage   === "string") state.stage   = saved.stage;
+  if (typeof saved.window  === "string") state.window  = saved.window;
+  if (typeof saved.insider === "string") state.insider = saved.insider;
+  if (typeof saved.search  === "string") state.search  = saved.search;
   if (typeof saved.sortKey === "string") state.sortKey = saved.sortKey;
   if (typeof saved.sortDir === "number") state.sortDir = saved.sortDir;
 } catch (e) {}
@@ -532,8 +698,8 @@ try {
 function saveState() {
   localStorage.setItem(LS_KEY, JSON.stringify({
     lanes: [...state.lanes], tiers: [...state.tiers],
-    stage: state.stage, window: state.window, search: state.search,
-    sortKey: state.sortKey, sortDir: state.sortDir,
+    stage: state.stage, window: state.window, insider: state.insider,
+    search: state.search, sortKey: state.sortKey, sortDir: state.sortDir,
   }));
 }
 
@@ -574,6 +740,10 @@ const winSel = $("#f-window");
 winSel.value = state.window;
 winSel.onchange = () => { state.window = winSel.value; saveState(); rerender(); };
 
+const insiderSel = $("#f-insider");
+insiderSel.value = state.insider;
+insiderSel.onchange = () => { state.insider = insiderSel.value; saveState(); rerender(); };
+
 const searchEl = $("#f-search");
 searchEl.value = state.search;
 searchEl.oninput = () => { state.search = searchEl.value; saveState(); rerender(); };
@@ -581,8 +751,8 @@ searchEl.oninput = () => { state.search = searchEl.value; saveState(); rerender(
 $("#reset-filters").onclick = () => {
   state.lanes = new Set(DATA.lane_order);
   state.tiers = new Set(DATA.tier_order);
-  state.stage = ""; state.window = "all"; state.search = "";
-  stageSel.value = ""; winSel.value = "all"; searchEl.value = "";
+  state.stage = ""; state.window = "all"; state.insider = "all"; state.search = "";
+  stageSel.value = ""; winSel.value = "all"; insiderSel.value = "all"; searchEl.value = "";
   renderPills("#lane-pills", "Lane", DATA.lane_order, DATA.lane_color,
               DATA.lane_label, state.lanes);
   renderPills("#tier-pills", "Tier", DATA.tier_order, TIER_COLOR, TIER_LABEL, state.tiers);
@@ -591,15 +761,17 @@ $("#reset-filters").onclick = () => {
 
 // ---- table -------------------------------------------------------------
 const COLS = [
-  { key: "ticker",         label: "Ticker", num: false },
-  { key: "drug",           label: "Drug",   num: false },
-  { key: "stage",          label: "Stage",  num: false },
-  { key: "source_lane",    label: "Lane",   num: false },
-  { key: "precision_tier", label: "Tier",   num: false },
-  { key: "date_min",       label: "date_min", num: true },
-  { key: "date_max",       label: "date_max", num: true },
-  { key: "days_to_min",    label: "Δ days",   num: true },
-  { key: "matched_phrase", label: "matched phrase", num: false },
+  { key: "ticker",            label: "Ticker", num: false },
+  { key: "drug",              label: "Drug",   num: false },
+  { key: "stage",             label: "Stage",  num: false },
+  { key: "source_lane",       label: "Lane",   num: false },
+  { key: "precision_tier",    label: "Tier",   num: false },
+  { key: "date_min",          label: "date_min", num: true },
+  { key: "date_max",          label: "date_max", num: true },
+  { key: "days_to_min",       label: "Δ days",   num: true },
+  { key: "insider_exec_buys", label: "Exec buys", num: true },
+  { key: "insider_all_buys",  label: "All buys",  num: true },
+  { key: "matched_phrase",    label: "matched phrase", num: false },
 ];
 
 const thRow = $("#thead-row");
@@ -648,6 +820,8 @@ function rerender() {
     if (!state.tiers.has(r.precision_tier)) return false;
     if (state.stage && r.stage !== state.stage) return false;
     if (!inWindow(r, state.window)) return false;
+    if (state.insider === "exec" && (r.insider_exec_buys || 0) === 0) return false;
+    if (state.insider === "any"  && (r.insider_all_buys || 0) === 0) return false;
     if (q) {
       const hay = (r.ticker + " " + r.drug + " " + r.name + " " + r.indication).toLowerCase();
       if (!hay.includes(q)) return false;
@@ -687,6 +861,19 @@ function rerender() {
                      dDays < 14 ? "imminent" : "";
     const dDaysText = dDays == null ? "—"
                     : (dDays >= 0 ? "+" : "") + dDays;
+    // Insider activity cell — most informative tag wins
+    const exec = r.insider_exec_buys || 0;
+    const all  = r.insider_all_buys  || 0;
+    const dirOnly = r.insider_director_buys || 0;
+    let execCell = '<span class="insider-badge none">—</span>';
+    if (exec > 0) {
+      execCell = `<span class="insider-badge exec">${exec}</span>`;
+    } else if (dirOnly > 0) {
+      execCell = `<span class="insider-badge director">${dirOnly}d</span>`;
+    }
+    const allCell = all > 0
+      ? `<span class="insider-badge any">${all}</span>`
+      : '<span class="insider-badge none">—</span>';
     return `
       <tr class="row" data-idx="${i}">
         <td>${escapeHtml(r.ticker)}</td>
@@ -697,6 +884,8 @@ function rerender() {
         <td class="num">${fmtDate(r.date_min)}</td>
         <td class="num">${fmtDate(r.date_max)}</td>
         <td class="num ${dDaysCls}">${dDaysText}</td>
+        <td class="num">${execCell}</td>
+        <td class="num">${allCell}</td>
         <td>${escapeHtml(r.matched_phrase)}</td>
       </tr>
     `;
@@ -731,9 +920,52 @@ function buildDetail(r) {
   const sent = r.sentiment ? `<div class="k">Sentiment</div><div class="v">${escapeHtml(r.sentiment)}</div>` : "";
   const mcap = r.market_cap_usd != null ? `<div class="k">Market cap</div><div class="v">$${fmtMcap(r.market_cap_usd)}</div>` : "";
   const price = r.price != null ? `<div class="k">Price</div><div class="v">$${r.price}</div>` : "";
+
+  // Recent insider trades (last INSIDER_WINDOW_DAYS days from snapshot).
+  let insiderPanel = "";
+  const trades = r.insider_recent_trades || [];
+  if (trades.length) {
+    const gross = r.insider_gross_usd || 0;
+    const grossLabel = gross > 0 ? ` (gross ≈ $${fmtMcap(gross)})` : "";
+    const rows = trades.map(t => {
+      const role = t.executive_role || "Other";
+      const roleCls = DATA.executive_roles.includes(role) ? "exec" :
+                      role === "Director" ? "dir" : "";
+      const pos = t.insider_position || "—";
+      const px  = t.trade_price != null ? "$" + Number(t.trade_price).toFixed(2) : "—";
+      const sh  = t.shares != null ? Math.round(Number(t.shares)).toLocaleString() : "—";
+      const grs = t.gross_usd != null ? "$" + fmtMcap(t.gross_usd) : "—";
+      return `<tr>
+        <td><span class="trade-source">${t.source}</span></td>
+        <td>${t.date || "—"}</td>
+        <td><span class="role-tag ${roleCls}">${escapeHtml(role)}</span></td>
+        <td>${escapeHtml(t.insider_name)}</td>
+        <td title="${escapeHtml(pos)}">${escapeHtml(pos.length > 30 ? pos.slice(0,30)+"…" : pos)}</td>
+        <td class="num">${sh}</td>
+        <td class="num">${px}</td>
+        <td class="num">${grs}</td>
+      </tr>`;
+    }).join("");
+    insiderPanel = `
+      <div class="k">Recent insider buys (last ${DATA.insider_window_days}d)</div>
+      <div class="v">
+        ${trades.length} buy(s) total, ${r.insider_exec_buys || 0} from C-suite/Chair, ${r.insider_director_buys || 0} from directors${grossLabel}.
+        <div class="recent-trades"><table>
+          <thead><tr>
+            <th>src</th><th>date</th><th>role</th><th>insider</th><th>position</th>
+            <th>shares</th><th>price</th><th>gross</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+      </div>`;
+  } else if ((r.insider_all_buys || 0) === 0) {
+    insiderPanel = `
+      <div class="k">Recent insider buys (last ${DATA.insider_window_days}d)</div>
+      <div class="v" style="color:var(--text-faint)">none</div>`;
+  }
   return `
     <tr class="detail">
-      <td colspan="9">
+      <td colspan="11">
         <div class="dgrid">
           <div class="k">Catalyst text</div>
           <div class="v">${highlighted}</div>
@@ -742,6 +974,7 @@ function buildDetail(r) {
           <div class="k">Next catalyst type</div>
           <div class="v">${escapeHtml(r.next_catalyst_type)}</div>
           ${conf}${ncts}${ind}${sent}${mcap}${price}
+          ${insiderPanel}
         </div>
       </td>
     </tr>`;
@@ -786,9 +1019,37 @@ def main() -> int:
                   file=sys.stderr)
             return 2
 
+        # Insider activity (last 90 days from snap, both EDGAR + BPC).
+        distinct_tickers = sorted({r["ticker"] for r in rows})
+        insider_summary, recent_trades = _fetch_insider_activity(
+            conn, snap, distinct_tickers,
+        )
+
         summary = _build_summary(rows, snap)
         months = _build_monthly_histogram(rows, snap)
-        rows_json = [_row_for_json(r, snap) for r in rows]
+        rows_json = [
+            _row_for_json(r, snap, insider_summary, recent_trades)
+            for r in rows
+        ]
+
+        # Add insider-activity KPIs to the summary blob so the HTML can
+        # surface them in the top strip + window cards.
+        catalysts_with_insider_buys = sum(
+            1 for r in rows_json if r["insider_all_buys"] > 0
+        )
+        catalysts_with_exec_buys = sum(
+            1 for r in rows_json if r["insider_exec_buys"] > 0
+        )
+        tickers_with_exec_buys = sum(
+            1 for t in distinct_tickers
+            if insider_summary.get(t, {}).get("exec_buys", 0) > 0
+        )
+        summary["insider"] = {
+            "catalysts_with_any_insider_buys": catalysts_with_insider_buys,
+            "catalysts_with_exec_buys": catalysts_with_exec_buys,
+            "tickers_with_exec_buys": tickers_with_exec_buys,
+            "window_days": INSIDER_WINDOW_DAYS,
+        }
 
         # Pull rules_version + computed_at from the first row (consistent
         # across the snapshot — same compute-timing run touched all rows).
@@ -814,6 +1075,12 @@ def main() -> int:
         print(f"  discovery (T+14..T+180):  {summary['windows']['discovery']}")
         print(f"  execution (T+14..T+60):   {summary['windows']['execution']}")
         print(f"  past or unknown:          {summary['windows']['past_or_unknown']}")
+        print(f"  catalysts with any insider buys (last {INSIDER_WINDOW_DAYS}d): "
+              f"{summary['insider']['catalysts_with_any_insider_buys']}")
+        print(f"  catalysts with C-suite/Chair buys (last {INSIDER_WINDOW_DAYS}d): "
+              f"{summary['insider']['catalysts_with_exec_buys']}")
+        print(f"  tickers with C-suite/Chair buys (last {INSIDER_WINDOW_DAYS}d): "
+              f"{summary['insider']['tickers_with_exec_buys']}")
         return 0
     finally:
         conn.close()
