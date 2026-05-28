@@ -926,13 +926,33 @@ JS = r"""
     return true;
   }
 
+  // D32 — sort-key resolver. The three M7 columns are nested under
+  // `r.deep_dive.*` (not flat keys), so they were always reading null
+  // → no-op sort. For the live-recomputed columns (share-price
+  // appreciation, expectancy/week) we sort by the LIVE recompute so
+  // the visible numbers match the sort order.
+  function _sortKey(r, col) {
+    if (col === 'dd_p_final') {
+      return r.deep_dive ? r.deep_dive.p_final : null;
+    }
+    if (col === 'dd_e_move_pct') {
+      const rc = recomputeFromLivePrice(r.deep_dive, r.ticker, r.price);
+      return rc ? rc.e_move_pct : null;
+    }
+    if (col === 'dd_expectancy_per_week_pct') {
+      const rc = recomputeFromLivePrice(r.deep_dive, r.ticker, r.price);
+      return rc ? rc.expectancy_per_week_pct : null;
+    }
+    return r[col];
+  }
+
   function sortRows(rows) {
     const col = state.sortCol;
     const dir = state.sortDir === 'asc' ? 1 : -1;
     return rows.slice().sort((a, b) => {
-      let av = a[col], bv = b[col];
+      let av = _sortKey(a, col), bv = _sortKey(b, col);
       if (av == null && bv == null) return 0;
-      if (av == null) return 1;
+      if (av == null) return 1;          // nulls always last
       if (bv == null) return -1;
       if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir;
       return (av - bv) * dir;
