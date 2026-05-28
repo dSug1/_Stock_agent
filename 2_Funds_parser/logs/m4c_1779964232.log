@@ -1,0 +1,20 @@
+
+Module 4c complete (quarter=2026Q1):
+  Tickers in feed:        489
+  Biotech (enriched):     105
+  Non-biotech (skipped):  384
+  No SEC CIK (failed):    1
+  Rows written by source:
+    companyfacts          951
+    submissions             0
+    form4                 713
+    capital_raises        106
+  Failures: 7
+    DAWN     *              no CIK in SEC ticker map
+    ADCT     *              OperationalError: database is locked
+    ELDN     *              OperationalError: database is locked
+    EDSA     *              OperationalError: database is locked
+    ANL      *              OperationalError: database is locked
+    CCCC     *              OperationalError: database is locked
+    EQ       *              OperationalError: database is locked
+  Wall: 207.4s

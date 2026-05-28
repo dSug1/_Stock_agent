@@ -1,0 +1,75 @@
+# Module 7 — web_search `allowed_domains` whitelist.
+#
+# Single flat list — M7 only operates on biotech, so the 2_Funds_parser
+# industry-keyed routing collapses to one list here. Anthropic's web_search
+# matches subdomains automatically (e.g. `sec.gov` covers `www.sec.gov`,
+# `edgar.sec.gov`, `data.sec.gov`).
+#
+# Spec: spec/module_7_spec.md §5.3.
+
+domains:
+  # SEC + filings (highest authority for financials/dilution/PFW)
+  - sec.gov
+
+  # Press-release wires — US biotechs post material news here
+  - globenewswire.com
+  - prnewswire.com
+  - businesswire.com
+  - accesswire.com
+
+  # Peer-reviewed / science
+  - nature.com
+  - nejm.org
+  - thelancet.com
+  - cell.com
+  - sciencedirect.com
+  - pubmed.ncbi.nlm.nih.gov
+  - nih.gov
+  - clinicaltrials.gov
+
+  # Conference proceedings — catalyst + precedent data
+  - asco.org
+  - ash.confex.com
+  - ash.org
+  - aacr.org
+  - asgct.org
+  - aasld.org
+  - ersnet.org             # European Respiratory Society
+  - escardio.org
+  - aan.com                # American Academy of Neurology
+  - mdsabstracts.org       # Movement Disorders Society
+  - asbmr.org              # bone & mineral research
+
+  # IP / tech origin
+  - patents.google.com
+
+  # FDA / EMA primary sources
+  - fda.gov
+  - ema.europa.eu
+
+  # TAM / commercial / market sizing
+  - grandviewresearch.com
+  - fortunebusinessinsights.com
+  - marketsandmarkets.com
+  - precedenceresearch.com
+
+  # Industry trade (broader — for moat / partnership / M&A context)
+  - biospace.com
+  - pharmaceutical-technology.com
+  - fiercebiotech.com
+  - fiercepharma.com
+  - endpts.com
+  - bioworld.com
+  - biopharmadive.com
+  - statnews.com
+  - genengnews.com
+
+  # Disease-specific / patient advocacy (TAM + standard of care)
+  - phassociation.org
+  - friedreichsataxianews.com
+  - chestnet.org
+  - sicklecelldisease.org
+  - cancer.gov
+  - cancer.org
+  - rarediseases.org
+  - nordrarediseases.org

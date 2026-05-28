@@ -36,6 +36,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from database.db import get_connection  # noqa: E402
+from module_7.render_join import (  # noqa: E402
+    attach_deep_dive_payload, fetch_latest_deep_dive_map,
+)
 
 
 OUTPUT_DIR = PROJECT_ROOT / "Outputs"
@@ -760,7 +763,7 @@ JS = r"""
       `${filtered.length} of ${rows.length} rows`;
     const tbody = document.getElementById('rows-body');
     if (!sorted.length) {
-      tbody.innerHTML = '<tr><td colspan="13" class="no-rows">No rows match the current filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="16" class="no-rows">No rows match the current filters.</td></tr>';
       return;
     }
     const isExcluded = state.tab === 'excluded';
@@ -768,6 +771,16 @@ JS = r"""
       const tagBucket = isExcluded
         ? (r.fail_reasons || '').split(',').filter(Boolean).map(c => `<span class="tag fail">${c}</span>`).join(' ')
         : `<span class="tag bucket-${r.timing_bucket === 'catalyst_date_defined' ? 'defined' : 'undefined'}">${(r.precision_tier || '').slice(0,8)}</span>`;
+      // M7 (D16) — three new cells. Em-dash when this row has no deep_dive yet.
+      const dd = r.deep_dive;
+      const ddProb     = dd && dd.p_final != null ? (dd.p_final * 100).toFixed(0) + '%' : '<span style="color:var(--text-dim)">—</span>';
+      const ddMoveVal  = dd && dd.e_move_pct != null ? dd.e_move_pct : null;
+      const ddMove     = ddMoveVal == null ? '<span style="color:var(--text-dim)">—</span>'
+                          : `<span style="color:${ddMoveVal >= 0 ? 'var(--green)' : 'var(--red)'}">${ddMoveVal >= 0 ? '+' : ''}${ddMoveVal.toFixed(1)}%</span>`;
+      const ddExpWeek  = dd && dd.expectancy_per_week_pct != null
+                          ? (dd.expectancy_per_week_pct >= 0 ? '+' : '')
+                            + dd.expectancy_per_week_pct.toFixed(2) + '%/wk'
+                          : '<span style="color:var(--text-dim)">—</span>';
       return `
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
@@ -783,6 +796,9 @@ JS = r"""
         <td>${fmtScore(r.insider_score)}</td>
         <td>${fmtScore(r.momentum_score)}</td>
         <td>${fmtScore(r.fund_accumulation_score)}</td>
+        <td class="num">${ddProb}</td>
+        <td class="num">${ddMove}</td>
+        <td class="num">${ddExpWeek}</td>
       </tr>`;
     }).join('');
   }
@@ -862,6 +878,130 @@ JS = r"""
       });
       html += '</tbody></table>';
     }
+
+    // ── M7 deep-dive section (per spec §5.11.2 — below the BPC catalyst text) ──
+    const dd = r.deep_dive;
+    if (dd) {
+      const pct = v => v == null ? '—' : (v * 100).toFixed(0) + '%';
+      const signed = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+      const usd = v => v == null ? '—' : '$' + Number(v).toLocaleString();
+      const pcs = Number(dd.p_final) >= 0 ? Number(dd.p_final).toFixed(2) : '—';
+      html += '<h4>Claude deep-dive ('
+           + escapeHtml(dd.prompt_version || '?') + ', run #' + dd.run_id
+           + ', ' + escapeHtml(dd.run_completed_at || '') + ')</h4>';
+      if (dd.thesis_summary) {
+        html += '<div class="catalyst-text" style="border-color:var(--indigo)"><b>Thesis:</b> '
+             + escapeHtml(dd.thesis_summary) + '</div>';
+      }
+      html += '<div class="kv">';
+      html += `<div class="k">p_clinical (Claude)</div><div>${pct(dd.p_clinical)} [${pct(dd.p_clinical_low)}–${pct(dd.p_clinical_high)}]</div>`;
+      html += `<div class="k">m_insider</div><div>${dd.m_insider != null ? dd.m_insider.toFixed(2) : '—'} (insider_score=${dd.insider_score_input ?? '—'})</div>`;
+      html += `<div class="k">m_funds</div><div>${dd.m_funds != null ? dd.m_funds.toFixed(2) : '—'} (funds_score=${dd.fund_accumulation_score_input ?? '—'})</div>`;
+      html += `<div class="k">m_momentum</div><div>${dd.m_momentum != null ? dd.m_momentum.toFixed(2) : '—'} (momentum_score=${dd.momentum_score_input ?? '—'})</div>`;
+      html += `<div class="k">p_final (clamped)</div><div><b>${pct(dd.p_final)}</b></div>`;
+      html += `<div class="k">expected_move_on_hit</div><div style="color:var(--green)">${signed(dd.expected_move_on_hit_pct)}</div>`;
+      html += `<div class="k">expected_move_on_miss</div><div style="color:var(--red)">${signed(dd.expected_move_on_miss_pct)}</div>`;
+      html += `<div class="k">E[move]</div><div>${signed(dd.e_move_pct)}</div>`;
+      html += `<div class="k">expectancy</div><div><b>${signed(dd.expectancy_pct)}</b></div>`;
+      html += `<div class="k">weeks_to_catalyst</div><div>${dd.weeks_to_catalyst_mid ?? '—'}</div>`;
+      html += `<div class="k">expectancy / week</div><div><b>${signed(dd.expectancy_per_week_pct)}/wk</b></div>`;
+      html += '</div>';
+
+      const dp = dd.drug_profile || {};
+      html += '<h4>Drug profile</h4><div class="kv">';
+      html += `<div class="k">MoA</div><div>${escapeHtml(dp.moa || '—')}</div>`;
+      html += `<div class="k">MoA class precedent</div><div>${escapeHtml(dp.moa_class_precedent || '—')}</div>`;
+      html += `<div class="k">Differentiation</div><div>${escapeHtml(dp.differentiation || '—')}</div>`;
+      html += `<div class="k">Competition landscape</div><div>${escapeHtml(dp.competition_landscape || '—')}</div>`;
+      if (dp.competition_bar_set_by_others) {
+        html += `<div class="k">Competition bar</div><div>${escapeHtml(dp.competition_bar_set_by_others)}</div>`;
+      }
+      html += `<div class="k">FDA designations</div><div>${(dp.fda_designations || []).join(', ') || '—'}</div>`;
+      html += `<div class="k">Regulatory pathway</div><div>${escapeHtml(dp.regulatory_pathway || '—')}</div>`;
+      if (dp.patent_moat) {
+        const pm = dp.patent_moat;
+        html += `<div class="k">Patent moat</div><div>Composition ${escapeHtml(pm.composition_patent_expiry || '?')} / Method ${escapeHtml(pm.method_patent_expiry || '?')} — ${escapeHtml(pm.summary || '')}</div>`;
+      }
+      html += `<div class="k">TAM</div><div>${usd(dp.tam_usd)} — ${escapeHtml(dp.tam_rationale || '')}</div>`;
+      html += '</div>';
+
+      const rnpv = dd.rnpv_by_indication || [];
+      if (rnpv.length) {
+        html += '<h4>rNPV by indication</h4>';
+        html += '<table class="detail"><thead><tr><th>Indication</th><th>POS base</th><th>POS adj</th><th>rNPV ($M)</th><th>Peak yr</th><th>Rationale</th></tr></thead><tbody>';
+        rnpv.forEach(i => {
+          html += `<tr>
+            <td>${escapeHtml(i.indication || '')}</td>
+            <td class="num">${i.pos_base_rate != null ? (i.pos_base_rate * 100).toFixed(0) + '%' : '—'}</td>
+            <td class="num">${i.pos_adjusted != null ? (i.pos_adjusted * 100).toFixed(0) + '%' : '—'}</td>
+            <td class="num">${i.rnpv_contribution_usd != null ? '$' + (i.rnpv_contribution_usd / 1e6).toFixed(0) + 'M' : '—'}</td>
+            <td class="num">${i.peak_sales_year || '—'}</td>
+            <td>${escapeHtml(i.rationale || '')}</td>
+          </tr>`;
+        });
+        html += '</tbody></table>';
+        html += `<div class="kv"><div class="k">rNPV total</div><div>${usd(dd.rnpv_total_usd)}</div>`;
+        html += `<div class="k">rNPV / share</div><div>${dd.rnpv_per_share_usd != null ? '$' + dd.rnpv_per_share_usd.toFixed(2) : '—'}</div>`;
+        html += `<div class="k">Lead indication</div><div>${escapeHtml(dd.lead_indication || '—')}</div></div>`;
+      }
+
+      const ce = dd.clinical_evidence || {};
+      if (ce.preclinical_summary || ce.phase1_results || ce.phase2_interim || ce.phase2_final) {
+        html += '<h4>Clinical evidence</h4><div class="kv">';
+        if (ce.preclinical_summary) html += `<div class="k">Preclinical</div><div>${escapeHtml(ce.preclinical_summary)}</div>`;
+        if (ce.phase1_results)      html += `<div class="k">Phase 1</div><div>${escapeHtml(ce.phase1_results)}</div>`;
+        if (ce.phase2_interim)      html += `<div class="k">Phase 2 interim</div><div>${escapeHtml(ce.phase2_interim)}</div>`;
+        if (ce.phase2_final)        html += `<div class="k">Phase 2 final</div><div>${escapeHtml(ce.phase2_final)}</div>`;
+        if ((ce.prior_class_successes || []).length) html += `<div class="k">Prior class wins</div><div>${(ce.prior_class_successes || []).map(escapeHtml).join('; ')}</div>`;
+        if ((ce.prior_class_failures || []).length) html += `<div class="k">Prior class losses</div><div>${(ce.prior_class_failures || []).map(escapeHtml).join('; ')}</div>`;
+        html += '</div>';
+      }
+
+      const fo = dd.financial_overhang || {};
+      if (Object.keys(fo).length) {
+        html += '<h4>Financial overhang</h4><div class="kv">';
+        if (fo.cash_runway_quarters != null) html += `<div class="k">Cash runway</div><div>${fo.cash_runway_quarters} quarters</div>`;
+        if (fo.dilution_risk)        html += `<div class="k">Dilution risk</div><div>${escapeHtml(fo.dilution_risk)}</div>`;
+        if (fo.near_term_raise_likely != null) html += `<div class="k">Near-term raise likely</div><div>${fo.near_term_raise_likely ? 'yes' : 'no'}</div>`;
+        if (fo.rationale)            html += `<div class="k">Rationale</div><div>${escapeHtml(fo.rationale)}</div>`;
+        html += '</div>';
+      }
+
+      html += '<div class="kv">';
+      if (dd.management_track_record_score != null) html += `<div class="k">Mgmt track record</div><div>${dd.management_track_record_score.toFixed(2)}</div>`;
+      if (dd.acquisition_target_score != null)     html += `<div class="k">Acquisition target</div><div>${dd.acquisition_target_score.toFixed(2)}</div>`;
+      html += '</div>';
+
+      const risks = dd.key_risks || [];
+      if (risks.length) {
+        html += '<h4>Key risks</h4><ul>';
+        risks.forEach(k => { html += `<li>${escapeHtml(k)}</li>`; });
+        html += '</ul>';
+      }
+      const sanity = dd.catalyst_date_sanity_check || {};
+      if (Object.keys(sanity).length) {
+        html += '<h4>Catalyst-date sanity check</h4><div class="kv">';
+        html += `<div class="k">IR page consistent</div><div>${sanity.ir_page_consistent === true ? 'yes' : (sanity.ir_page_consistent === false ? 'no' : '—')}</div>`;
+        html += `<div class="k">Already passed</div><div>${sanity.catalyst_passed_already === true ? 'YES' : 'no'}</div>`;
+        if (sanity.notes) html += `<div class="k">Notes</div><div>${escapeHtml(sanity.notes)}</div>`;
+        html += '</div>';
+      }
+      if (dd.reasoning_trace) {
+        const id = 'rt-' + r.__idx;
+        html += `<h4>Reasoning trace <button onclick="document.getElementById('${id}').style.display = document.getElementById('${id}').style.display === 'none' ? 'block' : 'none'" style="font-size:11px">show/hide</button></h4>`;
+        html += `<div id="${id}" class="catalyst-text" style="display:none;white-space:pre-wrap;font-size:11.5px">${escapeHtml(dd.reasoning_trace)}</div>`;
+      }
+      html += '<h4>Audit</h4><div class="kv">';
+      html += `<div class="k">Model</div><div>${escapeHtml(dd.model || '?')}</div>`;
+      html += `<div class="k">Response ID</div><div style="font-family:monospace;font-size:11px">${escapeHtml(dd.response_id || '?')}</div>`;
+      const tok = dd.tokens || {};
+      html += `<div class="k">Tokens (in/out)</div><div>${(tok.input || 0).toLocaleString()} / ${(tok.output || 0).toLocaleString()}</div>`;
+      html += `<div class="k">Cache (read/create)</div><div>${(tok.cache_read || 0).toLocaleString()} / ${(tok.cache_creation || 0).toLocaleString()}</div>`;
+      html += `<div class="k">Web searches</div><div>${dd.web_search_calls ?? 0}</div>`;
+      html += `<div class="k">USD cost (paid)</div><div>${dd.usd_cost != null ? '$' + dd.usd_cost.toFixed(4) : '—'}</div>`;
+      html += '</div>';
+    }
+
     html += '</div>';
     return html;
   }
@@ -877,7 +1017,7 @@ JS = r"""
     document.querySelectorAll('tr.expanded').forEach(el => el.classList.remove('expanded'));
     const tr2 = document.createElement('tr');
     tr2.className = 'expand-row';
-    tr2.innerHTML = `<td colspan="13">${buildExpandPanel(r)}</td>`;
+    tr2.innerHTML = `<td colspan="16">${buildExpandPanel(r)}</td>`;
     tr.classList.add('expanded');
     tr.parentNode.insertBefore(tr2, tr.nextSibling);
   }
@@ -1037,6 +1177,9 @@ HTML_SKELETON = """<!doctype html>
       <th data-col="insider_score">Insider</th>
       <th data-col="momentum_score">Momentum</th>
       <th data-col="fund_accumulation_score">Funds</th>
+      <th data-col="dd_p_final" title="M7 — final probability after Claude POS + insider + funds modifiers">Probability</th>
+      <th data-col="dd_e_move_pct" title="M7 — expected share-price move (p_final &middot; hit + (1-p_final) &middot; miss) &middot; m_momentum">Share price appreciation</th>
+      <th data-col="dd_expectancy_per_week_pct" title="M7 — expectancy_pct / weeks_to_catalyst; primary M7 sort key">Expectancy / time</th>
     </tr>
   </thead>
   <tbody id="rows-body"></tbody>
@@ -1139,8 +1282,16 @@ def render(
                        if r.get("fund_quarter_previous")), None)
         funds_breakdown = _fetch_funds_breakdown(conn, funds_tickers, q_latest, q_prev)
 
+        # M7 (D16) — LEFT-JOIN deep_dives via ATTACH-free read of
+        # claude_deep_dives.db. Rows without a matching deep_dive get
+        # `row["deep_dive"] = None` (JS shows em-dashes in the 3 new columns).
+        dd_map = fetch_latest_deep_dive_map()
+        attach_deep_dive_payload(rows, dd_map)
+        n_with_dd = sum(1 for r in rows if r.get("deep_dive"))
+
         rules_version = next((r["rules_version"] for r in rows if r.get("rules_version")), "")
         payload = {
+            "n_with_deep_dive": n_with_dd,
             "view_mode": query_meta["mode"],                  # 'rolling' | 'single'
             "snapshots_covered": query_meta["snapshots_covered"],
             "effective_today": query_meta["effective_today"],

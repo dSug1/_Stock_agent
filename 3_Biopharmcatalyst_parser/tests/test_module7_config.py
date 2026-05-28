@@ -25,8 +25,12 @@ def test_default_config_loads():
     cfg = load_module_7_config(default_config_path())
     assert isinstance(cfg, Module7Config)
     assert cfg.model == "claude-opus-4-7"
-    assert cfg.prompt_version.startswith("m7-v1:")
-    assert len(cfg.prompt_version.split(":")[1]) == 7
+    # Match m7-v{N} where N is a positive integer (so the test survives
+    # prompt-version bumps without re-edits). Bumping happens whenever the
+    # system prompt MD gets a significant revision — 2_Funds_parser convention.
+    import re
+    assert re.match(r"^m7-v\d+:[0-9a-f]{7}$", cfg.prompt_version), \
+        f"prompt_version {cfg.prompt_version} does not match m7-v{{N}}:<sha7> shape"
 
 
 def test_prompt_version_changes_on_edit(tmp_path: Path):

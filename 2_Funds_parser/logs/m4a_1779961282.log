@@ -1,0 +1,21 @@
+
+=== Market-cap distribution among 736 candidates ===
+  bucket          count    cum  bar
+  <= $100M            6      6  
+  $100M-$500M        55     61  ####
+  $500M-$1B         130    191  #########
+  $1B-$2B           150    341  ##########
+  $2B-$3.7B         165    506  ###########
+  $3.7B-$5B          71    577  #####
+  $5B-$7.5B         100    677  #######
+  $7.5B-$10B         59    736  ####
+  > $10B              0    736  
+  (default: $3.70B; ceiling: $10.0B)
+Enter max market cap in $M [Enter for default 3,700M, 'all' for full ceiling]:   [aborted -- using default $3.70B]
+
+Module 4a complete (quarter=2026Q1): 506 survivors, 1959 rejected.
+  snapshot_unavailable             918
+  exclude_lonely_seller            509
+  market_cap_fetch_ceiling_usd     280
+  user_market_cap_max              230
+  require_min_price_usd              9

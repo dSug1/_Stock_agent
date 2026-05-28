@@ -1740,6 +1740,35 @@ Other generalisations:
 
 ---
 
+### D60 — Module 4c `_ttm_sum` cumulative-YTD bug fix (2026-05-28)
+
+**Context.** Bug discovered while building `3_Biopharmcatalyst_parser` M6.5 (which copy-adapted M4c). The 3_Biopharm dry-run on 52 biotech tickers surfaced KURA runway = 1.1 months (real ≈ 6.0 months) — a ~5× under-statement that affected every biotech in M4c's `data/fundamentals.db` and propagated downstream to M5 packs + M6 Claude prompts. Full pre-fix write-up + verification numbers + rollout plan are in [spec/m4c_ttm_cumulative_ytd_bugfix.md](m4c_ttm_cumulative_ytd_bugfix.md).
+
+**Root cause.** XBRL reports `operating_cf` (and `rd_expense`, `ga_expense`) *cumulatively within a fiscal year*: Q1 = 3 months, Q2 = 6 months YTD, Q3 = 9 months YTD, 10-K = full year. The old `_ttm_sum` summed the four most-recent quarterly values blindly — double-counting every period inside Q3's cumulative figure. For a typical calendar-year filer the buggy TTM came out 2-4× inflated.
+
+**Fix (ported verbatim from 3_Biopharm M6.5 D18.b).** Two new helpers in [src/module_4c/edgar_client.py](../src/module_4c/edgar_client.py):
+
+- `_row_span_days(r)` — span between XBRL `start` and `end` dates. Identifies whether a row is a single quarter (~90d), half-YTD (~180d), 9-mo YTD (~270d), or annual (~365d).
+- `_ttm_sum(rows)` — 4-strategy fallback:
+  1. **Annual row available** (form 10-K OR span 350-380 days) → return its value directly.
+  2. **True single-quarter rows** (span 80-100 days, four available) → sum them.
+  3. **Cumulative-YTD derivation** — bucket rows by fiscal year, sort within FY by `end` ascending, difference consecutive entries to recover incremental quarters, sum the most recent 4.
+  4. **Fallback** → `None` rather than a bogus inflated sum (caller treats as "fundamentals incomplete").
+
+No schema change. No caller-side change. `_latest_periods_per_concept` already preserves the raw XBRL row dicts (including `start`), so `_row_span_days` has the data it needs.
+
+**Test coverage:** 10 unit tests in [tests/test_module4c_ttm_fix.py](../tests/test_module4c_ttm_fix.py), ported from 3_Biopharm M6.5. Cover all 4 strategies, the headline KURA-pattern bug replay, plus `_row_span_days` ISO date math. All 10 pass.
+
+**Production smoke test — pending, not run in this turn.** Re-running M4c against the current quarter (`PYTHONPATH=src ../.venv/Scripts/python.exe scripts/4c_enrich_fundamentals.py --force-refresh -v`) is a ~1-2 hour wall-time operation. Deferred to a separate user-driven run. The unit tests are sufficient to confirm the fix is correct; the production run will overwrite `data/fundamentals.db` with corrected TTMs that then propagate to M5 packs on next rebuild.
+
+**Downstream impact — already-shipped M6 scores.** Historical `llm_scores.db` rows reflect the buggy inflated burn. They survive as audit. Next M6 run on the same tickers will re-score against corrected fundamentals — that's a deliberate user-driven cost decision (re-running M6 = ~$10-20 at current calibration). Options documented in the bugfix doc §6.
+
+**Cross-ref:** `3_Biopharmcatalyst_parser/spec/decisions.md` § D18.b (the source of the fix). The 3_Biopharm version also fixed two related bugs (PFW share-count `gross/pps` artifact + orchestrator step-order) that don't apply here because 2_Funds_parser doesn't compute PFW counts (`prefunded_warrants_count` is left null per their own design).
+
+**Status of the bugfix doc.** [spec/m4c_ttm_cumulative_ytd_bugfix.md](m4c_ttm_cumulative_ytd_bugfix.md) marked `STATUS: DONE` (kept in repo for audit; not deleted).
+
+---
+
 ## Cross-cutting decisions
 
 - **Python module naming carve-out.** Top-level dirs and scripts may start with `2_` (e.g., `2_ingest_13f.py`). Python packages and modules under `src/` cannot (Python rejects leading digits). Import paths: `from layer_1.edgar_13f import …`, `from module_1.config import load_config`.

@@ -8,7 +8,15 @@
 
 # ---------------- Prompt / model ----------------
 model: claude-opus-4-7
-prompt_version_label: m7-v1
+# m7-v2 (2026-05-28 — ports 13 high-value patterns from 2_Funds_parser M6:
+#   POS base-rate table by pathology × stage (A); rNPV formula + WACC=12% (B);
+#   HIGH/MEDIUM/LOW probability rubric (C); prior-results + mgmt adjustment
+#   ladder (D); ±15pp band HARD RULE (E); evidence hierarchy (F); search-budget
+#   split (G); IR-freshness web_search when weeks>30 (H); platform-optionality
+#   row HARD RULE (I); cite-dates HARD RULE (J); inline POS adjustment
+#   citation (K); mgmt example-citation HARD RULE (L); stage-based move
+#   anchor (M). Net effect: stronger calibration discipline + cleaner audit.
+prompt_version_label: m7-v2
 max_output_tokens: 12500
 system_prompt_path: config/module_7_system_prompt.md
 few_shot_examples_path: config/module_7_few_shots.md

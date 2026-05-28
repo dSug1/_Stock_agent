@@ -308,17 +308,51 @@ XBRL concepts extracted (most recent 8 periods):
 Computed:
 - `cash_total_usd = cash_and_equivalents_usd + short_term_investments_usd`
 - TTM aggregates (`rd_expense_ttm_usd`, `ga_expense_ttm_usd`, `operating_cf_ttm_usd`):
-  written **only on the latest row** (sum 4 most-recent quarterly
-  values, or take 10-K annual value directly).
-- `quarterly_burn_usd = abs(operating_cf_ttm_usd) / 4` when negative
+  written **only on the latest row**. **The naive "sum 4 most-recent
+  quarterly values" approach is wrong for XBRL** because most filers
+  report these concepts cumulatively-YTD inside a fiscal year
+  (Q1 = 3 months, Q2 = 6 months YTD, Q3 = 9 months YTD, 10-K = annual).
+  Summing four cumulative values double-counts every period inside the
+  cumulative figure → ~2-4× inflated TTM burn. The correct algorithm
+  is a 4-strategy fallback (see [`_ttm_sum`](../src/module_4c/edgar_client.py)):
+
+  1. **Annual row available** — if the latest row has `form='10-K'` OR
+     a year-long span (350-380 days computed from XBRL `start`/`end`),
+     use its `val` directly.
+  2. **True single-quarter rows** — when all rows have ~90-day spans
+     (some filers report incremental quarters), sum the four most recent.
+  3. **Cumulative-YTD derivation** — bucket rows by fiscal year, sort
+     within FY by `end` ascending, difference consecutive entries to
+     recover incremental quarters, sum the most recent 4 derived values.
+  4. **Fallback** — `None` rather than a bogus inflated sum. Callers
+     treat `None` as "fundamentals incomplete" rather than as zero.
+
+  Helper [`_row_span_days(r)`](../src/module_4c/edgar_client.py) computes
+  the span used by strategies 1 and 2. Strategies 1-3 cover every
+  filer pattern we've seen in practice (BIO-universe biotechs across
+  small/mid/large cap); strategy 4 is the safety net for tickers
+  with sparse XBRL history.
+
+- `quarterly_burn_usd = abs(operating_cf_ttm_usd) // 4` when negative
 - `runway_months = cash_total_usd / (quarterly_burn_usd / 3.0)` when burn > 0
 
 Edge cases:
 - If `OperatingCashFlow` is positive (rare for biotech) → `runway_months = None`,
-  `quarterly_burn_usd = None`
-- If `Cash...` concept is missing → fall back to alternate alias
+  `quarterly_burn_usd = None`.
+- If `Cash...` concept is missing → fall back to alternate alias.
 - Concepts missing entirely → write the row with whatever was extracted,
-  set `fetch_status = 'partial'`, log to `fetch_log.last_error`
+  set `fetch_status = 'partial'`, log to `fetch_log.last_error`.
+- TTM strategy 4 fires when XBRL history is too sparse to derive 4
+  incremental quarters (e.g., a freshly-public ticker with one 10-Q
+  filed). Resulting `operating_cf_ttm_usd / quarterly_burn_usd / runway_months`
+  are all `None`. The M5 pack still builds; M6 (Claude) treats the
+  null fields as "search for them" per HARD RULE #20's exception clause.
+
+The cumulative-YTD fix is documented in `decisions.md` § D60 and in
+`spec/m4c_ttm_cumulative_ytd_bugfix.md` (the pre-fix audit). Pre-fix
+runways for the BIO universe were systematically 2-4× under-stated
+(KURA: 1.1 mo buggy → 6.0 mo correct; AGIO: 2.0 → 3.6; SNDX: 7.3 →
+15.2 per the verification on the sibling 3_Biopharm 52-ticker feed).
 
 **Conditional GET (D56, infrastructure-only).** `fetch_companyfacts`
 accepts `if_none_match` / `if_modified_since` from the prior fetch_log

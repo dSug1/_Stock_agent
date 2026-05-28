@@ -216,21 +216,96 @@ def _latest_periods_per_concept(
     return []
 
 
+def _row_span_days(r: dict) -> int:
+    """Span (in days) between the XBRL row's start + end dates.
+
+    Operating-CF rows in 10-Q filings are typically reported cumulatively
+    within a fiscal year (Q1 ≈ 90d, Q2 ≈ 180d, Q3 ≈ 270d, 10-K ≈ 365d).
+    The span tells us which kind of value we're looking at — essential
+    for computing a correct TTM (see `_ttm_sum`).
+
+    Spec: spec/m4c_ttm_cumulative_ytd_bugfix.md §4.1 (ported from
+    3_Biopharmcatalyst_parser/src/module_6_5/edgar_client.py 2026-05-28).
+    """
+    import datetime as _dt
+    try:
+        s = _dt.date.fromisoformat(r["start"])
+        e = _dt.date.fromisoformat(r["end"])
+        return (e - s).days
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 def _ttm_sum(rows: list[dict]) -> Optional[int]:
-    """Sum the most recent 4 quarterly values (form 10-Q) OR pick the most
-    recent annual value (10-K). Returns None when no usable rows."""
+    """Correct TTM for XBRL concepts that are reported cumulatively-YTD
+    inside a fiscal year (operating cash flow, R&D, G&A).
+
+    The naive ``sum(last 4 quarterly values)`` is wrong because Q1 covers
+    3 months while Q3 covers 9 months — summing them double-counts every
+    period inside Q3. Strategy here (in priority order):
+
+      1. **Annual row available** — if the latest row has form 10-K OR a
+         year-long span (350-380 days), use its value directly.
+      2. **True single-quarter rows** — some filers report incremental
+         quarterly figures (span ≈ 90 days, never cumulative). If we have
+         four of those covering the last 12 months, sum them.
+      3. **Cumulative-YTD derivation** — bucket rows by fiscal year, sort
+         within FY by end-date ascending, and difference consecutive
+         entries to recover incremental quarters. Sum the most recent 4.
+      4. **Fallback** — `None` rather than a bogus inflated sum.
+
+    Caller can detect Strategy 4 (None) and treat runway/etc as
+    "fundamentals incomplete".
+
+    Spec: spec/m4c_ttm_cumulative_ytd_bugfix.md §4.2 (ported from
+    3_Biopharmcatalyst_parser/src/module_6_5/edgar_client.py 2026-05-28).
+    """
     if not rows:
         return None
+
+    # Strategy 1 — annual row.
     latest = rows[0]
     if (latest.get("form") or "").startswith("10-K"):
         v = latest.get("val")
         return int(v) if v is not None else None
-    quarterly = [r for r in rows if (r.get("fp") or "").startswith("Q")]
-    if len(quarterly) >= 4:
-        return int(sum(r["val"] for r in quarterly[:4]))
-    if len(quarterly) >= 2:
-        avg = sum(r["val"] for r in quarterly) / len(quarterly)
+    if 350 <= _row_span_days(latest) <= 380:
+        v = latest.get("val")
+        return int(v) if v is not None else None
+
+    # Strategy 2 — explicit single-quarter rows.
+    pure_q = [r for r in rows if 80 <= _row_span_days(r) <= 100]
+    if len(pure_q) >= 4:
+        return int(sum(r["val"] for r in pure_q[:4]))
+
+    # Strategy 3 — derive incremental quarters from cumulative YTD.
+    # Group by fiscal year + sort within FY by end-date ascending.
+    by_fy: dict = {}
+    for r in rows:
+        fy = r.get("fy")
+        if fy is None:
+            continue
+        by_fy.setdefault(fy, []).append(r)
+
+    derived: list[tuple[str, int]] = []   # (end_date, incremental_val)
+    for fy, fy_rows in by_fy.items():
+        fy_sorted = sorted(fy_rows, key=lambda r: r.get("end") or "")
+        prev_val = 0
+        for r in fy_sorted:
+            v = r.get("val")
+            if v is None:
+                continue
+            inc = int(v) - prev_val
+            derived.append((r["end"], inc))
+            prev_val = int(v)
+
+    derived.sort(key=lambda x: x[0], reverse=True)
+    if len(derived) >= 4:
+        return int(sum(x[1] for x in derived[:4]))
+    if len(derived) >= 2:
+        # Partial recovery — annualise from the average derived quarter.
+        avg = sum(x[1] for x in derived) / len(derived)
         return int(avg * 4)
+
     return None
 
 

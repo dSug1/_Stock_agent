@@ -1037,3 +1037,123 @@ Three bugs surfaced when M6.5 ran against the 52 hard-pass tickers. All fixed in
 External cross-check vs yfinance for 8 spot-check tickers: `basic_shares_count` matches yfinance.sharesOutstanding within ±0.22% for established tickers and ±4.3% for early-stage (drift is post-quarter share issuance, expected). All prices match to the cent.
 
 ---
+
+## D19 — M7 LLM-side build (context_pack, dispatch, prompts, renderer, server, bat wiring) (2026-05-28)
+
+**Built (Turn 2 — pre-dispatch; no Anthropic call yet):**
+
+| Surface | File | Role |
+|---|---|---|
+| Per-ticker pack | `src/module_7/context_pack.py` | Joins biotech.db + fundamentals.db; strips insider/funds/momentum/M6-composite per spec §5.1; parses FDA designations out of BPC `Drug` field via `_KNOWN_FDA_DESIGNATIONS`; degrades gracefully when fundamentals.db is empty |
+| Anthropic SDK | `src/module_7/dispatch.py` | Sync (AsyncAnthropic with bounded semaphore) + batch (submit/poll split for D51 crash recovery); cache_control: ephemeral on the system block; web_search_20250305 tool with flat biotech-only domains list |
+| Cacheable prefix | `config/module_7_system_prompt.md` (m7-v1) | Role + Task + 10 HARD RULES + calibration notes for POS base rates + move magnitudes. **Bumping the SHA-7 invalidates all prior deep_dives rows via the D17 cache** |
+| Few-shots | `config/module_7_few_shots.md` | Two worked examples (mid-conviction PAH topline + low-conviction Phase 1 FA biomarker miss-skew) — synthetic, illustrative |
+| Web search whitelist | `config/module_7_web_search_domains.yaml` | Flat list: SEC + wires + journals + conferences + FDA/EMA + trade press + patient advocacy. ~50 domains |
+| Renderer JOIN | `src/module_7/render_join.py` | ATTACH-free read of claude_deep_dives.db; returns `{pk_tuple: payload}` keyed map; `raw_text` deliberately stripped (lazy-fetched by HTTP server) |
+| Renderer edit | `scripts/3_6_render_scores.py` | 3 new `<th>` columns (Probability, Share price appreciation, Expectancy / time); colspan bumped 13→16; new `<section class="m7-deep-dive">` in `buildExpandPanel` rendering thesis + probability breakdown + drug profile + rNPV table + clinical evidence + financial overhang + mgmt/acq scores + risks + sanity check + reasoning trace (collapsible) + audit footer. Em-dashes when row has no `deep_dive`. Sidecar size grew 30 KB → 40.5 KB |
+| Cost estimator CLI | `scripts/3_7_estimate_cost.py` | Dry-run, no API call; applies identity cache filter to show what WOULD dispatch; aborts dispatch path when production scenario > `cost_ceiling_usd` |
+| Dispatcher CLI | `scripts/3_7_deep_dive.py` | Mandatory `[y/N]` gate ALWAYS prompts (EOFError → abort, no auto-confirm on stdin closed); `--yes` single-shot bypass; `--resume-run N` for D51 crash recovery; per-result commits |
+| Selection HTTP server | `scripts/3_7_serve_selection.py` | stdlib `ThreadingHTTPServer` at 127.0.0.1:7034; routes: GET/POST `/api/selection` (sidecar JSON round-trip), GET `/api/raw_text?run_id=N` (lazy raw_text serving), static `Outputs/` files |
+| .bat wiring | `run_3_Biopharmcatalyst_parser.bat` | Added M6.5 + M7 steps with `[y/N]` gates AFTER M6; M7 prompt explicitly warns "THIS WILL SPEND MONEY" |
+
+**Pre-dispatch cost-estimator output (rolling-view 52-ticker hard-pass feed, 69 catalysts):**
+
+| Scenario | Total | Tokens in (non-cached) | Cache-read tokens |
+|---|---:|---:|---:|
+| no-optim | $9.60 | 1,624,398 | 0 |
+| cache-only | $8.87 | 1,095,154 | 529,244 |
+| **cache+batch (production)** | **$4.78** | 1,095,154 | 529,244 |
+
+Configured cost ceiling: $50.00 (in `config/module_7.yaml`). Production scenario well within budget.
+
+**Test coverage (Turn 2):**
+- `test_module7_context_pack.py` (14) — FDA-badge extraction (6 cases), pack happy path, **HARD spec rule check: pack JSON does NOT contain "insider_score" / "fund_accumulation_score" / "momentum_score" / "composite_score" / "hard_pass" / "fail_reasons" anywhere** (regression guard for D40 doubled-count bug), graceful fundamentals fallback, missing-PK None, weeks_to_catalyst math, signature helper, rolling-view feed flips a hard_pass→fail ticker out of the feed, explicit-tickers filter intersection.
+- `test_module7_render_join.py` (8) — missing/empty DB returns {}, JSON-block decoding (rnpv_by_indication, drug_profile, key_risks), MAX(run_id) per PK, snapshot_date filter, **raw_text NOT in payload** (sidecar-bloat guard), attach_deep_dive_payload mutates rows in place.
+
+**Tests passing total:** 428 (22 new + 406 prior, plus 4 unrelated skips).
+
+**Critical safety properties verified end-to-end:**
+
+1. **No API call has been made yet.** All Turn 2 work is dispatch-ready code; the `[y/N]` gate is the only path to spend.
+2. **Cost ceiling enforced before gate.** If config or feed somehow inflates costs above the YAML ceiling, the dispatcher refuses BEFORE prompting — no risk of confirming a runaway run.
+3. **Identity cache is binding.** A second invocation with no upstream changes would skip 100% of API calls — `partition_feed_by_cache` is wired into both the estimator CLI and the dispatcher CLI.
+4. **Selection editor is opt-in.** The server runs only when the user manually starts `scripts/3_7_serve_selection.py`. M7 dispatch reads the sidecar at dispatch time, NOT from a long-running daemon.
+5. **Renderer survives no M7 data.** Verified by running `scripts/3_6_render_scores.py` against a populated catalyst_scores + empty claude_deep_dives.db: HTML rebuilt cleanly, all 16 columns present, the 3 M7 cells show em-dashes, the deep-dive expanded section is omitted entirely.
+
+**Not yet wired (deferred to Turn 3 if requested):**
+
+- `daily_orchestrator.py` scheduled-job hook (memory `feedback_update_daily_runner`). M7 should NOT auto-run on a schedule — it spends money. Recommend leaving M7 manual-only; the 18:00 daily run continues to use M0a→M0b→M1→M5→M4→M2→M3→M6. M6.5 could safely run automatically if desired (free; just slow at ~6 min wall time).
+- A standalone "selection editor" UI affordance — the current HTML doesn't yet have checkbox columns; sidecar JSON round-trip works but is invisible without a UI. The dispatcher accepts a `--selection-from-html` flag in future work.
+- Pack-content hash in `deep_dives` for finer-grained cache invalidation when an upstream insider trade or fund position lands between BPC drops. The D17 catalyst-signature cache deliberately doesn't depend on this (per spec §5.12 design note).
+
+**What's needed to actually dispatch:**
+
+1. User reviews `config/module_7_system_prompt.md` + `config/module_7_few_shots.md`. Either approves as-is or requests edits (which bumps the SHA-7 and invalidates any prior cache).
+2. User opens `Outputs/m7_cost_estimate.html` to confirm the cost preview matches their expectation.
+3. User runs `PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_7_deep_dive.py` (or hits "y" at the M7 prompt in the .bat).
+4. User types `y` at the `[y/N]` gate.
+
+---
+
+## D20 — m7-v2 prompt expansion: 13 high-value patterns ported from 2_Funds_parser M6 (2026-05-28)
+
+After D19 (Turn 2 build) and before any dispatch, audited `2_Funds_parser/config/module_6_system_prompt.md` (681 lines vs our m7-v1's 304) for reusable patterns. Identified 13 high-value patterns and ported all 13 in this turn. `prompt_version_label` bumped `m7-v1 → m7-v2` to make the revision explicit in the audit trail (no prior `deep_dives` rows exist yet, so no cache invalidation effect — but the YAML SHA-7 also changes naturally because the comment block grew).
+
+### Patterns ported (A-M)
+
+| Pattern | Location in m7-v2 prompt | Notes |
+|---|---|---|
+| **A** — FDA POS base-rate table by pathology × stage | `# FDA PROBABILITY OF SUCCESS — BASE RATES` section. Two tables: stage→approval and single-readout-hit (the latter is M7's typical catalyst). | Replaces the rough numerical bullets that were in CALIBRATION NOTES. |
+| **B** — rNPV formula with WACC = 12% | `# rNPV CALCULATION GUIDANCE` section. Explicit `rnpv_contribution = peak_sales × pos_adjusted × (1/(1+WACC)^years_to_peak) × duration_factor`. | WACC pinned at biotech industry convention 12%. |
+| **C** — HIGH/MEDIUM/LOW probability rubric | `# PROBABILITY RUBRIC` section. HIGH (0.70-0.90) / MEDIUM (0.40-0.69) / LOW (0.10-0.39) with evidence-quality + timing-uncertainty criteria for each band. | Anchors `p_clinical` verbally before the prior-results ladder applies. |
+| **D** — Quantitative probability adjustment ladder | `# PROBABILITY ADJUSTMENTS — PRIOR RESULTS & MGMT TRACK RECORD` section. Strong prior data +0.05-0.15; mixed 0; negative −0.10-0.20; same-class precedent +/−0.05-0.10; mgmt strong +0.05 / poor −0.10. | Forces Claude to show its adjustment math. |
+| **E** — `pos_adjusted` within ±15pp of `pos_base_rate` | New HARD RULE #11 (warning, not fatal — same as 2_Funds_parser's pattern). Inline citation requirement. | |
+| **F** — Evidence hierarchy 7-tier | `# EVIDENCE HIERARCHY` section. SEC > FDA/clinicaltrials.gov > peer-reviewed > trade press > market sizing > patents > macro. | Resolves source conflicts deterministically. |
+| **G** — Search budget allocation | `# SEARCH BUDGET` section. 3-4 clinical/timing+IR, 2 regulatory, 2 competitive/moat, 1-2 TAM, 1 IP/tech. | Disciplines the 10-call budget. |
+| **H** — Catalyst-date freshness check (web_search required when >30 weeks out) | Strengthened HARD RULE #8. Cite the press-release date in `catalyst_date_sanity_check.notes`. | Caught the HAELO 2026-04-25 false-positive in 2_Funds_parser; ported as a strict rule. |
+| **I** — Platform-optionality rNPV row required | New HARD RULE #12. Platform companies (gene editing / ADC / TCR-T / antisense / mRNA delivery / etc.) MUST include a "Platform optionality" entry OR explicitly state single-asset disclaimer. | Caught the TCRX 2026-04-25 incident in 2_Funds_parser; rNPV understated ~50% without the row. |
+| **J** — Cite dates inline | New HARD RULE #13. Format examples: `"per 10-Q filed 2026-02-14"`, `"NCT04789123 last updated 2026-01-30"`. | Anti-hand-waving discipline. |
+| **K** — Inline POS adjustment citation | New HARD RULE #14. Any deviation of `pos_adjusted` from `pos_base_rate` (or `p_clinical` from rubric anchor) cited inline with the specific prior readout that drove it. | |
+| **L** — `mgmt_track_record.summary` MUST cite ≥1 historical example | New HARD RULE #15. Generic claims rejected. | |
+| **M** — Stage-based move-on-hit discount table | `# MOVE-ON-HIT STAGE DISCOUNT` section with explicit table (Ph1 interim 15-30% / Ph2 topline 30-55% / Ph3 topline 55-80% / NDA-PDUFA 70-95% / Approved 80-110% of rNPV/share). Compute formula: `target_post_hit_price = chosen_fraction × rNPV_per_share`; `expected_move = (target - current) / current`. | Was the weakest part of m7-v1 — "anchor on (rNPV/share - current)" with no concrete stage anchor. Now deterministic. |
+
+### Patterns deliberately NOT ported (lower-value / non-applicable)
+
+| Pattern | Why skipped |
+|---|---|
+| Archetype prior + override licence | 2_Funds_parser-specific; M7 packs don't carry archetype data |
+| Per-horizon (3mo vs 12mo) scoring | M7 has single catalyst-window horizon |
+| `fair_entry` / `full_reward` price-range fields | M7 schema returns asymmetric move estimates instead |
+| HARD RULE about `fund_accumulation` | Already enforced upstream — stripped from pack per spec §5.1 |
+| Prior-research / prior-thesis injection ([2_Funds_parser/src/module_6/priors.py](2_Funds_parser/src/module_6/priors.py)) | Skipped per spec §1 (no Tier B light-refresh); the D17 catalyst-identity cache handles re-runs by skipping the call entirely |
+| `clinical_trials.interim_results[]` mandatory structured array | Our `clinical_evidence` block covers this in less rigorous form; marginal value vs token cost |
+
+### Implementation deltas
+
+- `config/module_7.yaml` — `prompt_version_label: m7-v1 → m7-v2`. Comment block explaining the bump.
+- `config/module_7_system_prompt.md` — 8 new sections inserted between `# INPUT STRUCTURE` and `# OUTPUT`. HARD RULES table grew from 13 rows (1-10 + 20-22) to 18 rows (1-15 + 20-22). CALIBRATION NOTES trimmed (POS base rates moved to dedicated section A). Length: 304 → ~480 lines.
+- `config/module_7_few_shots.md` — Example 2 patched for HARD RULE #12 (FA single-asset disclaimer added to `move_anchor_rationale`). Example 1 (PAH + HFpEF) already complied — HFpEF was already the platform-optionality row.
+- `tests/test_module7_config.py::test_default_config_loads` — `prompt_version` check loosened from `startswith("m7-v1:")` to regex `m7-v\d+:[0-9a-f]{7}` so future bumps don't break the test.
+
+### Cost impact
+
+| Metric | m7-v1 (Turn 2 estimate) | m7-v2 (this turn) |
+|---|---:|---:|
+| Cached prefix tokens | ~7,800 | ~11,500 |
+| `cache_read_tokens_total` (68 reads) | 529,244 | 783,700 |
+| no-optim total | $9.60 | $9.98 |
+| cache-only total | $8.87 | $8.91 |
+| **cache+batch (production)** | **$4.78** | **$4.80** |
+
+The 50% prompt-size growth costs **$0.02** thanks to the 10% cache-read multiplier × 50% batch discount × 10% calibration factor stacking. Well under the $50 ceiling.
+
+### Test results
+
+428 pass / 4 unrelated skips. The one test that needed updating (`test_default_config_loads`) was a `startswith` assertion that's now a regex — same intent, version-bump-resilient.
+
+### Caveats
+
+1. **Cache-invalidation TODO.** `config.py::_content_hash()` hashes only the YAML, not the system prompt MD or the few-shots MD. So edits to the MD files don't auto-invalidate the cache. Convention (followed here): manually bump `prompt_version_label` in the YAML when revising the MDs — that changes the YAML content → SHA-7 → cache invalidates. **2_Funds_parser has the same setup** and the same convention. Logged as a future-work item (would need `_content_hash` to concat all three file hashes). Not blocking; just discipline.
+2. **All new HARD RULES (#11-15) are "warnings"** not parse-fail rejections — mirrors 2_Funds_parser's pattern of using soft validation for content rules that can't be cleanly machine-checked. The model is asked to comply; failures get flagged for human review via the rendered HTML. Strict parse-time enforcement (counts of inline citations, etc.) would over-fit on prompt phrasing.
+
+---

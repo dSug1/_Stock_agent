@@ -182,6 +182,49 @@ if /i "%RUN_M6%"=="y" (
     )
 )
 
+REM ============================================================
+REM Module 6.5 — FDSC enrichment (SEC XBRL + capital raises + yfinance).
+REM Pre-fetches authoritative shares / PFW / cash / runway / FDSC market cap
+REM into data/fundamentals.db for the M7 pack. Free (no Anthropic spend);
+REM ~5-7 min wall time on the 52-ticker rolling-view hard-pass feed.
+REM Run BEFORE M7 so Claude doesn't have to web-search for shares.
+REM ============================================================
+echo.
+set /p RUN_M65="Proceed to Module 6.5 (FDSC enrichment; SEC + yfinance HTTP)? [y/N]: "
+if /i "%RUN_M65%"=="y" (
+    python scripts\3_6_5_enrich_fundamentals.py
+    if errorlevel 1 (
+        echo [WARN] Module 6.5 reported failures; M7 packs will still build
+        echo        but Claude will have to web-search for missing fields.
+    )
+)
+
+REM ============================================================
+REM Module 7 — Claude API deep-dive (BILLED — gated by mandatory [y/N]).
+REM Default feed is rolling-view hard_pass tickers, filtered through the
+REM catalyst-identity cache (D17). Estimated cost printed pre-dispatch.
+REM Use scripts\3_7_estimate_cost.py first for a dry-run preview.
+REM ============================================================
+echo.
+echo === Module 7 — Claude API deep-dive (Anthropic-billed) ===
+echo Run scripts\3_7_estimate_cost.py first to preview cost ^(no API call^).
+set /p RUN_M7="Proceed to Module 7 (THIS WILL SPEND MONEY on Anthropic)? [y/N]: "
+if /i "%RUN_M7%"=="y" (
+    python scripts\3_7_deep_dive.py
+    if errorlevel 1 (
+        echo [WARN] Module 7 reported a failure or was aborted at the gate.
+    )
+    REM --- Re-render the HTML so M7 outputs land in catalyst_scores.html -
+    echo.
+    set /p RUN_RENDER7="Re-render catalyst_scores.html with M7 deep-dives? [Y/n]: "
+    if /i not "%RUN_RENDER7%"=="n" (
+        python scripts\3_6_render_scores.py
+        if errorlevel 1 (
+            echo [WARN] HTML render failed, continuing.
+        )
+    )
+)
+
 echo.
 echo === run_3_Biopharmcatalyst_parser complete ===
 endlocal
