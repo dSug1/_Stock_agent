@@ -209,3 +209,61 @@ def test_bucket_none_when_hard_fail():
     v = apply_hard_filters(cfg=cfg, **_good_inputs(precision_tier="unknown"))
     assert v.hard_pass is False
     assert v.timing_bucket is None
+
+
+# ---------- D34 — H6 delisted-ticker gate ----------
+
+def test_h6_pass_when_no_delisted_set():
+    cfg = _cfg()
+    v = apply_hard_filters(cfg=cfg, **_good_inputs(),
+                            ticker="ALXO", delisted_tickers=None)
+    assert v.hard_pass is True
+    assert "H6" not in v.fail_reasons
+
+
+def test_h6_pass_when_ticker_not_in_set():
+    cfg = _cfg()
+    v = apply_hard_filters(cfg=cfg, **_good_inputs(),
+                            ticker="ALXO",
+                            delisted_tickers=frozenset(["DVAX"]))
+    assert v.hard_pass is True
+    assert "H6" not in v.fail_reasons
+
+
+def test_h6_fail_when_ticker_in_set():
+    cfg = _cfg()
+    v = apply_hard_filters(cfg=cfg, **_good_inputs(),
+                            ticker="DVAX",
+                            delisted_tickers=frozenset(["DVAX"]))
+    assert v.hard_pass is False
+    assert "H6" in v.fail_reasons
+
+
+def test_h6_case_insensitive():
+    cfg = _cfg()
+    v = apply_hard_filters(cfg=cfg, **_good_inputs(),
+                            ticker="dvax",
+                            delisted_tickers=frozenset(["DVAX"]))
+    assert v.hard_pass is False
+    assert "H6" in v.fail_reasons
+
+
+def test_h6_combines_with_other_failures():
+    """A delisted ticker that also fails H1 collects BOTH codes."""
+    cfg = _cfg()
+    v = apply_hard_filters(
+        cfg=cfg, **_good_inputs(market_cap_usd=10_000_000),     # too small → H1 fail
+        ticker="DVAX",
+        delisted_tickers=frozenset(["DVAX"]),
+    )
+    assert v.hard_pass is False
+    assert "H1" in v.fail_reasons
+    assert "H6" in v.fail_reasons
+
+
+def test_h6_backward_compatible_when_args_omitted():
+    """Legacy callers that don't pass ticker / delisted_tickers still work."""
+    cfg = _cfg()
+    v = apply_hard_filters(cfg=cfg, **_good_inputs())     # no H6 kwargs
+    assert v.hard_pass is True
+    assert "H6" not in v.fail_reasons

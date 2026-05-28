@@ -191,6 +191,17 @@ CREATE TABLE IF NOT EXISTS catalyst_scores (
 CREATE INDEX IF NOT EXISTS idx_scores_composite ON catalyst_scores (snapshot_date, composite_score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_bucket    ON catalyst_scores (timing_bucket, hard_pass);
 
+-- §2.10 delisted_tickers (D34) — manually-maintained allowlist of tickers
+-- that are no longer tradable (delisted, halted, bankrupt, acquired). M6's
+-- H6 gate fails any catalyst whose ticker appears here. Populated via
+-- scripts/3_flag_delisted_tickers.py.
+CREATE TABLE IF NOT EXISTS delisted_tickers (
+    ticker       TEXT PRIMARY KEY,
+    flagged_at   TIMESTAMP NOT NULL,
+    reason       TEXT,           -- 'yfinance 404', 'acquired', 'reverse-split delisting', etc.
+    source       TEXT            -- 'manual', 'yfinance-probe', 'edgar-suspension', ...
+);
+
 -- ============================================================
 -- Views (spec §6.7) — created by Module 4's schema bootstrap, but
 -- live in schema.sql so M0's init applies them on every connect.

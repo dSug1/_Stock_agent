@@ -64,16 +64,14 @@ CREATE TABLE IF NOT EXISTS deep_dives (
     thesis_summary             TEXT,
     reasoning_trace            TEXT,
 
-    -- Python-applied modifiers + final expectancy
+    -- Python-applied modifiers + final expectancy (D33 dropped m_momentum,
+    -- momentum_score_input, expectancy_pct)
     insider_score_input            REAL,
     fund_accumulation_score_input  REAL,
-    momentum_score_input           REAL,
     m_insider                      REAL,
     m_funds                        REAL,
-    m_momentum                     REAL,
     p_final                        REAL,
     e_move_pct                     REAL,
-    expectancy_pct                 REAL,
     weeks_to_catalyst_mid          INTEGER,
     expectancy_per_week_pct        REAL,
 
@@ -197,6 +195,32 @@ def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
+# D33 — destructive migrations (DROP COLUMN, SQLite 3.35+). Applied once
+# per file; SQLite tolerates DROP IF EXISTS by checking PRAGMA first.
+_DROPPED_COLUMNS: list[tuple[str, str]] = [
+    # D26 made these no-ops; D33 actually drops them.
+    ("deep_dives", "m_momentum"),
+    ("deep_dives", "momentum_score_input"),
+    ("deep_dives", "expectancy_pct"),
+]
+
+
+def _apply_destructive_migrations(conn: sqlite3.Connection) -> None:
+    for table, col in _DROPPED_COLUMNS:
+        try:
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        except sqlite3.OperationalError:
+            continue
+        if col in cols:
+            log.info("claude_deep_dives.db: DROP COLUMN %s.%s", table, col)
+            try:
+                conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+            except sqlite3.OperationalError as e:
+                # SQLite < 3.35 doesn't support DROP COLUMN. We tolerate the
+                # leftover column rather than crashing the whole pipeline.
+                log.warning("could not drop %s.%s (SQLite too old?): %s", table, col, e)
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "claude_deep_dives.db"
 
@@ -209,6 +233,7 @@ def init_deep_dives_db(db_path: Path | str | None = None) -> Path:
         conn.executescript(_SCHEMA_SQL)
         conn.execute("PRAGMA journal_mode=WAL")
         _apply_additive_migrations(conn)
+        _apply_destructive_migrations(conn)            # D33
         conn.commit()
     return path
 
@@ -321,9 +346,9 @@ _DEEP_DIVE_COLS = (
     "rnpv_by_indication_json", "drug_profile_json", "clinical_evidence_json",
     "financial_overhang_json", "catalyst_date_sanity_json", "key_risks_json",
     "thesis_summary", "reasoning_trace",
-    "insider_score_input", "fund_accumulation_score_input", "momentum_score_input",
-    "m_insider", "m_funds", "m_momentum",
-    "p_final", "e_move_pct", "expectancy_pct",
+    "insider_score_input", "fund_accumulation_score_input",
+    "m_insider", "m_funds",
+    "p_final", "e_move_pct",
     "weeks_to_catalyst_mid", "expectancy_per_week_pct",
     "prompt_version", "model", "response_id",
     "raw_text",

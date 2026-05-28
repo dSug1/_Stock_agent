@@ -118,8 +118,7 @@ def main() -> int:
                    expected_move_on_hit_pct, expected_move_on_miss_pct,
                    price_at_api_time_usd,
                    target_price_on_hit_usd, target_price_on_miss_usd,
-                   e_move_pct, m_momentum,
-                   expectancy_pct, expectancy_per_week_pct,
+                   e_move_pct, expectancy_per_week_pct,
                    weeks_to_catalyst_mid
             FROM deep_dives
             WHERE p_clinical IS NOT NULL
@@ -150,24 +149,15 @@ def main() -> int:
             if new_price is not None and new_tgt_m is None and r["expected_move_on_miss_pct"] is not None:
                 new_tgt_m = float(new_price) * (1.0 + float(r["expected_move_on_miss_pct"]) / 100.0)
 
-            # D26 — normalize expectancy fields to the post-momentum-drop formula.
-            # expectancy_per_week_pct = e_move_pct / max(1, weeks)
-            # expectancy_pct = e_move_pct (kept as audit copy)
-            # m_momentum = 1.0 (no-op modifier)
+            # D26 → D33: expectancy_per_week_pct = e_move_pct / max(1, weeks).
+            # m_momentum / momentum_score_input / expectancy_pct columns
+            # were dropped in D33 so they're no longer written here.
             new_expw = None
-            new_exp  = None
-            new_mmom = None
             if r["e_move_pct"] is not None:
                 weeks_d = max(1, r["weeks_to_catalyst_mid"] or 1)
                 new_expw = float(r["e_move_pct"]) / weeks_d
-                new_exp  = float(r["e_move_pct"])
-                new_mmom = 1.0
             need_expw = (new_expw is not None
                          and abs((r["expectancy_per_week_pct"] or 0) - new_expw) > 1e-6)
-            need_exp  = (new_exp is not None
-                         and abs((r["expectancy_pct"] or 0) - new_exp) > 1e-6)
-            need_mmom = (new_mmom is not None
-                         and abs((r["m_momentum"] or 0) - new_mmom) > 1e-6)
 
             need_sig    = (r["drug_signature"] != new_sig)
             need_pv     = (r["prompt_version"] != current_pv)
@@ -175,7 +165,7 @@ def main() -> int:
             need_tgt_h  = (r["target_price_on_hit_usd"]  is None and new_tgt_h is not None)
             need_tgt_m  = (r["target_price_on_miss_usd"] is None and new_tgt_m is not None)
             if not (need_sig or need_pv or need_price or need_tgt_h or need_tgt_m
-                    or need_expw or need_exp or need_mmom):
+                    or need_expw):
                 n_skipped_current += 1
                 continue
 
@@ -191,12 +181,8 @@ def main() -> int:
                 print(f"    target_price_on_hit_usd: NULL -> ${new_tgt_h:.2f}")
             if need_tgt_m:
                 print(f"    target_price_on_miss_usd: NULL -> ${new_tgt_m:.2f}")
-            if need_mmom:
-                print(f"    m_momentum: {r['m_momentum']:.3f} -> 1.000 (D26)")
-            if need_exp:
-                print(f"    expectancy_pct: {(r['expectancy_pct'] or 0):+.2f} -> {new_exp:+.2f} (D26: = e_move_pct)")
             if need_expw:
-                print(f"    expectancy_per_week_pct: {(r['expectancy_per_week_pct'] or 0):+.2f} -> {new_expw:+.2f} (D26)")
+                print(f"    expectancy_per_week_pct: {(r['expectancy_per_week_pct'] or 0):+.2f} -> {new_expw:+.2f} (D26/D33)")
 
             if not args.dry_run:
                 cx.execute(
@@ -206,15 +192,11 @@ def main() -> int:
                         price_at_api_time_usd = COALESCE(price_at_api_time_usd, ?),
                         target_price_on_hit_usd = COALESCE(target_price_on_hit_usd, ?),
                         target_price_on_miss_usd = COALESCE(target_price_on_miss_usd, ?),
-                        m_momentum = ?,
-                        expectancy_pct = ?,
                         expectancy_per_week_pct = ?
                     WHERE snapshot_date = ? AND ticker = ? AND drug = ?
                       AND nct_number = ? AND next_catalyst_type = ? AND run_id = ?
                     """,
                     (new_sig, current_pv, new_price, new_tgt_h, new_tgt_m,
-                     new_mmom if new_mmom is not None else r["m_momentum"],
-                     new_exp  if new_exp  is not None else r["expectancy_pct"],
                      new_expw if new_expw is not None else r["expectancy_per_week_pct"],
                      r["snapshot_date"], r["ticker"], r["drug"],
                      r["nct_number"], r["next_catalyst_type"], r["run_id"]),

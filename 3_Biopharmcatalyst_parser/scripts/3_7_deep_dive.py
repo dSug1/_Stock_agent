@@ -679,13 +679,13 @@ def _write_results(
                     member.get("catalyst_date_iso"), None,
                     snapshot_date or "1970-01-01",
                 )
+                # D33 — momentum_score no longer passed to compute_expectancy.
                 expectancy = compute_expectancy(
                     p_clinical=parsed.catalyst_outcome["p_clinical"],
                     expected_move_on_hit_pct=parsed.catalyst_outcome["expected_move_on_hit_pct"],
                     expected_move_on_miss_pct=parsed.catalyst_outcome["expected_move_on_miss_pct"],
                     insider_score=member.get("insider_score"),
                     fund_accumulation_score=member.get("fund_accumulation_score"),
-                    momentum_score=member.get("momentum_score"),
                     weeks_to_catalyst=weeks,
                     modifiers=mods_cfg,
                     clamps=clamps_cfg,
@@ -743,13 +743,10 @@ def _write_results(
                     "reasoning_trace":     parsed.reasoning_trace,
                     "insider_score_input":           expectancy.insider_score_input,
                     "fund_accumulation_score_input": expectancy.fund_accumulation_score_input,
-                    "momentum_score_input":          expectancy.momentum_score_input,
                     "m_insider":  expectancy.m_insider,
                     "m_funds":    expectancy.m_funds,
-                    "m_momentum": expectancy.m_momentum,
                     "p_final":    expectancy.p_final,
                     "e_move_pct": expectancy.e_move_pct,
-                    "expectancy_pct":          expectancy.expectancy_pct,
                     "weeks_to_catalyst_mid":   expectancy.weeks_to_catalyst,
                     "expectancy_per_week_pct": expectancy.expectancy_per_week_pct,
                     "prompt_version":  cfg.prompt_version,

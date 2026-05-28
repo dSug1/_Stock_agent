@@ -30,6 +30,7 @@ EXPECTED_TABLES = [
     "ticker_cik_map",
     "catalyst_timing",
     "catalyst_scores",      # added by Module 6 (D8)
+    "delisted_tickers",     # added by D34 — H6 delisted gate
 ]
 EXPECTED_VIEWS = [
     "v_latest_catalysts",

@@ -39,7 +39,7 @@ two-stage funnel:
 ```
    572 catalysts in snapshot          ← M0..M5 output
         ↓
-   hard filter H1..H5
+   hard filter H1..H6
         ↓
    ~20-70 surviving catalysts         ← M6 hard pass
         ↓
@@ -94,7 +94,7 @@ When you run `scripts/3_6_score_catalysts.py`:
 
 6. **For each catalyst row**, runs:
    - **`apply_hard_filters`** → `FilterVerdict(hard_pass,
-     fail_reasons, timing_bucket)`. All H1–H5 are evaluated; all
+     fail_reasons, timing_bucket)`. All H1–H6 are evaluated; all
      failures are recorded, not just the first.
    - **`compute_insider`** → role-weighted gross USD log-scaled to
      0–100. CEO trades count × 2.0, CFO trades × 1.0, everything
@@ -130,12 +130,19 @@ again for per-fund expand-panel detail, and writes
 
 ---
 
-## The five hard filters
+## The six hard filters
 
 Applied to every row; **all failures collected** (not short-circuit),
 so the `fail_reasons` column on excluded rows shows every reason.
-H1–H5 are designed so a clean small-cap clinical-readout catalyst
-in the forward window passes all five.
+H1–H6 are designed so a clean small-cap clinical-readout catalyst
+on an actively-traded ticker in the forward window passes all six.
+
+> **D34 update (2026-05-28):** added H6 — the curated `delisted_tickers`
+> allowlist. BPC's docx sometimes carries a market cap from before a
+> ticker was delisted; H1 would let that row through, but yfinance and
+> Anthropic can't price it. H6 closes that loophole. The allowlist lives
+> in `biotech.db.delisted_tickers`; manage it via
+> `scripts/3_flag_delisted_tickers.py --add <TICKER>`.
 
 ### H1 — Market cap band
 
@@ -195,7 +202,30 @@ Explicitly excluded by H5:
 
 **Rejects 136 of 572 rows.**
 
-### After H1–H5: timing-bucket partition (NOT a filter)
+### H6 — Ticker not on the delisted allowlist (D34)
+
+```
+UPPER(ticker) NOT IN delisted_tickers
+```
+
+Curated table `biotech.db.delisted_tickers`, populated manually via
+`scripts/3_flag_delisted_tickers.py --add <TICKER> --reason "<why>"`.
+Seeded with DVAX (yfinance 404; reverse-split delisting). Case-insensitive
+match. Rejects 1 of 572 rows currently.
+
+Side benefits of routing exclusion through this gate (rather than ad-hoc
+filtering in downstream code):
+
+- M7 dispatcher (`fetch_hard_pass_candidates`) already queries
+  `WHERE hard_pass = 1`, so delisted tickers are automatically excluded
+  from Anthropic dispatches with no extra code.
+- The live-price server's hard-pass allowlist (D28) is built from the
+  same query — delisted tickers never reach yfinance, avoiding wasted
+  API calls and stderr noise.
+- The HTML naturally shows delisted rows in the Excluded tab with an
+  H6 chip; the H-gate legend explains where the list comes from.
+
+### After H1–H6: timing-bucket partition (NOT a filter)
 
 Surviving rows are tagged with `timing_bucket`:
 
@@ -362,7 +392,7 @@ empirical rankings feel off in either direction.
 | `drug` | TEXT | (PK) |
 | `nct_number` | TEXT | (PK) |
 | `next_catalyst_type` | TEXT | (PK) |
-| `hard_pass` | BOOLEAN | 1 if all H1–H5 passed; 0 otherwise |
+| `hard_pass` | BOOLEAN | 1 if all H1–H6 passed; 0 otherwise |
 | `fail_reasons` | TEXT | comma-joined H-codes; NULL on hard_pass=1 |
 | `timing_bucket` | TEXT | `catalyst_date_defined` / `catalyst_date_undefined`; NULL on hard_pass=0 |
 | `insider_gross_weighted_usd` | REAL | role-weighted CEO+CFO buy total; NULL if zero |
@@ -543,7 +573,7 @@ config/
 
 tests/
   test_module6_config.py        # 7 tests — YAML validation
-  test_module6_filters.py       # 22 tests — H1..H5 boundary coverage
+  test_module6_filters.py       # 22 tests — H1..H6 boundary coverage
   test_module6_scoring.py       # 23 tests — insider/momentum/funds/composite math
   test_module6_funds_reader.py  # 8 tests — synthetic mini-funds-DB
   test_module6_ingest.py        # 5 tests — end-to-end with attached funds DB
@@ -556,7 +586,7 @@ strictly ascending in `return_pct`, composite weights sum to 1.0
 `rules_version_label` so any byte-level edit re-versions.
 
 **`filters.py`** is pure (no DB, no config I/O at run time — takes
-the validated config in). `apply_hard_filters(...)` runs H1–H5,
+the validated config in). `apply_hard_filters(...)` runs H1–H6,
 collecting all failures rather than short-circuiting.
 
 **`scoring.py`** is pure. Four small functions:
@@ -626,7 +656,7 @@ A handful that aren't obvious from reading the code or the spec:
   report's "Excluded" tab possible — a feature the user explicitly
   wanted (to spot edge cases where H5 might be too aggressive).
 
-- **All H1–H5 failures are collected, not short-circuited.** A row
+- **All H1–H6 failures are collected, not short-circuited.** A row
   that fails on H1 AND H5 gets `fail_reasons = 'H1,H5'`. This
   surfaces the full "shape" of why something was excluded; users
   often want to know "is this filtered because of cap size OR

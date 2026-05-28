@@ -30,7 +30,7 @@ def _write(cx, **fields):
         "rnpv_total_usd": 2_000_000_000,
         "rnpv_per_share_usd": 46.84,
         "lead_indication": "PAH",
-        "p_final": 0.49, "e_move_pct": 21.2, "expectancy_pct": 21.6,
+        "p_final": 0.49, "e_move_pct": 21.2,
         "weeks_to_catalyst_mid": 12,
         "expectancy_per_week_pct": 1.8,
         "prompt_version": "m7-v1:abc1234",

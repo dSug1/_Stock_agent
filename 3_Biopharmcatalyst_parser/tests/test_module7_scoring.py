@@ -70,25 +70,30 @@ def test_remap_asymmetric_momentum_range():
 
 
 def _neutral_inputs(**over):
+    # D33 — `momentum_score` parameter no longer accepted by compute_expectancy.
+    # _neutral_inputs may still receive momentum_score= from legacy callers via
+    # **over; it's silently dropped to keep test diffs minimal.
     base = dict(
         p_clinical=0.40,
         expected_move_on_hit_pct=100.0,
         expected_move_on_miss_pct=-60.0,
-        insider_score=50.0, fund_accumulation_score=50.0, momentum_score=50.0,
+        insider_score=50.0, fund_accumulation_score=50.0,
         weeks_to_catalyst=10,
         modifiers=MODIFIERS, clamps=CLAMPS,
     )
     base.update(over)
+    base.pop("momentum_score", None)              # D33 — discard if present
     return base
 
 
 def test_neutral_signals_do_not_alter_p_clinical():
-    """All three signals at 50 → modifiers all = midpoint = 1.0 → p_final == p_clinical."""
+    """All two signals at 50 → modifiers all = midpoint = 1.0 → p_final == p_clinical.
+    D33 — m_momentum no longer on the dataclass."""
     r = compute_expectancy(**_neutral_inputs())
     assert abs(r.m_insider  - 1.0) < 1e-9
     assert abs(r.m_funds    - 1.0) < 1e-9
-    assert abs(r.m_momentum - 1.0) < 1e-9
     assert abs(r.p_final    - 0.40) < 1e-9
+    assert not hasattr(r, "m_momentum")           # D33 — field removed
 
 
 def test_strong_insider_lifts_p_final():
@@ -149,20 +154,24 @@ def test_outlier_clamp_on_miss():
     assert r.move_on_miss_pct_clamped == -90.0
 
 
-def test_momentum_modifier_is_no_op_after_D26():
-    """D26 — m_momentum is dropped (always 1.0); momentum_score is already
-    part of M6's composite_score, double-using here was redundant.
-    Setting momentum_score has no effect on p_final, e_move_pct, or
-    expectancy_pct."""
-    r_hot = compute_expectancy(**_neutral_inputs(momentum_score=100.0))
-    r_cold = compute_expectancy(**_neutral_inputs(momentum_score=0.0))
-    assert r_hot.p_final == r_cold.p_final
-    assert r_hot.m_momentum == 1.0
-    assert r_cold.m_momentum == 0.0 or r_cold.m_momentum == 1.0  # forced to 1.0
-    assert r_hot.m_momentum == 1.0 and r_cold.m_momentum == 1.0
-    assert r_hot.expectancy_pct == r_cold.expectancy_pct
-    # D26 — expectancy_pct is now an alias for e_move_pct.
-    assert r_hot.expectancy_pct == r_hot.e_move_pct
+def test_momentum_field_dropped_after_D33():
+    """D26 made m_momentum a no-op; D33 dropped the parameter + dataclass
+    fields entirely. momentum_score is M6's composite-score input, not an
+    M7 modifier. Passing it as a kwarg now raises TypeError; the result
+    object has no m_momentum / expectancy_pct / momentum_score_input."""
+    import pytest as _pytest
+    with _pytest.raises(TypeError):
+        compute_expectancy(
+            p_clinical=0.4, expected_move_on_hit_pct=100.0,
+            expected_move_on_miss_pct=-60.0,
+            insider_score=50.0, fund_accumulation_score=50.0,
+            momentum_score=100.0,                    # ← no longer accepted
+            weeks_to_catalyst=10, modifiers=MODIFIERS, clamps=CLAMPS,
+        )
+    r = compute_expectancy(**_neutral_inputs())
+    assert not hasattr(r, "m_momentum")
+    assert not hasattr(r, "expectancy_pct")
+    assert not hasattr(r, "momentum_score_input")
 
 
 def test_expectancy_per_week_from_e_move_after_D26():

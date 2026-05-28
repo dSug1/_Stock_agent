@@ -218,6 +218,22 @@ def score_snapshot(
     fail_reason_counts: dict[str, int] = defaultdict(int)
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+    # D34 — load the delisted-ticker allowlist once per run. Empty when
+    # the table doesn't exist yet (older biotech.db files); ingest still
+    # works but H6 is a no-op.
+    delisted_tickers: frozenset[str] = frozenset()
+    try:
+        delisted_rows = conn.execute(
+            "SELECT ticker FROM delisted_tickers"
+        ).fetchall()
+        delisted_tickers = frozenset(
+            (r["ticker"] or "").upper() for r in delisted_rows if r["ticker"]
+        )
+        if delisted_tickers:
+            log.info("M6 H6: %d delisted tickers loaded", len(delisted_tickers))
+    except sqlite3.OperationalError:
+        pass
+
     try:
         with conn:
             for r in rows:
@@ -235,6 +251,8 @@ def score_snapshot(
                     next_catalyst_type=r["next_catalyst_type"],
                     snapshot_date=snapshot_date,
                     cfg=cfg,
+                    ticker=ticker,
+                    delisted_tickers=delisted_tickers,
                 )
                 for code in verdict.fail_reasons:
                     fail_reason_counts[code] += 1

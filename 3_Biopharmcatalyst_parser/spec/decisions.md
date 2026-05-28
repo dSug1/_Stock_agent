@@ -1442,6 +1442,131 @@ Surviving rows in the panel walk through: p_clinical → m_insider → m_funds �
 
 **Validation:** 439 tests passing (unchanged count; 2 scoring tests rewritten with same assertion intent). Template refreshed 48 → 48 KB (minor); sidecar refreshed.
 
-**Future cleanup (low priority):** the `m_momentum`, `momentum_score_input`, and `expectancy_pct` DB columns are now dead-weight. Leaving them in place per the additive-only schema discipline (D17). If a future cleanup pass removes them, this entry is the rationale.
+**Future cleanup (low priority):** the `m_momentum`, `momentum_score_input`, and `expectancy_pct` DB columns are now dead-weight. Leaving them in place per the additive-only schema discipline (D17). If a future cleanup pass removes them, this entry is the rationale. → **Acted on in D33 (2026-05-28).**
+
+---
+
+## D33 — Schema cleanup: drop the three dead M7 columns + python fields (2026-05-28)
+
+**Trigger:** the D26 "future cleanup, low priority" note. After ~2 weeks of stable operation under D26's no-op `m_momentum`, removed the dead-weight columns entirely.
+
+**Dropped:**
+
+| Field | Was | Status post-D33 |
+|---|---|---|
+| `deep_dives.m_momentum` REAL | hard-coded to 1.0 since D26 | **dropped via `ALTER TABLE ... DROP COLUMN`** |
+| `deep_dives.momentum_score_input` REAL | echo of M6's momentum_score input | **dropped** |
+| `deep_dives.expectancy_pct` REAL | alias for `e_move_pct` since D26 | **dropped** |
+| `ExpectancyResult.m_momentum` | dataclass field | **dropped** |
+| `ExpectancyResult.momentum_score_input` | dataclass field | **dropped** |
+| `ExpectancyResult.expectancy_pct` | dataclass field | **dropped** |
+| `compute_expectancy(momentum_score=…)` | function parameter | **removed; passing it now raises TypeError** |
+| `module_7.yaml::modifiers.momentum` | config block | **kept but unused** — `compute_expectancy` ignores it (back-compat: edits to it don't break anything; removable in a future config-only edit) |
+
+**Implementation:**
+
+- New `_DROPPED_COLUMNS: list[tuple[str, str]]` in `src/module_7/deep_dives_db.py` paired with `_apply_destructive_migrations(conn)`. Uses SQLite 3.35+ `ALTER TABLE ... DROP COLUMN`; silently tolerates older SQLite by logging a warning and leaving the column in place.
+- `init_deep_dives_db()` calls both `_apply_additive_migrations()` and `_apply_destructive_migrations()` after the `CREATE TABLE IF NOT EXISTS` script. The schema SQL itself was also updated to drop the three columns so a fresh init never creates them.
+- `_DEEP_DIVE_COLS` tuple shortened — no longer references the three columns.
+
+**Cascade cleanup:**
+
+- `src/module_7/scoring.py::compute_expectancy` — `momentum_score=` parameter removed; `m_mom = 1.0` line gone; result construction no longer sets the dropped fields. Docstring documents the breaking change.
+- `scripts/3_7_deep_dive.py::_write_results` — row dict no longer carries `"m_momentum"`, `"momentum_score_input"`, `"expectancy_pct"`. Call to `compute_expectancy` no longer passes `momentum_score=`.
+- `scripts/3_7_backfill_cache_fields.py` — the D26 normalisation logic that wrote those three fields is removed (along with the diff-detection vs current values).
+- `src/module_7/render_join.py` — payload no longer includes the three keys; the JS sidecar shrinks slightly.
+- `scripts/3_6_render_scores.py` — renderer JS was already clean from D26 (no references); comments retain the historical D26 context.
+
+**Tests rewritten:**
+
+- `tests/test_module7_scoring.py::test_neutral_signals_do_not_alter_p_clinical` — drops `m_momentum` assertion; adds `assert not hasattr(r, "m_momentum")`.
+- `tests/test_module7_scoring.py::test_momentum_modifier_is_no_op_after_D26` → renamed `test_momentum_field_dropped_after_D33` — asserts that passing `momentum_score=` raises `TypeError` and the result has no momentum-related attributes.
+- `tests/test_module7_scoring.py::test_expectancy_per_week_from_e_move_after_D26` — still passes; just doesn't reference the dropped fields.
+- `tests/test_module7_deep_dives_db.py` — all `expectancy_pct=` kwargs in upsert calls changed to `e_move_pct=` (same numeric semantic).
+- `tests/test_module7_render_join.py` — drops `"expectancy_pct": 21.6` from the test row.
+- `tests/test_module7_scoring.py::_neutral_inputs` — `momentum_score=50.0` dropped from base; `**over` still tolerates legacy callers via a `pop("momentum_score", None)` step.
+
+**Migration safety:**
+
+- Existing legacy rows (the 10 from runs 1+2) had their three dead fields silently dropped on the next `init_deep_dives_db()` call. No data loss — those columns were already meaningless after D26.
+- `_DEEP_DIVE_COLS` change means `INSERT OR REPLACE` against pre-D33 rows still works (extra columns in the existing schema would be ignored, but `DROP COLUMN` already removed them).
+
+**Validation:** 439 tests passing (unchanged count; 2 scoring tests rewritten with the same assertion intent). No regressions in other modules.
+
+---
+
+## D34 — Delisted-ticker hygiene: new H6 gate + delisted_tickers table + flag script (2026-05-28)
+
+**Trigger:** DVAX was in `biotech.db.catalyst_scores` as `hard_pass=1` (because BPC's docx still recorded a market cap from before delisting), but yfinance can't fetch its price. M6.5 silently failed; the live-price server cached the failure every 60s; the HTML showed `—` for live price. Soft no-op, but the row pollutes the hard-pass tab and the M7 dispatch feed.
+
+**Decision:** add a curated allowlist + a new hard filter (H6) so delisted tickers fail M6's hard_pass naturally and are excluded from M7 + the live-price feed. Curated rather than auto-detected because false-positive auto-deletion is worse than a one-line manual flag.
+
+**Schema:**
+
+```sql
+-- §2.10 — biotech.db
+CREATE TABLE IF NOT EXISTS delisted_tickers (
+    ticker       TEXT PRIMARY KEY,
+    flagged_at   TIMESTAMP NOT NULL,
+    reason       TEXT,
+    source       TEXT          -- 'manual' / 'yfinance-probe' / 'edgar-suspension' / ...
+);
+```
+
+`scripts/3_0_init_db.py::EXPECTED_TABLES` extended so the validator no longer flags the new table as "unexpected".
+
+**Filter wiring:**
+
+- New `_check_H6(ticker, delisted_set) -> bool` in `src/module_6/filters.py`. Returns True (= pass) when ticker is None OR the set is empty/None. Case-insensitive (`.upper()`).
+- `apply_hard_filters(...)` extended with keyword-only `ticker: str | None = None` and `delisted_tickers: frozenset[str] | set[str] | None = None`. Backward-compatible — legacy callers that omit these still work (H6 is a no-op for them).
+- `src/module_6/ingest.py::score_snapshot` loads `SELECT ticker FROM delisted_tickers` once per run into a `frozenset`, then passes it through every `apply_hard_filters` call. On older biotech.db files that don't have the table yet, the load tolerates `sqlite3.OperationalError` and falls back to an empty set.
+
+**Flag-management script:** `scripts/3_flag_delisted_tickers.py`:
+
+```bash
+# Inspect the current set
+python scripts/3_flag_delisted_tickers.py --list
+
+# Add a ticker (auto-rescores existing catalyst_scores rows):
+python scripts/3_flag_delisted_tickers.py --add DVAX --reason "yfinance 404; delisted"
+
+# Remove a ticker (does NOT auto-restore the rows — run M6 to re-score):
+python scripts/3_flag_delisted_tickers.py --remove DVAX
+```
+
+The `--add` path does two things atomically (single `with cx:` block):
+1. `INSERT … ON CONFLICT DO UPDATE` into `delisted_tickers` (idempotent).
+2. UPDATE every existing `catalyst_scores` row for the flagged ticker: `hard_pass = 0`, append `H6` to `fail_reasons` (preserving any prior failures), `timing_bucket = NULL`.
+
+This avoids needing a full M6 re-run after flagging a single ticker. The next M6 run picks up the delisted set on its own and produces identical results.
+
+**HTML legend updated:**
+
+- `scripts/3_6_render_scores.py`: H-gate legend on the Excluded tab now includes H6 with a description of the curated allowlist and the management command.
+- `renderFailMeta`'s order array extended `['H1','H2','H3','H4','H5'] → […, 'H6']` so the footer count includes H6.
+
+**Side effects (intentional):**
+
+- `_hard_pass_allowlist()` in `scripts/3_7_serve_selection.py` (D28) queries `WHERE hard_pass = 1`, so DVAX is now automatically excluded from `/api/live_price` requests.
+- `fetch_hard_pass_candidates()` in `module_7.context_pack` also queries `WHERE hard_pass = 1`, so M7 won't dispatch a Claude call for DVAX. No code change needed in M7.
+- The HTML's hard-pass tab loses DVAX naturally; the Excluded tab shows it with the H6 chip.
+
+**Seeded:** DVAX added 2026-05-28 (reason: "yfinance 404; delisted"). Hard-pass count went **69 → 68** in the rolling view.
+
+**Tests added** (`tests/test_module6_filters.py`):
+
+- `test_h6_pass_when_no_delisted_set` — None / empty set treated as pass.
+- `test_h6_pass_when_ticker_not_in_set`
+- `test_h6_fail_when_ticker_in_set`
+- `test_h6_case_insensitive` (`"dvax"` in set `{"DVAX"}` still fails)
+- `test_h6_combines_with_other_failures` (H1 + H6 both present)
+- `test_h6_backward_compatible_when_args_omitted` (legacy callers pass cleanly)
+
+**Validation:** 445 tests passing (was 439; +6 H6 tests). DB inspection confirms DVAX `hard_pass=0`, `fail_reasons='H6'`, rolling-view count 68.
+
+**Future-work signals:**
+
+- A `yfinance-probe` auto-detector (scan hard-pass tickers, flag those that consistently fail to fetch for N days) would automate this. Out of scope for D34 — manual flag is fine for the small number of cases we hit.
+- The HTML could surface the flag (e.g., a "delisted" badge on row hover) — currently only visible via the H6 fail-reason chip. Acceptable as-is.
 
 ---

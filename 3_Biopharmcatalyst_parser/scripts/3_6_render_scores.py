@@ -859,7 +859,7 @@ JS = r"""
   }
 
   function renderFailMeta(fail_counts) {
-    const order = ['H1','H2','H3','H4','H5'];
+    const order = ['H1','H2','H3','H4','H5','H6'];
     const parts = order.filter(k => fail_counts[k]).map(k => `${k}=${fail_counts[k]}`);
     document.getElementById('fail-meta').textContent =
       'Failures by rule (overlapping across rows): ' + (parts.length ? parts.join(', ') : '—');
@@ -1440,7 +1440,7 @@ HTML_SKELETON = """<!doctype html>
   <button class="tab" data-tab="excluded" title="Catalysts excluded by one or more H1-H5 hard filters">Excluded <span class="count">0</span></button>
 </div>
 
-<!-- D27 — H-gate legend, shown only on the Excluded tab -->
+<!-- D27 + D34 — H-gate legend, shown only on the Excluded tab -->
 <div id="hgate-legend" class="hgate-legend" style="display:none">
   <div class="legend-title">Hard-filter legend (rows in this tab failed one or more of these):</div>
   <ul>
@@ -1449,6 +1449,7 @@ HTML_SKELETON = """<!doctype html>
     <li><b>H3</b> — Forward-looking: <code>date_min ≥ snapshot_date + 14 days</code> (catalyst is at least 2 weeks out — per <code>H3.window_start_days</code>).</li>
     <li><b>H4</b> — Window not entirely past: <code>date_max ≥ snapshot_date</code> (catalyst hasn't already materialised).</li>
     <li><b>H5</b> — Clinical-readout event: <code>stage ∈ {phase1, phase2, phase3}</code> AND <code>next_catalyst_type ∈ {Interim Data, Initial Data, Topline Data, Full Results, Conference Presentation}</code>.</li>
+    <li><b>H6</b> — Ticker not on the delisted allowlist (D34): manually-curated list in <code>biotech.db.delisted_tickers</code>. Managed via <code>scripts/3_flag_delisted_tickers.py --add &lt;TICKER&gt;</code>.</li>
   </ul>
   <div class="legend-note">A row can fail multiple gates — the chips on each row show all failures, not just the first.</div>
 </div>

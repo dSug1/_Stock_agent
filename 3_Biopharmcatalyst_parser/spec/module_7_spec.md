@@ -42,15 +42,15 @@ p_final      = clamp(p_clinical · m_insider · m_funds, 0.05, 0.95)
 ```
 move_on_hit_pct   = Claude's expected_move_on_hit_pct         capped at +400%
 move_on_miss_pct  = Claude's expected_move_on_miss_pct        capped at −90%
-m_momentum        ∈ [0.95, 1.05]                              Python — entry timing only
 E[move_pct]       = p_final · move_on_hit_pct + (1 − p_final) · move_on_miss_pct
-expectancy_pct    = E[move_pct] · m_momentum
 ```
+
+**D26 + D33 update (2026-05-28):** `m_momentum` has been removed. M6's `momentum_score` is already in the composite_score that drives the hard-pass selection — using it again as an M7 modifier was double-counting, and the [0.95, 1.05] band only nudged outcomes ±5%. The `expectancy_pct` intermediate (was `E[move_pct] · m_momentum`) is gone; `expectancy_per_week_pct` derives directly from `E[move_pct]`. The dataclass field, DB column, and Python parameter are all removed (D33).
 
 ### Final ranking key — time-normalised
 
 ```
-expectancy_per_week_pct = expectancy_pct / max(weeks_to_catalyst, 1)
+expectancy_per_week_pct = E[move_pct] / max(weeks_to_catalyst, 1)
 ```
 
 A +30% / 4-wk catalyst ranks above a +60% / 12-wk catalyst, which it should.
@@ -61,7 +61,7 @@ A +30% / 4-wk catalyst ranks above a +60% / 12-wk catalyst, which it should.
 |---|---|---|
 | `m_insider` | [0.85, 1.15] | CEO/CFO buying = mild prior. M6 already uses it as a primary score component; here it's only a tilt, otherwise M7's expectancy collapses back onto M6. |
 | `m_funds` | [0.85, 1.15] | Same reasoning. Specialist-fund accumulation is M6's third signal; M7 must not double-count it. |
-| `m_momentum` | [0.95, 1.05] | Momentum is an **entry-timing** signal, not a science signal. A ticker that just rallied isn't more likely to have a successful readout — but you may want to wait for a pullback before sizing in. |
+| ~~`m_momentum`~~ | ~~[0.95, 1.05]~~ | **Removed in D26 + D33** — momentum_score is already in M6's composite_score that gates hard_pass selection; using it again here was double-counting. Band only ±5%. The `modifiers.momentum` config block is kept inert for back-compat. |
 | `p_final` clamp | [0.05, 0.95] | Clinical biotech does not produce 99%-confident outcomes. Hard floor + ceiling prevents calibration runaway. |
 
 The exact piecewise/log shapes live in `config/module_7.yaml`. **All modifiers are anchored at 1.0** (a neutral signal does not move expectancy at all).
@@ -369,12 +369,14 @@ m_insider = 0.85 + (insider_score / 100.0) * 0.30
 # Funds modifier — from 2_Funds_parser holdings cross-DB (M6's existing fund_accumulation_score)
 m_funds = 0.85 + (fund_accumulation_score / 100.0) * 0.30
 
-# Momentum modifier — from BPC price_history_30d (M6's existing momentum_score)
-# Tighter range — momentum is timing, not thesis:
-m_momentum = 0.95 + (momentum_score / 100.0) * 0.10
+# D26 + D33: m_momentum dropped. momentum_score is already in M6's
+# composite_score (the gate that selects hard_pass rows), so using it
+# again as an M7 modifier was double-counting. Tighter range only
+# moved outcomes ±5%. Field removed from compute_expectancy, the
+# DB schema, the JSON sidecar, and the HTML.
 ```
 
-This is a **straight linear remap** of M6's existing 0–100 signal scores onto the bounded modifier ranges. No new computation, no new web fetches. All three constants live in `config/module_7.yaml` and can be re-tuned without touching code or re-paying for API calls.
+This is a **straight linear remap** of M6's existing 0–100 signal scores onto the bounded modifier ranges. No new computation, no new web fetches. The constants live in `config/module_7.yaml` and can be re-tuned without touching code or re-paying for API calls.
 
 ### 5.7 Output schema — `data/claude_deep_dives.db`
 
@@ -404,16 +406,14 @@ CREATE TABLE deep_dives (
   thesis_summary TEXT, key_risks_json TEXT,
   reasoning_trace TEXT,
 
-  -- Compounded — what Python computed
+  -- Compounded — what Python computed (D33 dropped m_momentum, momentum_score_input, expectancy_pct)
   insider_score_input REAL,                      -- copied from M6 for audit
   fund_accumulation_score_input REAL,            -- copied from M6 for audit
-  momentum_score_input REAL,                     -- copied from M6 for audit
-  m_insider REAL, m_funds REAL, m_momentum REAL,
+  m_insider REAL, m_funds REAL,
   p_final REAL,
-  e_move_pct REAL,
-  expectancy_pct REAL,                           -- = e_move_pct × m_momentum
+  e_move_pct REAL,                               -- = p_final · hit + (1-p_final) · miss
   weeks_to_catalyst_mid INTEGER,
-  expectancy_per_week_pct REAL,                  -- ranking key
+  expectancy_per_week_pct REAL,                  -- ranking key — = e_move_pct / max(weeks, 1)
 
   -- Metadata
   prompt_version TEXT,                           -- 'm7-v1'
@@ -971,6 +971,17 @@ All landed in [spec/decisions.md](decisions.md). Headline list:
 - **D21** — Cost-formula audit + recalibration after first real (sync) invoice: `cost_calibration_factor` 0.10 → 0.80, fix `non_cached_input` subtraction bug, set `sync_concurrency: 1`, `dispatch.mode: batch` as the production default (2026-05-28).
 - **D22** — Recalibration after first batch invoice: `cost_calibration_factor` 0.80 → 0.10; batch is the production mode, single-value calibration reflects batch reality, sync now over-estimates ~8× (safe direction) (2026-05-28).
 - **D23** — Drug-level dispatch dedup: one API call per `(ticker, drug)`, N rows per result; `drug_signature` preserves D17's "re-run if catalyst changed" invariant; additive schema migration for `drug_signature` + `anchor_*` columns (2026-05-28).
+- **D24** — Backfill `drug_signature` + `prompt_version` on the 10 pre-D23 legacy rows so they cache-hit on re-run (2026-05-28).
+- **D25** — Intraday live-price refresh (yfinance + local HTTP `/api/live_price`, JS polling, target $ stored at API time, JS recompute) + "Reference price (Claude)" in the deep-dive panel (2026-05-28).
+- **D26** — Drop `m_momentum` from the expectancy formula; `expectancy_per_week_pct = E[move] / max(weeks, 1)` directly. Renamed HTML column header "Expectancy / time" → "Expectancy / week" (2026-05-28).
+- **D27** — HTML housekeeping: title cleanup, merged timing tabs → one "Hard pass" tab, score-distribution legend strip, H1-H5 legend on the Excluded tab (2026-05-28).
+- **D28** — `/api/live_price` hard-pass allowlist: server-side filter that rejects non-hard-pass tickers before reaching yfinance (defense-in-depth on top of the JS scope) (2026-05-28).
+- **D29** — `run_3_Biopharm_render.bat` auto-opens the browser via `webbrowser.open()`; yfinance stderr silenced via context manager; failed fetches cache for 30 min (DVAX-style delisted tickers don't get retried each poll) (2026-05-28).
+- **D30** — Blue + green ● indicators on live market cap and share price (in table cell + expand panel), conditionally applied only when the value came from the yfinance live feed (2026-05-28).
+- **D31** — Preserve expanded row across `renderTable()` re-renders (was being destroyed by the 60s live-price poll); skip the re-render entirely when no prices actually changed (2026-05-28).
+- **D32** — Sort fix for the three M7 columns (`dd_p_final` / `dd_e_move_pct` / `dd_expectancy_per_week_pct`) — `sortRows` was doing flat `a[col]` lookup but the data lives nested under `r.deep_dive.*`; the live-recomputed cells now sort by their displayed values (2026-05-28).
+- **D33** — Schema cleanup: drop `deep_dives.m_momentum`, `momentum_score_input`, `expectancy_pct` columns + corresponding `ExpectancyResult` fields + `momentum_score` parameter on `compute_expectancy`. Closes D26's "future cleanup, low priority" loop (2026-05-28).
+- **D34** — Delisted-ticker hygiene: new `delisted_tickers` table in biotech.db + new H6 hard-filter gate in `module_6/filters.py` + `scripts/3_flag_delisted_tickers.py` for management. DVAX seeded; HTML H-gate legend extended; M7 dispatch + live-price server naturally exclude flagged tickers (no extra wiring — both already query `WHERE hard_pass = 1`) (2026-05-28).
 
 ---
 

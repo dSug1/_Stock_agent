@@ -99,13 +99,13 @@ def test_upsert_deep_dive_replaces_on_pk_collision(tmp_path: Path):
               next_catalyst_type="Topline Data", run_id=1)
     with db_connect(db) as cx:
         upsert_deep_dive_row(cx, dict(pk, p_clinical=0.4, p_final=0.40,
-                                       expectancy_pct=5.0,
+                                       e_move_pct=5.0,
                                        expectancy_per_week_pct=0.5,
                                        prompt_version="m7-v1:abc",
                                        model="claude-opus-4-7",
                                        raw_text="raw#1"))
         upsert_deep_dive_row(cx, dict(pk, p_clinical=0.5, p_final=0.50,
-                                       expectancy_pct=10.0,
+                                       e_move_pct=10.0,
                                        expectancy_per_week_pct=1.0,
                                        prompt_version="m7-v1:abc",
                                        model="claude-opus-4-7",
@@ -168,13 +168,13 @@ def test_latest_deep_dive_per_catalyst_picks_max_run(tmp_path: Path):
                 prompt_version="m7-v1:abc", model="claude-opus-4-7")
     with db_connect(db) as cx:
         upsert_deep_dive_row(cx, dict(base, run_id=1, p_final=0.40,
-                                       expectancy_pct=1.0,
+                                       e_move_pct=1.0,
                                        expectancy_per_week_pct=0.1))
         upsert_deep_dive_row(cx, dict(base, run_id=3, p_final=0.50,
-                                       expectancy_pct=5.0,
+                                       e_move_pct=5.0,
                                        expectancy_per_week_pct=0.5))
         upsert_deep_dive_row(cx, dict(base, run_id=2, p_final=0.45,
-                                       expectancy_pct=2.0,
+                                       e_move_pct=2.0,
                                        expectancy_per_week_pct=0.2))
         out = latest_deep_dive_per_catalyst(cx, "2026-08-04")
     key = ("2026-08-04", "TCRX", "TX45", "NCT06234567", "Topline Data")

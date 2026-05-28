@@ -109,16 +109,13 @@ def fetch_latest_deep_dive_map(
             "key_risks":               _maybe_json(r["key_risks_json"]) or [],
             "thesis_summary":          r["thesis_summary"],
             "reasoning_trace":         r["reasoning_trace"],
-            # Python modifiers + expectancy
+            # Python modifiers + expectancy (D33 — momentum fields dropped)
             "insider_score_input":           r["insider_score_input"],
             "fund_accumulation_score_input": r["fund_accumulation_score_input"],
-            "momentum_score_input":          r["momentum_score_input"],
             "m_insider":               r["m_insider"],
             "m_funds":                 r["m_funds"],
-            "m_momentum":              r["m_momentum"],
             "p_final":                 r["p_final"],
             "e_move_pct":              r["e_move_pct"],
-            "expectancy_pct":          r["expectancy_pct"],
             "weeks_to_catalyst_mid":   r["weeks_to_catalyst_mid"],
             "expectancy_per_week_pct": r["expectancy_per_week_pct"],
             "catalyst_signature":      r["catalyst_signature"],

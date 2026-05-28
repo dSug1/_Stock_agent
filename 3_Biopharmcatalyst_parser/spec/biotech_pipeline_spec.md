@@ -973,7 +973,7 @@ For traceability, decisions already made in design discussions:
 - **Strict schema validation** on all CSV ingests. Locked.
 - **Past-date catalysts** in Module 5 → `unknown` tier; date-slip detection deferred to Module 6 querying snapshot history. Locked.
 - **`is_open_market`** flag derived from Form 4 transaction code IN (`P`, `S`), excluding option-exercise noise (`M`). Locked.
-- **Module 6 hard filters (H1–H5)** locked per D8: market cap ∈ [\$30M, \$2B); precision_tier resolvable; window forward-looking (date_min ≥ snapshot+14d); window not entirely past (date_max ≥ snapshot); event ∈ {phase1/2/3 clinical readouts: Interim/Initial/Topline/Full Results + Conference Presentation}. Explicitly excludes Regulatory Decision, Submission, End-of-Phase Meeting, phase4, phase5.
+- **Module 6 hard filters (H1–H6)** locked per D8 + D34: market cap ∈ [\$30M, \$2B); precision_tier resolvable; window forward-looking (date_min ≥ snapshot+14d); window not entirely past (date_max ≥ snapshot); event ∈ {phase1/2/3 clinical readouts: Interim/Initial/Topline/Full Results + Conference Presentation}; ticker not on the curated `delisted_tickers` allowlist (D34). Explicitly excludes Regulatory Decision, Submission, End-of-Phase Meeting, phase4, phase5.
 - **Module 6 soft scoring uses three signals only:** (i) CEO/CFO insider buy gross over 365 days (no decay, no other roles); (ii) 30d price momentum from `price_history_30d`; (iii) net positive fund accumulation across the 22 specialist biotech funds tracked in `2_Funds_parser/2_fundparser.db`, comparing the two most recent quarters. Default weights `0.35 / 0.35 / 0.30` (funds slightly lower than CEO/CFO per user). Tiebreak: insider_score → fund_accumulation_score. Locked per D8 + D9.
 - **Module 6 timing-bucket split:** `catalyst_date_defined` (specific|conference|month|quarter) vs `catalyst_date_undefined` (half|year). Ranking happens within each bucket. Locked per D8.
 - **No automatic top-N cap from Module 6 into Module 7.** User picks the slice manually. Locked per D8.
@@ -1104,6 +1104,7 @@ Applied in declared order; first failure short-circuits and the row is logged wi
 | **H3** | Forward-looking window | `catalyst_timing.date_min >= snapshot_date + 14` | T+14 floor is the locked Discovery/Execution window start (§11). Anything sooner is too late to position. |
 | **H4** | Window not entirely past | `catalyst_timing.date_max >= snapshot_date` | Drops BPC's stale-row problem: rows where the entire window has already lapsed but the catalyst still appears in the source CSV. |
 | **H5** | Clinical result event | `stage IN ('phase1','phase2','phase3') AND next_catalyst_type IN ('Interim Data','Initial Data','Topline Data','Full Results','Conference Presentation')` | User scope: clinical-readout-driven re-ratings only. Explicitly excludes Regulatory Decision (PDUFA), Submission (NDA/BLA filing events), End of Phase Meeting (FDA process not a data readout), phase4 (post-pivotal commercial) and phase5 (already approved). |
+| **H6** (D34) | Ticker not delisted | `ticker NOT IN delisted_tickers` (case-insensitive) | BPC's docx can still surface a market cap for a ticker that has been delisted (reverse split, suspension, bankruptcy). yfinance / Anthropic can't price these usefully. Curated allowlist in `biotech.db.delisted_tickers`; managed via `scripts/3_flag_delisted_tickers.py --add <TICKER>`. |
 
 **Note H3 — timing-bucket partition (NOT a filter, applied AFTER H1–H5):**
 
@@ -1243,7 +1244,7 @@ CREATE TABLE IF NOT EXISTS catalyst_scores (
     nct_number            TEXT    NOT NULL,
     next_catalyst_type    TEXT    NOT NULL,
     hard_pass             BOOLEAN NOT NULL,
-    fail_reasons          TEXT,                  -- comma-joined H1..H5 codes; NULL when hard_pass=1
+    fail_reasons          TEXT,                  -- comma-joined H1..H6 codes (D34: H6 added); NULL when hard_pass=1
     timing_bucket         TEXT,                  -- 'catalyst_date_defined'|'catalyst_date_undefined'|NULL
     -- Insider signal
     insider_gross_weighted_usd  REAL,            -- ROLE-weighted gross over 365d (CEO*2 + CFO*1)
@@ -1269,6 +1270,16 @@ CREATE TABLE IF NOT EXISTS catalyst_scores (
 
 CREATE INDEX IF NOT EXISTS idx_scores_composite ON catalyst_scores (snapshot_date, composite_score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_bucket    ON catalyst_scores (timing_bucket, hard_pass);
+
+-- D34 — curated delisted-ticker allowlist. M6's H6 gate fails any
+-- catalyst whose ticker appears here. Managed via
+-- scripts/3_flag_delisted_tickers.py --add / --remove / --list.
+CREATE TABLE IF NOT EXISTS delisted_tickers (
+    ticker       TEXT PRIMARY KEY,
+    flagged_at   TIMESTAMP NOT NULL,
+    reason       TEXT,
+    source       TEXT       -- 'manual' / 'yfinance-probe' / 'edgar-suspension' / ...
+);
 ```
 
 `hard_pass = 0` rows still get a row in the table (with `composite_score = NULL` and `fail_reasons = 'H3,H5'` etc.) so the user can audit *why* a ticker dropped. `hard_pass = 1` rows have all scoring columns populated.

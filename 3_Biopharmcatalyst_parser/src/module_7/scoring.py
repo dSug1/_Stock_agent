@@ -77,13 +77,11 @@ class ExpectancyResult:
     expected_move_on_miss_pct: float
     insider_score_input: Optional[float]
     fund_accumulation_score_input: Optional[float]
-    momentum_score_input: Optional[float]
     weeks_to_catalyst: int
 
-    # Modifiers
+    # Modifiers (D33 — m_momentum field dropped; was always 1.0 after D26)
     m_insider: float
     m_funds: float
-    m_momentum: float
 
     # Compounded
     p_clinical_x_modifiers_unclamped: float    # p_clinical * m_insider * m_funds  (pre-clamp)
@@ -91,8 +89,7 @@ class ExpectancyResult:
     move_on_hit_pct_clamped: float              # outlier-clamped
     move_on_miss_pct_clamped: float
     e_move_pct: float                           # p_final · hit + (1-p_final) · miss
-    expectancy_pct: float                       # e_move_pct · m_momentum
-    expectancy_per_week_pct: float              # expectancy_pct / max(weeks, 1)
+    expectancy_per_week_pct: float              # e_move_pct / max(weeks, 1)
 
 
 # ───────────────────────── public compute fn ─────────────────────────
@@ -105,12 +102,17 @@ def compute_expectancy(
     expected_move_on_miss_pct: float,
     insider_score: Optional[float],
     fund_accumulation_score: Optional[float],
-    momentum_score: Optional[float],
     weeks_to_catalyst: int,
     modifiers: dict,                            # {insider: {min,max}, funds: {min,max}, momentum: {min,max}}
     clamps: dict,                               # {p_final_min, p_final_max, move_on_hit_pct_max, move_on_miss_pct_min}
 ) -> ExpectancyResult:
-    """Compound Claude's outputs with M6 modifiers into expectancy/week."""
+    """Compound Claude's outputs with M6 modifiers into expectancy/week.
+
+    D33 (2026-05-28): `momentum_score` parameter, `m_momentum`/`expectancy_pct`/
+    `momentum_score_input` return fields, and the corresponding `modifiers.momentum`
+    block are dropped. Pre-D33 callers passing `momentum_score=` will get a
+    TypeError; that's intentional — the formula doesn't use it.
+    """
     m_ins = remap_signal_to_modifier(
         insider_score,
         min_multiplier=modifiers["insider"]["min_multiplier"],
@@ -121,10 +123,6 @@ def compute_expectancy(
         min_multiplier=modifiers["funds"]["min_multiplier"],
         max_multiplier=modifiers["funds"]["max_multiplier"],
     )
-    # D26 — m_momentum dropped. momentum_score is already in M6's
-    # composite_score; double-using it here was redundant. Field kept on
-    # the result dataclass for schema/test back-compat, hard-coded to 1.0.
-    m_mom = 1.0
 
     p_pre = float(p_clinical) * m_ins * m_fnd
     p_final = max(
@@ -138,11 +136,6 @@ def compute_expectancy(
                        float(clamps["move_on_miss_pct_min"]))
 
     e_move = p_final * hit_clamped + (1.0 - p_final) * miss_clamped
-    # D26 — expectancy_per_week now derives directly from E[move]; the
-    # intermediate "expectancy_pct = e_move * m_momentum" step is gone.
-    # expectancy_pct field stays on the dataclass as an audit copy of
-    # e_move so legacy callers still get a value.
-    expectancy = e_move
     weeks_input = int(weeks_to_catalyst) if weeks_to_catalyst is not None else 0
     weeks_divisor = max(weeks_input, 1)
     expectancy_per_week = e_move / float(weeks_divisor)
@@ -155,16 +148,13 @@ def compute_expectancy(
                              else float(insider_score)),
         fund_accumulation_score_input=(None if fund_accumulation_score is None
                                        else float(fund_accumulation_score)),
-        momentum_score_input=(None if momentum_score is None
-                              else float(momentum_score)),
         weeks_to_catalyst=weeks_input,
-        m_insider=m_ins, m_funds=m_fnd, m_momentum=m_mom,
+        m_insider=m_ins, m_funds=m_fnd,
         p_clinical_x_modifiers_unclamped=p_pre,
         p_final=p_final,
         move_on_hit_pct_clamped=hit_clamped,
         move_on_miss_pct_clamped=miss_clamped,
         e_move_pct=e_move,
-        expectancy_pct=expectancy,
         expectancy_per_week_pct=expectancy_per_week,
     )
 

@@ -57,6 +57,17 @@ def _check_H5(stage: str | None, next_catalyst_type: str | None, cfg: ScoringCon
     return True
 
 
+def _check_H6(ticker: str | None, delisted: frozenset[str] | set[str] | None) -> bool:
+    """D34 — ticker not in the delisted allowlist.
+
+    Returns True (= pass) when ticker is None (defensive — H5 will catch
+    the missing-stage case) or when the delisted set is empty/None.
+    """
+    if not ticker or not delisted:
+        return True
+    return ticker.upper() not in delisted
+
+
 def _timing_bucket(precision_tier: str, cfg: ScoringConfig) -> str | None:
     if precision_tier in cfg.timing_buckets.catalyst_date_defined:
         return "catalyst_date_defined"
@@ -75,9 +86,16 @@ def apply_hard_filters(
     next_catalyst_type: str | None,
     snapshot_date: date,
     cfg: ScoringConfig,
+    ticker: str | None = None,
+    delisted_tickers: frozenset[str] | set[str] | None = None,
 ) -> FilterVerdict:
-    """Run H1-H5 in order. Collect ALL failures (not just the first)
+    """Run H1-H6 in order. Collect ALL failures (not just the first)
     so the audit row shows every reason a catalyst was excluded.
+
+    D34 — H6 (delisted-ticker gate) added. ``ticker`` + ``delisted_tickers``
+    are keyword-only with defaults of None so legacy call-sites that
+    didn't pass them (tests, ad-hoc scripts) still work — they'll just
+    skip the H6 check.
     """
     failures: list[str] = []
 
@@ -91,6 +109,8 @@ def apply_hard_filters(
         failures.append("H4")
     if not _check_H5(stage, next_catalyst_type, cfg):
         failures.append("H5")
+    if not _check_H6(ticker, delisted_tickers):
+        failures.append("H6")
 
     hard_pass = not failures
     bucket = _timing_bucket(precision_tier, cfg) if hard_pass else None
