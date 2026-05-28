@@ -44,6 +44,8 @@ class EstimateInputs:
     max_uses_web_search: int
     pricing: dict                           # module_7.yaml::pricing dict
     user_message_overhead_chars: int = 400  # framing line + closing instruction
+    sync_concurrency: int = 1               # D21 — affects `cache-only` scenario; concurrency>1 in sync
+                                            # mode means each parallel call writes its own cache.
 
 
 @dataclass
@@ -110,12 +112,28 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
 
     output_tokens = n_calls * int(inputs.max_output_tokens)
 
+    # Optimistic-cache model: 1 cache_create + (N-1) cache_reads. Reality
+    # in batch mode (Anthropic processes batch with intra-batch cache
+    # sharing); also reality in sync mode at concurrency=1.
     if n_calls > 0:
         cache_creation_tokens = cached_prefix_tokens
         cache_read_tokens = cached_prefix_tokens * (n_calls - 1)
     else:
         cache_creation_tokens = 0
         cache_read_tokens = 0
+
+    # D21 sync-realistic cache model: with sync_concurrency = C, the first
+    # min(N, C) calls all dispatch in parallel before any cache is warm →
+    # each writes its own cache. Only the (N - C) calls that go out after
+    # wave 1 can read the cache.
+    sync_concurrency = max(1, int(inputs.sync_concurrency))
+    if n_calls > 0:
+        n_parallel_writers = min(n_calls, sync_concurrency)
+        sync_cache_creation_tokens = cached_prefix_tokens * n_parallel_writers
+        sync_cache_read_tokens = cached_prefix_tokens * max(0, n_calls - n_parallel_writers)
+    else:
+        sync_cache_creation_tokens = 0
+        sync_cache_read_tokens = 0
 
     total_search_calls = n_calls * inputs.max_uses_web_search
     search_fee_upper_bound = (total_search_calls / 1000.0) * search_per_1k
@@ -137,27 +155,36 @@ def estimate_cost(inputs: EstimateInputs) -> EstimateOutputs:
         total_usd=(no_optim_token_cost + search_fee_upper_bound) * calibration,
     )
 
-    # --- B. cache-only ---
+    # --- B. cache-only (sync-realistic, no batch discount) ---
+    # D21: in sync mode at concurrency C, the first C calls all create
+    # their own cache copy. Only calls in subsequent waves read the cache.
     cache_only_token_cost = (
-        (cache_creation_tokens / 1_000_000.0) * in_per_mtok * cache_create_mult
-        + (cache_read_tokens / 1_000_000.0) * in_per_mtok * cache_read_mult
+        (sync_cache_creation_tokens / 1_000_000.0) * in_per_mtok * cache_create_mult
+        + (sync_cache_read_tokens / 1_000_000.0) * in_per_mtok * cache_read_mult
         + (non_cached_input_tokens / 1_000_000.0) * in_per_mtok
         + (output_tokens / 1_000_000.0) * out_per_mtok
     )
     scen_cache_only = ScenarioCost(
         name="cache-only",
-        input_tokens_total=non_cached_input_tokens + cache_creation_tokens,
+        input_tokens_total=non_cached_input_tokens + sync_cache_creation_tokens,
         output_tokens_total=output_tokens,
-        cache_read_tokens_total=cache_read_tokens,
-        cache_creation_tokens_total=cache_creation_tokens,
+        cache_read_tokens_total=sync_cache_read_tokens,
+        cache_creation_tokens_total=sync_cache_creation_tokens,
         token_cost_usd=cache_only_token_cost,
         search_fee_usd_upper_bound=search_fee_upper_bound,
         total_usd=(cache_only_token_cost + search_fee_upper_bound) * calibration,
     )
 
-    # --- C. cache+batch (production default) ---
-    cache_batch_token_cost = cache_only_token_cost * batch_disc
-    # Search fees do NOT get the batch discount (per Anthropic docs).
+    # --- C. cache+batch (production default — optimistic cache, 50% discount) ---
+    # In batch mode Anthropic processes intra-batch with cache reuse, so
+    # 1 cache_create + (N-1) cache_reads is realistic. Also gets the 50%
+    # batch discount on token costs (search fees are NOT discounted).
+    cache_batch_token_cost = (
+        (cache_creation_tokens / 1_000_000.0) * in_per_mtok * cache_create_mult
+        + (cache_read_tokens / 1_000_000.0) * in_per_mtok * cache_read_mult
+        + (non_cached_input_tokens / 1_000_000.0) * in_per_mtok
+        + (output_tokens / 1_000_000.0) * out_per_mtok
+    ) * batch_disc
     scen_cache_batch = ScenarioCost(
         name="cache+batch",
         input_tokens_total=non_cached_input_tokens + cache_creation_tokens,

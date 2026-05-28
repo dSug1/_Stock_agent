@@ -149,31 +149,39 @@ def test_outlier_clamp_on_miss():
     assert r.move_on_miss_pct_clamped == -90.0
 
 
-def test_momentum_modifier_only_tilts_expectancy_not_p_final():
+def test_momentum_modifier_is_no_op_after_D26():
+    """D26 — m_momentum is dropped (always 1.0); momentum_score is already
+    part of M6's composite_score, double-using here was redundant.
+    Setting momentum_score has no effect on p_final, e_move_pct, or
+    expectancy_pct."""
     r_hot = compute_expectancy(**_neutral_inputs(momentum_score=100.0))
     r_cold = compute_expectancy(**_neutral_inputs(momentum_score=0.0))
-    # p_final identical (momentum doesn't touch probability)
     assert r_hot.p_final == r_cold.p_final
-    # But expectancy scales with momentum modifier
-    assert r_hot.m_momentum == 1.05
-    assert r_cold.m_momentum == 0.95
-    assert r_hot.expectancy_pct > r_cold.expectancy_pct
+    assert r_hot.m_momentum == 1.0
+    assert r_cold.m_momentum == 0.0 or r_cold.m_momentum == 1.0  # forced to 1.0
+    assert r_hot.m_momentum == 1.0 and r_cold.m_momentum == 1.0
+    assert r_hot.expectancy_pct == r_cold.expectancy_pct
+    # D26 — expectancy_pct is now an alias for e_move_pct.
+    assert r_hot.expectancy_pct == r_hot.e_move_pct
 
 
-def test_expectancy_per_week_normalisation():
+def test_expectancy_per_week_from_e_move_after_D26():
+    """D26 — expectancy_per_week = E[move] / max(weeks, 1)."""
     r1 = compute_expectancy(**_neutral_inputs(weeks_to_catalyst=4))
     r2 = compute_expectancy(**_neutral_inputs(weeks_to_catalyst=12))
-    assert abs(r1.expectancy_pct - r2.expectancy_pct) < 1e-9
-    assert abs(r1.expectancy_per_week_pct * 4 - r1.expectancy_pct) < 1e-9
-    assert abs(r2.expectancy_per_week_pct * 12 - r2.expectancy_pct) < 1e-9
-    # 4-week ranks above 12-week for same expectancy_pct.
+    # E[move] is the same — weeks doesn't change it
+    assert abs(r1.e_move_pct - r2.e_move_pct) < 1e-9
+    # expectancy_per_week = E[move] / weeks
+    assert abs(r1.expectancy_per_week_pct * 4 - r1.e_move_pct) < 1e-9
+    assert abs(r2.expectancy_per_week_pct * 12 - r2.e_move_pct) < 1e-9
+    # Tighter window → higher expectancy/week for same E[move].
     assert r1.expectancy_per_week_pct > r2.expectancy_per_week_pct
 
 
 def test_zero_weeks_floored_to_one():
     r = compute_expectancy(**_neutral_inputs(weeks_to_catalyst=0))
     assert r.weeks_to_catalyst == 0      # echoed in audit
-    assert r.expectancy_per_week_pct == r.expectancy_pct  # divisor floored to 1
+    assert r.expectancy_per_week_pct == r.e_move_pct  # divisor floored to 1
 
 
 # ─────────────────────── weeks_between helper ─────────────────────────

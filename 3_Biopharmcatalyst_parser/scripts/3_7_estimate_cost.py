@@ -33,9 +33,10 @@ from module_7 import (                                                     # noq
     db_connect as deep_dives_connect,
     default_config_path,
     estimate_cost,
+    group_candidates_by_drug,
     load_cacheable_prefix,
     load_module_7_config,
-    partition_feed_by_cache,
+    partition_drug_groups_by_cache,
     render_cost_html,
 )
 from module_7.context_pack import build_context_pack, fetch_hard_pass_candidates  # noqa: E402
@@ -52,6 +53,8 @@ def main() -> int:
                       help="Comma-separated tickers (still requires hard_pass=1)")
     parser.add_argument("--force-refresh", action="store_true",
                         help="Estimate as if no cache hits — every candidate dispatches")
+    parser.add_argument("--defined-only", action="store_true",
+                        help="Restrict to catalysts with defined timing (HTML 'Defined timing' tab)")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -72,7 +75,8 @@ def main() -> int:
     explicit = ([t.strip().upper() for t in args.tickers.split(",") if t.strip()]
                 if args.tickers else None)
     candidates = fetch_hard_pass_candidates(args.biotech_db,
-                                            explicit_tickers=explicit)
+                                            explicit_tickers=explicit,
+                                            defined_timing_only=args.defined_only)
     if not candidates:
         print("[3_7_estimate_cost] no hard-pass candidates in feed; nothing to estimate.")
         return 0
@@ -93,27 +97,38 @@ def main() -> int:
             continue
         packs.append((cand, pack))
 
-    # Apply identity cache filter.
+    # D23 — group by (ticker, drug), then drug-level cache filter.
+    raw_candidates = [{**cand,
+                       "catalyst_date_iso": cand.get("catalyst_date_iso")}
+                      for cand, _ in packs]
+    drug_groups = group_candidates_by_drug(raw_candidates)
     with deep_dives_connect() as dd_conn:
-        to_dispatch, skipped = partition_feed_by_cache(
+        groups_to_dispatch, groups_skipped = partition_drug_groups_by_cache(
             dd_conn,
-            candidates=[{**cand,
-                         "catalyst_date_iso": cand.get("catalyst_date_iso")}
-                        for cand, _ in packs],
+            groups=drug_groups,
             current_prompt_version=cfg.prompt_version,
             force_refresh=args.force_refresh,
         )
 
-    n_dispatch = len(to_dispatch)
-    n_skipped = len(skipped)
-    print(f"[3_7_estimate_cost] cache: {n_skipped} skipped, {n_dispatch} to dispatch")
+    n_candidates = len(packs)
+    n_groups = len(drug_groups)
+    n_dispatch = len(groups_to_dispatch)
+    n_skipped = len(groups_skipped)
+    n_rows = sum(len(g["members"]) for g in groups_to_dispatch)
+    dedup_saved = n_candidates - n_groups
+    print(f"[3_7_estimate_cost] candidates: {n_candidates}  "
+          f"drug-groups: {n_groups}  "
+          f"to dispatch: {n_dispatch}  "
+          f"cache-hit skipped: {n_skipped}")
+    if dedup_saved > 0:
+        print(f"[3_7_estimate_cost] D23 drug-dedup: {dedup_saved} fewer API call(s) "
+              f"than catalyst-count would suggest ({n_groups} groups across {n_candidates} catalysts)")
     if args.force_refresh:
-        print(f"[3_7_estimate_cost] --force-refresh: all candidates dispatch")
+        print(f"[3_7_estimate_cost] --force-refresh: all drug-groups dispatch")
     elif n_skipped > 0:
-        # Show breakdown of skip reasons.
         by_reason: dict[str, int] = {}
-        for c in skipped:
-            r = c["cache_lookup"].reason
+        for g in groups_skipped:
+            r = g["cache_lookup"].reason
             by_reason[r] = by_reason.get(r, 0) + 1
         for r, n in sorted(by_reason.items()):
             print(f"  cache hit reason={r}: {n}")
@@ -144,13 +159,16 @@ def main() -> int:
         max_output_tokens=cfg.max_output_tokens,
         max_uses_web_search=cfg.web_search.max_uses,
         pricing=cfg.pricing.model_dump(),
+        sync_concurrency=cfg.dispatch.sync_concurrency,
     ))
 
     # Render the HTML report.
     gates = {
         "n_hard_pass_candidates": len(candidates),
+        "n_drug_groups":          n_groups,
         "n_skipped_cache_hits":   n_skipped,
-        "n_to_dispatch":          n_dispatch,
+        "n_to_dispatch_api_calls": n_dispatch,
+        "n_rows_to_populate":     n_rows,
         "explicit_tickers":       explicit or "rolling-view hard-pass",
         "force_refresh":          args.force_refresh,
         "cost_ceiling_usd":       cfg.cost_ceiling_usd,

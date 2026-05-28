@@ -35,9 +35,16 @@ from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve()
 PROJECT_ROOT = HERE.parents[1]
+SRC = PROJECT_ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 OUTPUTS = PROJECT_ROOT / "Outputs"
 DEEP_DIVES_DB = PROJECT_ROOT / "data" / "claude_deep_dives.db"
 SELECTION_JSON = OUTPUTS / "catalyst_scores_selection.json"
+
+# D25 — live-price refresh.
+from module_7.live_price import get_live_prices                  # noqa: E402
 
 
 def _load_selection() -> dict:
@@ -86,6 +93,25 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/selection":
             return self._json(200, _load_selection())
+        if parsed.path == "/api/live_price":
+            # D25 — yfinance live prices, 60s TTL.
+            qs = parse_qs(parsed.query or "")
+            tickers_raw = (qs.get("tickers") or [""])[0]
+            tickers = [t.strip().upper()
+                       for t in tickers_raw.split(",") if t.strip()]
+            if not tickers:
+                return self._json(400, {"error": "missing ?tickers=AAA,BBB"})
+            force = (qs.get("force") or ["0"])[0] in ("1", "true")
+            results = get_live_prices(tickers, force=force)
+            payload = {
+                "prices": {t: {
+                    "price_usd":      lp.price_usd,
+                    "fetched_at_utc": lp.fetched_at_utc,
+                    "source":         lp.source,
+                    "error":          lp.error,
+                } for t, lp in results.items()},
+            }
+            return self._json(200, payload)
         if parsed.path == "/api/raw_text":
             qs = parse_qs(parsed.query or "")
             try:

@@ -1157,3 +1157,291 @@ The 50% prompt-size growth costs **$0.02** thanks to the 10% cache-read multipli
 2. **All new HARD RULES (#11-15) are "warnings"** not parse-fail rejections — mirrors 2_Funds_parser's pattern of using soft validation for content rules that can't be cleanly machine-checked. The model is asked to comply; failures get flagged for human review via the rendered HTML. Strict parse-time enforcement (counts of inline citations, etc.) would over-fit on prompt phrasing.
 
 ---
+
+## D21 — M7 cost-formula audit + recalibration after first real invoice (2026-05-28)
+
+**Trigger:** First production M7 dispatch (5 tickers DTIL/NTHI/ALT/CGEN/INMB, sync mode, concurrency=8). Script reported `$0.36 paid`; real Anthropic invoice was `$3.01`. Under-report by **8.4×**.
+
+**Root causes (three stacked bugs):**
+
+1. **`non_cached_input` subtraction in `scripts/3_7_deep_dive.py::_usd_cost_per_call`.** Formula was `non_cached_input = max(0, input_tokens - cache_read - cache_creation)`. Anthropic's SDK reports `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` as **three disjoint buckets** — subtracting clamps to 0 and silently drops the input-token cost. Fixed: use `input_tokens` directly.
+2. **`cost_calibration_factor: 0.10`** inherited from 2_Funds_parser M6's `project_anthropic_cost_calibration` memory. That calibration was tuned against M6's invoices, whose cost profile (no web_search, mostly cached input) is materially different from M7's (web_search + sync-concurrent cache-write storms + heavier output). Re-derived empirically: `$3.01 actual / $3.74 raw-formula = 0.805`. New value: **`0.80`**. After applying, fixed formula computes **$2.99 vs $3.01 actual — within 0.7%.** Locked by `test_cost_calibration_factor_locked`.
+3. **"USD if list-price"** post-run line passed `cache_read=0, cache_creation=0` to the same formula, producing a meaningless "no-cache-cost-but-also-no-cache-tokens" number. With the formula bug, it printed $0.29 — *lower* than the buggy $0.36 paid number. That impossibility (caching cannot make things more expensive when both are computed honestly) was the visible smoke. Fixed: pass `input = input + cache_read + cache_creation` to compute the actual "what you'd pay if you hadn't cached at all" cost. Now meaningfully *higher* than the cached cost.
+
+**Bonus structural bug:** the pre-flight estimator (`cost_estimate.py`) modeled `cache-only` as the optimistic `1 cache_create + (N-1) cache_reads`. That's the *batch-mode* reality, not sync. In sync mode at concurrency C, the first `min(N, C)` calls all dispatch in parallel and each writes its own cache copy (no call has finished by the time the others start). Today's run: 5 parallel calls → 283,951 cache_create tokens (~6× what the estimator predicted). Fixed: `EstimateInputs.sync_concurrency` is now a passthrough; the `cache-only` scenario computes `cache_create = prefix × min(N, C)` + `cache_read = prefix × max(0, N - C)`. The `cache+batch` scenario keeps the optimistic model (batch intra-request cache sharing on Anthropic's side is the documented behavior).
+
+**Config changes — cost-minimising default:**
+
+- `dispatch.mode: batch` (unchanged — already the default; was overridden to `sync` for this calibration run).
+- `dispatch.sync_concurrency: 8 → 1`. Defensive: anyone passing `--mode sync` now gets sequential dispatch, which lets the prompt cache actually flow forward (first writes, rest read at 0.10× rate). Tradeoff is wall time but spec rule: speed not optimised.
+- `pricing.cost_calibration_factor: 0.10 → 0.80`. See above.
+- `pricing.cache_creation_multiplier: 0.10` kept. Note: docs quote 1.25× input rate for ephemeral cache writes, but our 0.10 empirical value (carried from 2_Funds_parser D44) tracks reality much better — Anthropic appears to dedup/discount concurrent cache writes well below docs rate. The calibration factor 0.80 absorbs residual variance.
+
+**Code changes:**
+
+- `config/module_7.yaml`: above two pricing values + `sync_concurrency: 1` + explanatory comments referencing this D21.
+- `src/module_7/cost_estimate.py`: added `sync_concurrency` field to `EstimateInputs`; `cache-only` scenario now models sync-concurrent reality; `cache+batch` unchanged (batch optimistic model is still right).
+- `scripts/3_7_deep_dive.py::_usd_cost_per_call`: removed `non_cached_input` subtraction; "USD if no caching" line now passes the right inputs (was "USD if list-price").
+- `scripts/3_7_deep_dive.py` mode-aware ceiling check: was always comparing against `scenarios[2].total_usd` (cache+batch) regardless of dispatch mode, under-reporting sync cost by ~2×. Now picks `scenarios[1]` for sync, `scenarios[2]` for batch.
+- `scripts/3_7_estimate_cost.py` + `scripts/3_7_deep_dive.py`: pass `sync_concurrency=cfg.dispatch.sync_concurrency` through to the estimator.
+- `tests/test_module7_config.py::test_cost_calibration_factor_locked` (renamed from `_is_0_10`): asserts the new 0.80 and reuses the test as the change-gate.
+- `tests/test_module7_cost_estimate.py`: two new tests for sync_concurrency-aware cache modeling.
+
+**Validation:**
+
+- 430 tests passing (was 428).
+- Formula vs reality: $2.99 calibrated vs $3.01 actual (0.7% off).
+- Pre-flight estimate on the same 5 tickers under new config: batch=$2.79, sync (concurrency=1)=$5.19, no-optim=$5.81. Batch is 46% cheaper than sync-sequential for this workload because of the 50% token discount.
+
+**Future cost-watch:**
+
+- After the first batch-mode invoice lands, re-tune `cost_calibration_factor` against it; the 0.80 was derived from sync-mode billing only. Batch mode may have a slightly different ratio because of how Anthropic prices cache_creation inside a batch.
+- The unit tests pin the calibration value — bumping it requires editing the locking test, which forces a deliberate decisions.md entry (this is the same change-gate pattern used elsewhere in the codebase).
+
+---
+
+## D22 — Recalibrated calibration_factor 0.80 → 0.10 after first batch-mode invoice (2026-05-28)
+
+**Trigger:** First batch-mode dispatch (run_id=2: MBX/CMPX/TENX/ACRS/KURA, 5 catalysts, 4.6 min wall). Script (with D21's 0.80 calibration) reported `$1.72 estimated cost`; the real Anthropic invoice was `$0.20`. The formula now over-reports by ~8.6× for batch mode — exactly the inverse of D21's under-report problem.
+
+**Reconciliation (with D21's `non_cached_input` bug already fixed):**
+
+| Mode | Raw-formula on observed tokens | Actual invoice | True calibration |
+|---|---:|---:|---:|
+| sync (run_id=1) | $3.74 | $3.01 | 0.80 |
+| **batch (run_id=2)** | **$2.15** | **$0.20** | **0.09** |
+
+Batch mode is **~10× cheaper** than the docs-rate formula predicts — far beyond the 50% `batch_discount` already in the formula. Two amplifying factors:
+
+1. Anthropic's batch billing for cache_creation_input_tokens appears to be deeply discounted (the docs-quoted 1.25× input rate is wrong for batch).
+2. Web-search fees inside a batch may also be discounted below the documented `$10/1k` rate (we'd see this only in larger batches).
+
+**Decision:** revert `cost_calibration_factor` to `0.10` (the value originally inherited from 2_Funds_parser M6, which runs batch mode and has been calibrated against many invoices). D21's 0.80 was *correct for sync* but wrong for batch.
+
+**Single-factor vs mode-aware:** considered splitting into `cost_calibration_factor_sync` + `cost_calibration_factor_batch` (0.80 / 0.10). Rejected because:
+
+- Batch is the production mode (D21 already locked `dispatch.mode: batch` as the cheapest default).
+- Sync is only used for ad-hoc calibration runs; over-estimating sync ~8× is **safe** (you'll see an inflated forecast that warns you off sync mode anyway).
+- A single field is one less knob to misconfigure.
+
+The single 0.10 stays. Sync-mode pre-dispatch forecasts are conservative. Documented in [config/module_7.yaml](../config/module_7.yaml).
+
+**Files touched:**
+
+- `config/module_7.yaml` — calibration value + comment block explaining the history (was 0.10 → D21 → 0.80 → D22 → 0.10).
+- `tests/test_module7_config.py::test_cost_calibration_factor_locked` — change-gate assertion updated.
+
+**Validation:**
+
+- 430 tests passing (unchanged from D21 — only one assertion-value change).
+- Re-run cost estimate on the same 5 tickers gives `$0.42 batch` (close to actual $0.20 — still conservative because the estimator assumes max_output_tokens × N).
+
+---
+
+## D23 — Drug-level dispatch dedup: one API call per (ticker, drug), N rows per result (2026-05-28)
+
+**Trigger:** user requested "when a drug has several catalysts, do the API call only once and report the result in all the rows where the drug is listed", with the explicit guard "this rule shall not interfere with the previous rule (run API call if the catalyst has changed)".
+
+The previous rule is D17's catalyst-identity cache. D23 lifts the dispatch unit from `(ticker, drug, nct_number, next_catalyst_type)` (the deep_dives PK) to `(ticker, drug)` — but the cache invariant ("re-run if the catalyst changed") is preserved at drug granularity because the new `drug_signature` hashes over the FULL list of catalyst-tuples for the drug.
+
+**What dedups now:** when a single (ticker, drug) appears across N hard-pass catalyst rows (different `next_catalyst_type` and/or `nct_number`), the dispatcher issues **ONE** Anthropic call. The response is then written N times to `deep_dives` — one row per catalyst PK — with:
+
+- The **same** Claude output fields (`p_clinical`, `expected_move_on_hit_pct`, `expected_move_on_miss_pct`, `rnpv_*`, all `_json` blocks, `thesis_summary`, etc.).
+- **Per-row** Python-side expectancy (`weeks_to_catalyst_mid`, `m_insider`, `m_funds`, `m_momentum`, `p_final`, `e_move_pct`, `expectancy_pct`, `expectancy_per_week_pct`) — each row's `catalyst_date_iso` and M6 scores can differ.
+- The **anchor row** (chosen as the earliest-dated catalyst, then lex by `(nct_number, catalyst_type)`) carries the full `usd_cost` + token counts; copy rows carry `0` / `NULL` and identify the anchor via `anchor_nct_number` + `anchor_next_catalyst_type`. This keeps `SUM(usd_cost)` accurate across a run.
+
+**Drug signature shape (preserves D17 invariant):**
+
+```
+drug_signature = lower_strip(drug)
+               | lower_strip(stage)
+               | sorted([(lower_strip(catalyst_type), catalyst_date_iso) for c in catalysts])
+                 joined "ct1~cd1,ct2~cd2,..."
+```
+
+A change to ANY of {drug, stage, any catalyst's type, any catalyst's date, presence/absence of any catalyst} produces a new signature → cache miss → re-dispatch. The D17 user-locked invariant is preserved.
+
+**Schema (additive migration):**
+
+- `deep_dives.drug_signature` — D23 cache key; NULL on legacy rows.
+- `deep_dives.anchor_nct_number` + `anchor_next_catalyst_type` — non-NULL on copy rows; NULL on the anchor row itself. Renderers can distinguish anchor vs copy.
+- `deep_dives.catalyst_signature` kept for backward compat (carries D17 per-catalyst sig in addition to drug_signature).
+- `deep_dive_runs.gate_config_json` now carries a `request_index` block mapping custom_id → {actual_ticker, drug, members, anchor_nct_number, anchor_next_catalyst_type, drug_signature}. The `--resume-run` path reads this to rebuild writeback context without re-querying biotech.db.
+
+**Anthropic `custom_id`:** previously `ticker` directly. Now `f"{ticker}__{sha8(drug)}"` so a single ticker with multiple drugs (which was previously broken — would have hit Anthropic's duplicate-custom_id error) now works correctly.
+
+**Pack augmentation:** the anchor's pack carries a `catalyst.sibling_catalysts` list with the other catalysts for the drug (type + date) so Claude can reason about the full event schedule when producing a single deep-dive applicable to all of them.
+
+**Known limitation — exact-string drug match.** D23 dedups when the BPC `drug` field matches verbatim. The current BPC data sometimes stores the same molecule under different drug strings depending on the trial — e.g., KURA's ziftomenib appears as `"Ziftomenib (in combination with SoC...)"` and `"ziftomenib in combination with gilteritinib (KOMET-008)"`. These are the same molecule but different strings → D23 treats them as separate drugs → no dedup. To collapse molecule-level (e.g., reduce KURA's 2 calls to 1), a future enhancement would need a drug-name normalisation pass (strip parenthetical, alias lookup, or LLM-based canonicalisation). Not in scope here.
+
+**ACRS contrast (where dedup works):** ACRS has two hard-pass catalysts both with `drug = "ATI-052"` (`Initial Data` + `Topline Data`, both undefined-timing) → D23 collapses to 1 API call, 2 deep_dives rows. Bosakitug (ATI-045) is a different molecule → separate call. So ACRS goes from 3 catalysts → 2 API calls (down from 3 pre-D23).
+
+**Files touched:**
+
+- `src/module_7/cache.py` — `compute_drug_signature`, `lookup_drug_cache`, `group_candidates_by_drug`, `partition_drug_groups_by_cache`.
+- `src/module_7/deep_dives_db.py` — additive migration for 3 new columns + updated `_DEEP_DIVE_COLS`.
+- `src/module_7/context_pack.py` — `augment_pack_with_drug_siblings`.
+- `src/module_7/__init__.py` — re-exports.
+- `scripts/3_7_deep_dive.py` — main flow now: group → drug-cache partition → one API per group → expanded writeback (N rows per result). Custom_id = `ticker__sha8(drug)`. Resume path reconstructs members from `gate_config_json.request_index`.
+- `scripts/3_7_estimate_cost.py` — group + drug-partition before counting dispatches; reports `catalysts → groups → API calls` so the user can see how many dispatches the dedup saved.
+- `tests/test_module7_cache.py` — 9 new tests covering signature shape (order-insensitive, change-detection on every input), drug-cache lookup (hit/miss reasons, legacy-NULL handling), grouping helper.
+
+**Cost impact (estimated):**
+
+- Full 69-catalyst rolling-view feed pre-D23: 69 API calls.
+- Post-D23: depends on BPC-string overlap. Within ACRS alone, 3 catalysts → 2 calls. Across the full feed, estimated 5-15 API-call savings if BPC drug strings overlap as expected.
+- Combined with batch-mode default (D21) and recalibrated formula (D22), the expected full-feed batch cost lands ~$0.50-0.80 (vs the pre-fixes $4.80 estimate).
+
+**Validation:**
+
+- 439 tests passing (was 430; +9 new D23 tests, no regressions).
+- Cost-estimator output explicitly logs the dedup savings: `D23 drug-dedup: N fewer API call(s) than catalyst-count would suggest`.
+- Pre-flight on KURA+ACRS+ALXO: 6 catalysts → 5 groups → 5 API calls. ACRS-ATI-052 collapse confirmed.
+
+---
+
+## D24 — Cache-fields backfill for pre-D23 deep_dives rows (2026-05-28)
+
+**Trigger:** user asked "verify that the 10 catalysts would not trigger a call to Claude API". The 10 prior deep_dives rows (run_id=1 sync + run_id=2 batch) were written before D23's schema migration added `drug_signature` → all 10 had `drug_signature IS NULL` → `lookup_drug_cache` returned `no_prior_row` → all 10 would re-dispatch. Plus config edits (D22 + D23) shifted `prompt_version` SHA-7 to `m7-v2:fcae987`, while the existing rows carried `m7-v2:073779c` (run 1) and `m7-v2:e43c8b3` (run 2) — independent cache-miss cause.
+
+**Decision:** ship a one-shot migration `scripts/3_7_backfill_cache_fields.py` that:
+
+1. Reads every successful `deep_dives` row (`p_clinical IS NOT NULL`).
+2. Queries biotech.db for the full catalyst-tuple list of the row's `(snapshot_date, ticker, drug)` — these are the inputs to `compute_drug_signature`.
+3. UPDATEs `drug_signature` to the computed value AND `prompt_version` to the current YAML SHA-7.
+4. (D25 — see below) Also COALESCE-backfills `price_at_api_time_usd` from `fundamentals.db.financials.last_price_usd`, then derives `target_price_on_hit_usd` + `_on_miss_usd` from the stored move-percentages.
+5. Skips rows that are already current. `--dry-run` previews.
+
+**Why bump prompt_version?** Strictly speaking, D17 says config edits invalidate the cache wholesale — but D22's change was *only* the calibration factor (no Claude-side semantics) and D23 added dedup logic (no Claude-side semantics either). Forcing 10 re-dispatches for those edits is wasteful. The migration treats the existing rows as still-valid Claude output under the current YAML hash.
+
+**Verification post-migration:**
+
+```
+[3_7_estimate_cost] candidates: 13  drug-groups: 12  to dispatch: 2  cache-hit skipped: 10
+[3_7_estimate_cost] D23 drug-dedup: 1 fewer API call(s) than catalyst-count would suggest
+  cache hit reason=identity_match: 10
+```
+
+10 cache-hits (exactly the original 10 from runs 1+2). The 2 remaining dispatches are *new* hard-pass catalysts not in the prior runs (ACRS ATI-052 × 2, KURA KOMET-008).
+
+**Re-run after this:** if no BPC drop and no config edit → 0 API calls, $0 spent. As intended.
+
+---
+
+## D25 — Intraday live-price refresh (yfinance) + price-anchored target $ for interactive recompute (2026-05-28)
+
+**Trigger:** user observed that the HTML's "Market cap / price" column showed BPC's docx-time price (stale by days) instead of a current quote, and asked for the `share_price_appreciation` + `expectancy/time` cells to recompute intraday as the live price moves. Also wanted Claude to see the latest share price when scoring (instead of the stale M6.5 snapshot), and to show the reference price Claude analyzed at, above E[move] in the deep-dive panel.
+
+**Architecture:**
+
+1. **Server-side yfinance fetcher with TTL.** New `src/module_7/live_price.py` — `get_live_prices(tickers, ttl_s=60, force=False)`. Tries `yf.Ticker(t).fast_info` first (cheapest), falls back to `yf.download(period='1d')` batched. Module-level dict cache keyed on ticker, 60s TTL. Thread-safe (lock).
+
+2. **HTTP endpoint.** `scripts/3_7_serve_selection.py` gains `/api/live_price?tickers=A,B,C` returning `{"prices": {ticker: {price_usd, fetched_at_utc, source, error}}}`. The browser polls this every 60s.
+
+3. **Dispatcher uses live prices.** Before pack-building, `scripts/3_7_deep_dive.py` calls `get_live_prices(candidate_tickers, force=True)`. The fetched prices overlay `pack["market_snapshot"]["last_price_usd"]` and the FDSC market cap is recomputed. Claude therefore scores against the CURRENT price (not the day-or-week-old M6.5 snapshot).
+
+4. **Target prices stored at API time.** Three new columns on `deep_dives`:
+    - `price_at_api_time_usd` — the live price Claude saw.
+    - `target_price_on_hit_usd` = `price × (1 + expected_move_on_hit_pct / 100)`.
+    - `target_price_on_miss_usd` = `price × (1 + expected_move_on_miss_pct / 100)`.
+
+    These are absolute dollar targets anchored to the analysis-time price. They are STATIC after the dispatch. The JS does the live recompute against current_price.
+
+5. **JS recompute math** (in `scripts/3_6_render_scores.py::JS`):
+    ```javascript
+    moveHit_pct  = (target_hit_$  - current_$) / current_$ × 100
+    moveMiss_pct = (target_miss_$ - current_$) / current_$ × 100
+    E[move]_pct  = p_final · moveHit_pct + (1 − p_final) · moveMiss_pct
+    expectancy   = E[move] · m_momentum
+    exp_per_wk   = expectancy / max(weeks_to_catalyst, 1)
+    ```
+    `p_final`, `m_momentum`, and `weeks_to_catalyst` are stable between M6 runs; ONLY current_$ refreshes intraday, and only the move %'s + downstream cells refresh. `p_clinical`, `rNPV`, `mgmt_track_record`, the rNPV-by-indication table, drug_profile — all stay frozen (they don't depend on share price).
+
+6. **JS polling.** On `init()`, kick off `pollLivePrices()` and `setInterval(pollLivePrices, 60000)`. Skips when `window.location.protocol === 'file:'` (no server available) and outside `13:00Z-21:30Z Mon-Fri` (conservative US-market window). Cells recomputed from live price get a `●` indicator (`.live-tag`). A header stamp shows last-fetch timestamp.
+
+7. **HTML deep-dive panel** now shows, above E[move]:
+    - **Reference price (Claude analyzed at):** `$X.XX  ← Claude's anchor`
+    - **Live price (now):** `$Y.YY ●`
+    - **Target on hit ($):** `$Z (= ref × (1 + hit%))`
+    - **Target on miss ($):** `$W (= ref × (1 + miss%))`
+    - **Move on hit % (vs live):** recomputed pct
+    - **Move on miss % (vs live):** recomputed pct
+    - Then E[move], expectancy, expectancy/week — all live-recomputed.
+
+8. **Render-only entrypoint.** New `run_3_Biopharm_render.bat`: re-renders the HTML from cached deep-dive data + starts the local HTTP server (port 7034). No pipeline run, no Anthropic call. Mirrors the 0_Renderer pattern of "lightweight live view of cached data".
+
+9. **Market-cap intraday recompute.** Both the table row and the expanded-panel "Market cap / price" line now show `live_price × (BPC mcap / BPC price)` — scaling the static mcap by the live/BPC price ratio so we don't need FDSC shares in the row payload.
+
+**Backfill** (D24 script extended to also cover D25 fields): all 10 existing rows now carry `price_at_api_time_usd` (from `fundamentals.db.financials.last_price_usd` at M6.5 time) and derived target prices. Pre-flight estimator confirms intent to dispatch only NEW catalysts; the 10 prior rows fully populate the HTML with live-recomputable cells.
+
+**Files touched (this decision):**
+
+- New `src/module_7/live_price.py` (~150 LOC).
+- New `run_3_Biopharm_render.bat` (~30 lines).
+- `src/module_7/deep_dives_db.py` — additive migration for `price_at_api_time_usd`, `target_price_on_hit_usd`, `target_price_on_miss_usd`; `_DEEP_DIVE_COLS` updated.
+- `src/module_7/render_join.py` — includes the 3 new columns in the sidecar payload.
+- `scripts/3_7_serve_selection.py` — `/api/live_price` endpoint.
+- `scripts/3_7_deep_dive.py` — `get_live_prices(force=True)` call, pack-overlay, target-$ computation at write-back.
+- `scripts/3_7_backfill_cache_fields.py` — extended to backfill the 3 new fields too.
+- `scripts/3_6_render_scores.py` — JS additions: `livePrices` map, `currentPrice()`, `recomputeFromLivePrice()`, `pollLivePrices()`, 60s setInterval, reference-price + target-$ rows in the deep-dive panel, live mcap, CSS for `.live-tag`.
+
+**Anthropic-pack semantic note:** Claude now sees `market_snapshot.last_price_usd` = live yfinance price (with `price_source: "yfinance-live (D25)"`). Claude's `expected_move_on_*_pct` outputs are implicitly anchored to that price. The target $ stored on the deep_dive row equals `live_price × (1 + move_pct/100)`, so JS-side recompute against future intraday prices is internally consistent.
+
+**Performance:** 60s poll is gentler than 0_Renderer's 6s (which drives chart bars). The in-mem TTL collapses multiple browser tabs/refreshes to one yfinance call per minute. Per `feedback_swr_pattern`: render cached data instantly, refresh in background.
+
+**Trade-off (documented for future revisit):**
+
+- ~~The `m_momentum` modifier is NOT live-recomputed~~ — superseded by D26: m_momentum is dropped entirely.
+- BPC's stored `r.price` field is no longer surfaced when the live price is available — but it remains in catalyst_snapshots for audit.
+- Implies the HTML must be served via the local HTTP server to get live data (file:// view shows the cached snapshot from `data.js`).
+
+---
+
+## D26 — Drop m_momentum from the expectancy formula; expectancy/week derives directly from E[move] (2026-05-28)
+
+**Trigger:** user observation — "momentum_score is already used in the composite score and I do not want to use momentum twice. In any case, m_momentum is small and does not meaningfully impact E[move]."
+
+**The redundancy:** M6's `composite_score` is `0.35·insider + 0.35·momentum + 0.30·funds`. M6 uses momentum_score to drive the hard_pass / ranking gate. M7 was *also* using the same momentum_score to scale `expectancy_pct = e_move_pct × m_momentum`, where `m_momentum` is a linear remap of momentum_score onto `[0.95, 1.05]`. Double-counting.
+
+**The impact:** the `[0.95, 1.05]` band tilts expectancy by ±5% max. On the 10-row backfill, the median shift was 3.7%; max single-row shift was 5%. Within the noise of the rest of the M7 estimate; not worth the double-counting.
+
+**Decision:** drop `m_momentum` from the formula. The new (simpler) chain:
+
+```
+m_insider  = remap(insider_score      → [0.85, 1.15])
+m_funds    = remap(fund_accum_score    → [0.85, 1.15])
+p_final    = clamp(p_clinical · m_insider · m_funds, 0.05, 0.95)
+E[move]_pct      = p_final · move_on_hit_pct + (1 - p_final) · move_on_miss_pct
+expectancy/week  = E[move]_pct / max(weeks_to_catalyst, 1)
+```
+
+`m_momentum` no longer multiplies. `expectancy_pct` (was `E[move] · m_momentum`) collapses to just `E[move]` and is kept as an audit copy only — the display now shows just E[move] and expectancy/week.
+
+**Schema preservation:** the `deep_dives.m_momentum`, `momentum_score_input`, and `expectancy_pct` columns stay (additive-only migration policy, D17 invariant). `m_momentum` is hard-coded to `1.0`; `expectancy_pct = e_move_pct`. Legacy queries / tests that read these fields still get sensible values.
+
+**`expectancy / time` vs `expectancy / week`:** user confirmation that these refer to the same `expectancy_per_week_pct` field. The column was already weekly under the hood; the "/ time" header label was just imprecise wording. Renamed to `Expectancy / week`.
+
+**JS recompute (D25 path) updated:** `recomputeFromLivePrice` no longer multiplies by `m_momentum`. `expectancy_per_week_pct = E[move] / max(weeks, 1)` directly. Returned object dropped its `expectancy_pct` key.
+
+**HTML expand-panel display cleaned:** removed two rows from the deep-dive kv panel:
+- the `m_momentum` row (no longer used)
+- the standalone `expectancy = E[move] · m_momentum` row (= E[move] now, redundant)
+
+Surviving rows in the panel walk through: p_clinical → m_insider → m_funds → p_final → reference price (Claude) → live price → target on hit/miss ($) → move on hit/miss (% vs live) → **E[move]** → weeks_to_catalyst → **expectancy / week = E[move] / weeks**. Linear, no double-counting, fully live-recomputed where price is available.
+
+**Files touched:**
+
+- `src/module_7/scoring.py` — `compute_expectancy`: `m_mom = 1.0`, `expectancy = e_move` (no momentum multiplication), `expectancy_per_week = e_move / max(weeks, 1)`. Docstring + formula header updated to reflect D26.
+- `scripts/3_6_render_scores.py`:
+  - Table header `"Expectancy / time"` → `"Expectancy / week"`; tooltip updated.
+  - "Share price appreciation" column tooltip dropped the `· m_momentum` clause.
+  - JS `recomputeFromLivePrice` simplified — no m_momentum lookup.
+  - Expand-panel removed `m_momentum` + `expectancy` rows.
+- `scripts/3_7_backfill_cache_fields.py` — extended to normalize the 10 existing rows: `m_momentum = 1.0`, `expectancy_pct = e_move_pct`, `expectancy_per_week_pct = e_move_pct / max(1, weeks)`. Shifts were 0-5% per row, all under noise.
+- `tests/test_module7_scoring.py` — `test_momentum_modifier_only_tilts_expectancy_not_p_final` rewritten to `test_momentum_modifier_is_no_op_after_D26` (assertions inverted: hot/cold both give same expectancy). `test_expectancy_per_week_normalisation` renamed `test_expectancy_per_week_from_e_move_after_D26` (asserts `exp/wk × weeks == e_move`).
+
+**Validation:** 439 tests passing (unchanged count; 2 scoring tests rewritten with same assertion intent). Template refreshed 48 → 48 KB (minor); sidecar refreshed.
+
+**Future cleanup (low priority):** the `m_momentum`, `momentum_score_input`, and `expectancy_pct` DB columns are now dead-weight. Leaving them in place per the additive-only schema discipline (D17). If a future cleanup pass removes them, this entry is the rationale.
+
+---

@@ -160,6 +160,29 @@ _ADDITIVE_MIGRATIONS: list[tuple[str, str, str]] = [
     # D17 — catalyst-identity cache. Computed at write time so cache lookup
     # on a subsequent run only needs an equality check.
     ("deep_dives", "catalyst_signature", "TEXT"),
+    # D23 — drug-level signature. Hash over (drug, stage, sorted list of
+    # (catalyst_type, catalyst_date) tuples for every catalyst of this drug
+    # in the same snapshot). Multiple deep_dives rows that share the same
+    # (ticker, drug) at the same run will carry the SAME drug_signature and
+    # SAME Claude output — the API call was issued once per drug, the
+    # result was replicated across rows. NULL for legacy rows.
+    ("deep_dives", "drug_signature", "TEXT"),
+    # D23 — when one Anthropic call's result is replicated across several
+    # (catalyst-PK + run_id) rows, every row carries the same response_id
+    # already. This column records the *anchor* catalyst whose pack was
+    # actually sent to Claude (the rest were filled by copy). NULL when
+    # the row was its own dispatch.
+    ("deep_dives", "anchor_nct_number", "TEXT"),
+    ("deep_dives", "anchor_next_catalyst_type", "TEXT"),
+    # D25 — live-price refresh. price_at_api_time_usd is what Claude saw
+    # when scoring. target_price_on_hit_usd / _on_miss_usd are derived at
+    # write time as price_at_api_time × (1 + move_on_hit_pct/100) and
+    # similar for miss. JS uses live current_price + these targets to
+    # recompute share-price-appreciation, expectancy_pct, and
+    # expectancy_per_week_pct intraday.
+    ("deep_dives", "price_at_api_time_usd",      "REAL"),
+    ("deep_dives", "target_price_on_hit_usd",    "REAL"),
+    ("deep_dives", "target_price_on_miss_usd",   "REAL"),
 ]
 
 
@@ -306,7 +329,13 @@ _DEEP_DIVE_COLS = (
     "raw_text",
     "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens",
     "web_search_calls", "usd_cost",
-    "catalyst_signature",                       # D17 — cache key
+    "catalyst_signature",                       # D17 — per-catalyst cache key
+    "drug_signature",                           # D23 — per-drug cache key
+    "anchor_nct_number",                        # D23 — non-NULL when row is a copy
+    "anchor_next_catalyst_type",                # D23 — non-NULL when row is a copy
+    "price_at_api_time_usd",                    # D25 — price Claude saw
+    "target_price_on_hit_usd",                  # D25 — implied $ target on hit
+    "target_price_on_miss_usd",                 # D25 — implied $ target on miss
     "created_at",
 )
 

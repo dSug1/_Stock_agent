@@ -34,9 +34,18 @@ selection:
   hard_pass_only: true              # M7 ignores hard-fail rows even if checked
 
 # ---------------- Dispatch ----------------
+# Cost-minimising defaults (D21, 2026-05-28):
+#   • mode=batch — 50% discount on input/output/cache_read/cache_create.
+#     Tradeoff: minutes-to-24h SLA. Use when speed doesn't matter.
+#   • sync_concurrency=1 — defensive: if anyone passes --mode sync, force
+#     sequential dispatch so the prompt cache is actually reused across
+#     calls (first writes, rest read at 0.10×). Concurrency>1 in sync mode
+#     causes every parallel call to write its own cache copy because none
+#     have finished by the time the others start (D21 invoice: 5 sync
+#     concurrent calls billed $3.01 vs ~$1.57 estimated for batch mode).
 dispatch:
   mode: batch                       # 'batch' | 'sync'
-  sync_concurrency: 8               # only used in sync mode
+  sync_concurrency: 1               # only used in sync mode; keep at 1 for cache sharing
   poll_interval_s: 30               # batch polling cadence
   timeout_s: 86400                  # batch hard deadline
 
@@ -71,10 +80,23 @@ pricing:
   input_per_mtok: 15.00
   output_per_mtok: 75.00
   cache_read_multiplier: 0.10
-  cache_creation_multiplier: 0.10   # empirical (2_Funds_parser D44), not docs-quoted 1.25
+  cache_creation_multiplier: 0.10   # empirical (2_Funds_parser D44 + 3_Biopharm D21), not docs-quoted 1.25
+                                    # — Anthropic appears to dedup/discount concurrent cache writes well below docs
   batch_discount: 0.50
   web_search_per_1k: 10.00
   search_result_avg_tokens: 1500
+  # D22 (2026-05-28): re-tuned again after first BATCH-mode invoice
+  # ($0.20 actual for 5-catalyst batch run; raw-formula gives $2.15 →
+  # calibration = $0.20/$2.15 ≈ 0.093). Reverted to 0.10 — the value
+  # originally inherited from 2_Funds_parser M6 was actually right for
+  # batch mode all along (2_Funds_parser uses batch). D21's 0.80 was
+  # tuned for sync mode only and over-estimates batch ~8×.
+  #
+  # Since batch is the production default (dispatch.mode), the single
+  # calibration_factor reflects batch reality. Sync-mode forecasts will
+  # OVER-ESTIMATE by ~8× — that's the safer direction for the rare
+  # debug case (you'll never accidentally exceed your budget; you'll
+  # just see an inflated estimate that warns you off sync mode anyway).
   cost_calibration_factor: 0.10     # memory: project_anthropic_cost_calibration
 
 # Estimator aborts dispatch when scenario_cache_batch.total_usd exceeds this.

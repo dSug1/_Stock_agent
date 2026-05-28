@@ -491,6 +491,18 @@ tbody td .score {
   border-radius: 8px; padding: 24px;
   color: var(--text-dim); text-align: center; margin: 30px 0;
 }
+/* D25 — live-price indicator (●) next to cells recomputed from current price. */
+.live-tag {
+  color: var(--green);
+  font-size: 10px;
+  margin-left: 3px;
+  vertical-align: top;
+}
+#live-price-stamp {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: 12px;
+}
 """
 
 
@@ -507,6 +519,99 @@ JS = r"""
   }
   function saveFilters(f) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(f)); } catch {}
+  }
+
+  // ============ D25: live-price refresh (yfinance via local server) ============
+  // The browser polls /api/live_price every 60s during US market hours.
+  // Cells whose values depend on current share price (Market cap, price,
+  // Share-price appreciation, Expectancy/time) are recomputed in JS from the
+  // poll result + the D25-stored target prices on each deep_dive.
+  const livePrices = {};           // ticker → { price_usd, fetched_at_utc }
+  const LIVE_POLL_MS = 60_000;
+  function _onLivePricePage() {
+    try {
+      const proto = window.location.protocol;
+      return proto === 'http:' || proto === 'https:';
+    } catch { return false; }
+  }
+  function _isLikelyMarketHoursUS() {
+    // Conservative US-equities window: 13:30Z - 21:30Z (covers pre/post slack).
+    // Skips Sat/Sun. Server-side yfinance still works outside the window — this
+    // is just a polite gate to avoid hammering yfinance overnight.
+    const now = new Date();
+    const day = now.getUTCDay();          // 0=Sun, 6=Sat
+    if (day === 0 || day === 6) return false;
+    const h = now.getUTCHours();
+    return (h >= 13 && h <= 21);
+  }
+  function currentPrice(ticker, fallback) {
+    const lp = livePrices[ticker];
+    return (lp && lp.price_usd) ? lp.price_usd : (fallback != null ? fallback : null);
+  }
+  // D25 — live-recompute share-price-appreciation + expectancy/week from
+  // the D25 stored targets ($) + the current live price.
+  // D26 — m_momentum dropped. expectancy/week = E[move] / max(weeks,1) directly.
+  // Returns {e_move_pct, expectancy_per_week_pct} or null when unavailable.
+  function recomputeFromLivePrice(dd, ticker, fallbackPrice) {
+    if (!dd) return null;
+    const px = currentPrice(ticker, fallbackPrice);
+    if (px == null || px <= 0
+        || dd.target_price_on_hit_usd == null
+        || dd.target_price_on_miss_usd == null
+        || dd.p_final == null) {
+      // No live recompute possible — fall back to the static stored values.
+      return {
+        e_move_pct:              dd.e_move_pct,
+        expectancy_per_week_pct: dd.expectancy_per_week_pct,
+        live:                    false,
+      };
+    }
+    const moveHit  = (dd.target_price_on_hit_usd  - px) / px * 100.0;
+    const moveMiss = (dd.target_price_on_miss_usd - px) / px * 100.0;
+    const eMove    = dd.p_final * moveHit + (1 - dd.p_final) * moveMiss;
+    const weeks    = Math.max(1, dd.weeks_to_catalyst_mid || 1);
+    return {
+      e_move_pct:              eMove,
+      expectancy_per_week_pct: eMove / weeks,
+      live:                    true,
+    };
+  }
+  async function pollLivePrices() {
+    if (!_onLivePricePage()) return;     // file:// — no server, skip
+    if (!_isLikelyMarketHoursUS()) return;
+    const tickers = Array.from(new Set(
+      (window.__DATA && window.__DATA.rows || [])
+        .filter(r => r.hard_pass && r.deep_dive)
+        .map(r => r.ticker)
+    ));
+    if (!tickers.length) return;
+    try {
+      const resp = await fetch('/api/live_price?tickers=' + tickers.join(','),
+                               { cache: 'no-store' });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      let n_ok = 0;
+      Object.keys(body.prices || {}).forEach(t => {
+        const p = body.prices[t];
+        if (p && p.price_usd) {
+          livePrices[t] = p;
+          n_ok++;
+        }
+      });
+      if (n_ok > 0) {
+        // Re-render the table + any open expand panel.
+        renderTable();
+        const visibleExpand = document.querySelector('.expand-panel');
+        if (visibleExpand && visibleExpand.dataset.ticker) {
+          // No-op: re-rendering the table closes the panel; user re-opens manually.
+        }
+        const stamp = document.getElementById('live-price-stamp');
+        if (stamp) stamp.textContent = 'Live prices: ' +
+          new Date().toLocaleTimeString() + ' (' + n_ok + ' tickers)';
+      }
+    } catch (e) {
+      // Silent — server may be down; user dropped to file:// view.
+    }
   }
 
   const state = Object.assign({
@@ -645,7 +750,8 @@ JS = r"""
       viewMeta + ' · ' +
       `rules <code>${escapeHtml(data.rules_version || '?')}</code> · ` +
       `${fundsMeta} · ` +
-      `data generated ${escapeHtml(data.generated_at || '?')}`;
+      `data generated ${escapeHtml(data.generated_at || '?')}` +
+      `<span id="live-price-stamp"></span>`;
   }
 
   function kpiCard(label, value, sub, klass) {
@@ -772,15 +878,27 @@ JS = r"""
         ? (r.fail_reasons || '').split(',').filter(Boolean).map(c => `<span class="tag fail">${c}</span>`).join(' ')
         : `<span class="tag bucket-${r.timing_bucket === 'catalyst_date_defined' ? 'defined' : 'undefined'}">${(r.precision_tier || '').slice(0,8)}</span>`;
       // M7 (D16) — three new cells. Em-dash when this row has no deep_dive yet.
+      // D25 — live-recompute share-price-appreciation + expectancy/time from
+      // the latest yfinance price + the static target prices stored at API time.
       const dd = r.deep_dive;
+      const recomp = recomputeFromLivePrice(dd, r.ticker, r.price);
+      const liveTag = (recomp && recomp.live) ? ' <span class="live-tag" title="recomputed from live price">●</span>' : '';
       const ddProb     = dd && dd.p_final != null ? (dd.p_final * 100).toFixed(0) + '%' : '<span style="color:var(--text-dim)">—</span>';
-      const ddMoveVal  = dd && dd.e_move_pct != null ? dd.e_move_pct : null;
+      const ddMoveVal  = recomp ? recomp.e_move_pct : null;
       const ddMove     = ddMoveVal == null ? '<span style="color:var(--text-dim)">—</span>'
-                          : `<span style="color:${ddMoveVal >= 0 ? 'var(--green)' : 'var(--red)'}">${ddMoveVal >= 0 ? '+' : ''}${ddMoveVal.toFixed(1)}%</span>`;
-      const ddExpWeek  = dd && dd.expectancy_per_week_pct != null
-                          ? (dd.expectancy_per_week_pct >= 0 ? '+' : '')
-                            + dd.expectancy_per_week_pct.toFixed(2) + '%/wk'
+                          : `<span style="color:${ddMoveVal >= 0 ? 'var(--green)' : 'var(--red)'}">${ddMoveVal >= 0 ? '+' : ''}${ddMoveVal.toFixed(1)}%</span>` + liveTag;
+      const ddExpWeek  = (recomp && recomp.expectancy_per_week_pct != null)
+                          ? (recomp.expectancy_per_week_pct >= 0 ? '+' : '')
+                            + recomp.expectancy_per_week_pct.toFixed(2) + '%/wk' + liveTag
                           : '<span style="color:var(--text-dim)">—</span>';
+      // D25 — replace static BPC price with live yfinance value where available.
+      // For market cap we scale BPC's static mcap by the price ratio (shares
+      // are approximately constant intraday; this is more robust than
+      // requiring FDSC shares in the payload).
+      const livePx     = currentPrice(r.ticker, r.price);
+      const liveMcap   = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
+                          ? r.market_cap_usd * (livePx / r.price)
+                          : r.market_cap_usd;
       return `
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
@@ -791,7 +909,7 @@ JS = r"""
         <td>${escapeHtml(r.next_catalyst_type || '')}</td>
         <td class="num">${escapeHtml(r.date_min || '—')}</td>
         <td>${tagBucket}</td>
-        <td class="num">${fmtMcap(r.market_cap_usd)}</td>
+        <td class="num">${fmtMcap(liveMcap)}</td>
         <td>${fmtScore(r.composite_score)}</td>
         <td>${fmtScore(r.insider_score)}</td>
         <td>${fmtScore(r.momentum_score)}</td>
@@ -836,7 +954,17 @@ JS = r"""
     html += `<div class="k">Stage / next type</div><div>${escapeHtml(r.stage || '?')} → ${escapeHtml(r.next_catalyst_type || '?')}</div>`;
     html += `<div class="k">Indication</div><div>${escapeHtml(r.indication || '—')}</div>`;
     html += `<div class="k">Date window</div><div>${escapeHtml(r.date_min || '?')} → ${escapeHtml(r.date_max || '?')} (${escapeHtml(r.precision_tier || '?')}, lane=${escapeHtml(r.source_lane || '?')})</div>`;
-    html += `<div class="k">Market cap / price</div><div>${fmtMcap(r.market_cap_usd)} / $${r.price != null ? r.price.toFixed(2) : '—'}</div>`;
+    // D25 — show live price (yfinance) when available; otherwise BPC's docx-time price.
+    (function() {
+      const livePx = currentPrice(r.ticker, r.price);
+      const liveMcap = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
+                        ? r.market_cap_usd * (livePx / r.price)
+                        : r.market_cap_usd;
+      const lpStamp = livePrices[r.ticker] && livePrices[r.ticker].fetched_at_utc
+                      ? ' (live ' + livePrices[r.ticker].fetched_at_utc + ')'
+                      : (r.price != null ? ' (BPC snapshot)' : '');
+      html += `<div class="k">Market cap / price</div><div>${fmtMcap(liveMcap)} / $${livePx != null ? livePx.toFixed(2) : '—'}<span style="color:var(--text-dim);font-size:11px">${lpStamp}</span></div>`;
+    })();
     html += `<div class="k">NCT</div><div>${escapeHtml(r.nct_number || '—')}</div>`;
     html += '</div>';
     if (trades.length) {
@@ -893,18 +1021,37 @@ JS = r"""
         html += '<div class="catalyst-text" style="border-color:var(--indigo)"><b>Thesis:</b> '
              + escapeHtml(dd.thesis_summary) + '</div>';
       }
+      // D25 — live recompute of E[move] / expectancy / expectancy-per-week
+      // from current_price + stored hit/miss target $. p_clinical, p_final,
+      // m_* modifiers, and rNPV are all anchored to the API-time analysis
+      // and don't change intraday.
+      const recompDD = recomputeFromLivePrice(dd, r.ticker, r.price) || {};
+      const livePx2  = currentPrice(r.ticker, r.price);
+      const liveTag2 = recompDD.live ? ' <span class="live-tag" title="live recompute">●</span>' : '';
+      const refPx    = dd.price_at_api_time_usd;
+      const refTgtH  = dd.target_price_on_hit_usd;
+      const refTgtM  = dd.target_price_on_miss_usd;
       html += '<div class="kv">';
       html += `<div class="k">p_clinical (Claude)</div><div>${pct(dd.p_clinical)} [${pct(dd.p_clinical_low)}–${pct(dd.p_clinical_high)}]</div>`;
       html += `<div class="k">m_insider</div><div>${dd.m_insider != null ? dd.m_insider.toFixed(2) : '—'} (insider_score=${dd.insider_score_input ?? '—'})</div>`;
       html += `<div class="k">m_funds</div><div>${dd.m_funds != null ? dd.m_funds.toFixed(2) : '—'} (funds_score=${dd.fund_accumulation_score_input ?? '—'})</div>`;
-      html += `<div class="k">m_momentum</div><div>${dd.m_momentum != null ? dd.m_momentum.toFixed(2) : '—'} (momentum_score=${dd.momentum_score_input ?? '—'})</div>`;
+      // D26 — m_momentum no longer used (momentum_score is already in M6
+      // composite_score; double-using was redundant + low impact).
       html += `<div class="k">p_final (clamped)</div><div><b>${pct(dd.p_final)}</b></div>`;
-      html += `<div class="k">expected_move_on_hit</div><div style="color:var(--green)">${signed(dd.expected_move_on_hit_pct)}</div>`;
-      html += `<div class="k">expected_move_on_miss</div><div style="color:var(--red)">${signed(dd.expected_move_on_miss_pct)}</div>`;
-      html += `<div class="k">E[move]</div><div>${signed(dd.e_move_pct)}</div>`;
-      html += `<div class="k">expectancy</div><div><b>${signed(dd.expectancy_pct)}</b></div>`;
+      // D25 — show the share price Claude was given AND the live price now.
+      html += `<div class="k" title="price the Claude pack carried at API time">Reference price (Claude analyzed at)</div>`
+           +  `<div>${refPx != null ? '$' + refPx.toFixed(2) : '—'}<span style="color:var(--text-dim);font-size:11px"> ← Claude's anchor</span></div>`;
+      html += `<div class="k">Live price (now)</div><div>${livePx2 != null ? '$' + livePx2.toFixed(2) : '—'}${liveTag2}</div>`;
+      html += `<div class="k">Target on hit (\$)</div><div style="color:var(--green)">${refTgtH != null ? '$' + refTgtH.toFixed(2) : '—'} (= ref × (1 + ${signed(dd.expected_move_on_hit_pct)}))</div>`;
+      html += `<div class="k">Target on miss (\$)</div><div style="color:var(--red)">${refTgtM != null ? '$' + refTgtM.toFixed(2) : '—'} (= ref × (1 + ${signed(dd.expected_move_on_miss_pct)}))</div>`;
+      // Live-recomputed move % from current_price vs target $.
+      const liveHitPct  = (livePx2 && refTgtH) ? (refTgtH - livePx2) / livePx2 * 100 : null;
+      const liveMissPct = (livePx2 && refTgtM) ? (refTgtM - livePx2) / livePx2 * 100 : null;
+      html += `<div class="k">Move on hit % (vs live)</div><div style="color:var(--green)">${signed(liveHitPct)}</div>`;
+      html += `<div class="k">Move on miss % (vs live)</div><div style="color:var(--red)">${signed(liveMissPct)}</div>`;
+      html += `<div class="k">E[move] = p_final·hit + (1-p_final)·miss</div><div><b>${signed(recompDD.e_move_pct)}</b>${liveTag2}</div>`;
       html += `<div class="k">weeks_to_catalyst</div><div>${dd.weeks_to_catalyst_mid ?? '—'}</div>`;
-      html += `<div class="k">expectancy / week</div><div><b>${signed(dd.expectancy_per_week_pct)}/wk</b></div>`;
+      html += `<div class="k">expectancy / week = E[move] / weeks</div><div><b>${signed(recompDD.expectancy_per_week_pct)}/wk</b>${liveTag2}</div>`;
       html += '</div>';
 
       const dp = dd.drug_profile || {};
@@ -1093,6 +1240,9 @@ JS = r"""
     restoreFormFromState();
     renderSortIndicators();
     renderTable();
+    // D25 — kick off live-price polling once the table is up.
+    pollLivePrices();
+    setInterval(pollLivePrices, LIVE_POLL_MS);
   }
 
   if (document.readyState === 'loading') {
@@ -1178,8 +1328,8 @@ HTML_SKELETON = """<!doctype html>
       <th data-col="momentum_score">Momentum</th>
       <th data-col="fund_accumulation_score">Funds</th>
       <th data-col="dd_p_final" title="M7 — final probability after Claude POS + insider + funds modifiers">Probability</th>
-      <th data-col="dd_e_move_pct" title="M7 — expected share-price move (p_final &middot; hit + (1-p_final) &middot; miss) &middot; m_momentum">Share price appreciation</th>
-      <th data-col="dd_expectancy_per_week_pct" title="M7 — expectancy_pct / weeks_to_catalyst; primary M7 sort key">Expectancy / time</th>
+      <th data-col="dd_e_move_pct" title="M7 — E[move] = p_final &middot; hit + (1-p_final) &middot; miss. (D25: live-recomputed from target $ vs current price. D26: m_momentum dropped.)">Share price appreciation</th>
+      <th data-col="dd_expectancy_per_week_pct" title="M7 — E[move]/max(weeks,1); primary M7 sort key (D26: m_momentum removed — momentum is already in M6 composite)">Expectancy / week</th>
     </tr>
   </thead>
   <tbody id="rows-body"></tbody>

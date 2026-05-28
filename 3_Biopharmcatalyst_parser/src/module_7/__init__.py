@@ -12,7 +12,11 @@ from __future__ import annotations
 from .cache import (
     CacheLookup,
     compute_catalyst_signature,
+    compute_drug_signature,
+    group_candidates_by_drug,
     lookup_cache,
+    lookup_drug_cache,
+    partition_drug_groups_by_cache,
     partition_feed_by_cache,
 )
 from .config import (
@@ -39,6 +43,13 @@ from .deep_dives_db import (
     upsert_web_search_cache_row,
     write_error_row,
 )
+from .dispatch import (
+    DispatchResult,
+    dispatch_batch,
+    dispatch_sync,
+    poll_and_collect_batch,
+    submit_batch,
+)
 from .parsing import (
     ParseError,
     ParsedDeepDive,
@@ -55,8 +66,10 @@ from .scoring import (
 
 __all__ = [
     # cache
-    "CacheLookup", "compute_catalyst_signature",
-    "lookup_cache", "partition_feed_by_cache",
+    "CacheLookup", "compute_catalyst_signature", "compute_drug_signature",
+    "lookup_cache", "lookup_drug_cache",
+    "partition_feed_by_cache", "partition_drug_groups_by_cache",
+    "group_candidates_by_drug",
     # config
     "Module7Config", "load_module_7_config", "default_config_path",
     # cost estimator
@@ -67,6 +80,9 @@ __all__ = [
     "open_run", "close_run", "update_run_batch_id",
     "upsert_deep_dive_row", "upsert_web_search_cache_row", "write_error_row",
     "latest_deep_dive_per_catalyst",
+    # dispatch
+    "DispatchResult", "dispatch_sync", "dispatch_batch",
+    "submit_batch", "poll_and_collect_batch",
     # parsing
     "ParseError", "ParsedDeepDive", "extract_json_block", "parse_deep_dive",
     # prompt

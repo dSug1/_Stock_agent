@@ -9,17 +9,21 @@ Returns a fully audit-trail-friendly `ExpectancyResult` carrying every
 intermediate value so the renderer can show the breakdown without
 having to recompute.
 
-Formula (spec §5.2):
+Formula (spec §5.2; D26 simplification 2026-05-28 — dropped m_momentum):
     m_insider  = remap(insider_score      ∈ [0,100] → [min_mult, max_mult])
     m_funds    = remap(fund_accum_score    ∈ [0,100] → [min_mult, max_mult])
-    m_momentum = remap(momentum_score     ∈ [0,100] → [min_mult, max_mult])
     p_final    = clamp(p_clinical · m_insider · m_funds, p_final_min, p_final_max)
 
     move_on_hit_pct  = clamp(claude_hit,  -inf, move_on_hit_pct_max)
     move_on_miss_pct = clamp(claude_miss, move_on_miss_pct_min, +inf)
     E[move_pct]      = p_final · move_on_hit_pct + (1 − p_final) · move_on_miss_pct
-    expectancy_pct   = E[move_pct] · m_momentum
-    expectancy/week  = expectancy_pct / max(weeks_to_catalyst, 1)
+    expectancy/week  = E[move_pct] / max(weeks_to_catalyst, 1)
+
+D26 — momentum_score is already in M6's composite_score; double-using
+it here was redundant AND the [0.95, 1.05] band moved the needle by <5%
+in practice. m_momentum is no longer computed. expectancy_pct (was
+E[move] · m_momentum) is dropped — expectancy_per_week_pct comes
+directly from E[move_pct].
 
 Spec: spec/module_7_spec.md §5.2 + §5.6.
 """
@@ -117,11 +121,10 @@ def compute_expectancy(
         min_multiplier=modifiers["funds"]["min_multiplier"],
         max_multiplier=modifiers["funds"]["max_multiplier"],
     )
-    m_mom = remap_signal_to_modifier(
-        momentum_score,
-        min_multiplier=modifiers["momentum"]["min_multiplier"],
-        max_multiplier=modifiers["momentum"]["max_multiplier"],
-    )
+    # D26 — m_momentum dropped. momentum_score is already in M6's
+    # composite_score; double-using it here was redundant. Field kept on
+    # the result dataclass for schema/test back-compat, hard-coded to 1.0.
+    m_mom = 1.0
 
     p_pre = float(p_clinical) * m_ins * m_fnd
     p_final = max(
@@ -135,13 +138,14 @@ def compute_expectancy(
                        float(clamps["move_on_miss_pct_min"]))
 
     e_move = p_final * hit_clamped + (1.0 - p_final) * miss_clamped
-    expectancy = e_move * m_mom
-    # Audit-echo the caller's original `weeks_to_catalyst` (may be 0 or
-    # negative for a same-day catalyst) but floor the divisor at 1 so the
-    # ranking key stays finite.
+    # D26 — expectancy_per_week now derives directly from E[move]; the
+    # intermediate "expectancy_pct = e_move * m_momentum" step is gone.
+    # expectancy_pct field stays on the dataclass as an audit copy of
+    # e_move so legacy callers still get a value.
+    expectancy = e_move
     weeks_input = int(weeks_to_catalyst) if weeks_to_catalyst is not None else 0
     weeks_divisor = max(weeks_input, 1)
-    expectancy_per_week = expectancy / float(weeks_divisor)
+    expectancy_per_week = e_move / float(weeks_divisor)
 
     return ExpectancyResult(
         p_clinical=float(p_clinical),

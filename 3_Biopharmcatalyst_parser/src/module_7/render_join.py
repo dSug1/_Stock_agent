@@ -122,6 +122,11 @@ def fetch_latest_deep_dive_map(
             "weeks_to_catalyst_mid":   r["weeks_to_catalyst_mid"],
             "expectancy_per_week_pct": r["expectancy_per_week_pct"],
             "catalyst_signature":      r["catalyst_signature"],
+            # D25 — price anchor + $ targets so JS can recompute share-
+            # price-appreciation and expectancy/time from live current_price.
+            "price_at_api_time_usd":    r["price_at_api_time_usd"],
+            "target_price_on_hit_usd":  r["target_price_on_hit_usd"],
+            "target_price_on_miss_usd": r["target_price_on_miss_usd"],
             # Audit
             "usd_cost":         r["usd_cost"],
             "tokens": {

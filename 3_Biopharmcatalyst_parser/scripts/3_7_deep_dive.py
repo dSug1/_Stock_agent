@@ -42,15 +42,18 @@ from module_7 import (                                                     # noq
     ParseError,
     close_run,
     compute_catalyst_signature,
+    compute_drug_signature,
     compute_expectancy,
     db_connect as deep_dives_connect,
     default_config_path,
     dispatch_sync,
     estimate_cost,
+    group_candidates_by_drug,
     load_cacheable_prefix,
     load_module_7_config,
     open_run,
     parse_deep_dive,
+    partition_drug_groups_by_cache,
     partition_feed_by_cache,
     poll_and_collect_batch,
     submit_batch,
@@ -61,6 +64,7 @@ from module_7 import (                                                     # noq
     write_error_row,
 )
 from module_7.context_pack import (                                        # noqa: E402
+    augment_pack_with_drug_siblings,
     build_context_pack,
     fetch_hard_pass_candidates,
 )
@@ -69,6 +73,7 @@ from module_7.dispatch import (                                            # noq
     build_web_search_tool_def,
     load_allowed_domains,
 )
+from module_7.live_price import get_live_prices                            # noqa: E402
 
 _LOG = logging.getLogger("3_7_deep_dive")
 
@@ -86,6 +91,11 @@ def _usd_cost_per_call(
     web_search_calls: int,
     batch_mode: bool,
 ) -> float:
+    """Compute billed USD for one (or aggregated) Anthropic call.
+
+    Anthropic SDK reports input_tokens, cache_read_input_tokens, and
+    cache_creation_input_tokens as THREE DISJOINT buckets — don't subtract.
+    """
     in_per_m = float(pricing["input_per_mtok"])
     out_per_m = float(pricing["output_per_mtok"])
     cr_mult = float(pricing["cache_read_multiplier"])
@@ -93,9 +103,8 @@ def _usd_cost_per_call(
     batch_disc = float(pricing["batch_discount"]) if batch_mode else 1.0
     search_per_1k = float(pricing["web_search_per_1k"])
     calib = float(pricing.get("cost_calibration_factor", 1.0))
-    non_cached_input = max(0, input_tokens - cache_read_tokens - cache_creation_tokens)
     token_cost = (
-        (non_cached_input / 1_000_000.0) * in_per_m
+        (input_tokens / 1_000_000.0) * in_per_m
         + (cache_read_tokens / 1_000_000.0) * in_per_m * cr_mult
         + (cache_creation_tokens / 1_000_000.0) * in_per_m * cc_mult
         + (output_tokens / 1_000_000.0) * out_per_m
@@ -111,39 +120,69 @@ def _domain_of(url: str) -> str:
     return s.split("/", 1)[0].lower()
 
 
-# ─────────────────── per-ticker payload prep ───────────────
+# ─────────────────── per-group payload prep (D23) ──────────
 
 
-def _prepare_per_ticker(
-    candidates_with_packs: list[tuple[dict, dict]],
+import hashlib as _hashlib
+
+
+def _drug_short_id(drug: str) -> str:
+    """8-char stable hash for safe inclusion in Anthropic custom_id."""
+    return _hashlib.sha256(drug.encode("utf-8")).hexdigest()[:8]
+
+
+def _prepare_per_group(
+    drug_groups: list[dict],
+    candidate_packs: dict[tuple, dict],
     *,
     config_dir: Path,
     domains_path: str,
     max_uses: int,
 ) -> list[dict]:
-    """Build dispatcher payloads: ticker / user_message / web_search_tool / pack / signature."""
+    """D23 — one payload per drug group (was: one per catalyst).
+
+    Each group becomes a single Anthropic request. After the response
+    lands, the writeback loop expands it into one deep_dives row per
+    group member, all sharing the same Claude output.
+
+    `candidate_packs` keys: (ticker, drug, nct_number, next_catalyst_type)
+    → pack dict for that exact catalyst row.
+
+    Returned dicts carry `ticker` set to a unique composite custom_id
+    so the batch API and the writeback prep_index can match results back
+    to groups even when one ticker has multiple drugs.
+    """
     allowed_domains = load_allowed_domains(str(config_dir / Path(domains_path).name))
     tool_def = build_web_search_tool_def(allowed_domains, max_uses)
     out = []
-    for cand, pack in candidates_with_packs:
-        sig = compute_catalyst_signature(
-            drug=pack["identity"]["drug_raw"],
-            stage=pack["identity"].get("stage"),
-            next_catalyst_type=pack["catalyst"]["next_catalyst_type"],
-            catalyst_date_iso=cand.get("catalyst_date_iso"),
-        )
+    for g in drug_groups:
+        anchor = g["anchor"]
+        anchor_pack = candidate_packs[(
+            anchor["ticker"], anchor["drug"],
+            anchor["nct_number"], anchor["next_catalyst_type"],
+        )]
+        pack = augment_pack_with_drug_siblings(anchor_pack, g["members"])
+
+        # Composite custom_id: stable, unique per (ticker, drug).
+        custom_id = f"{anchor['ticker']}__{_drug_short_id(anchor['drug'])}"
+
         out.append({
-            "ticker":             cand["ticker"],
-            "snapshot_date":      cand["snapshot_date"],
-            "drug":               cand["drug"],
-            "nct_number":         cand["nct_number"],
-            "next_catalyst_type": cand["next_catalyst_type"],
-            "catalyst_signature": sig,
-            "stage":              cand.get("stage"),
-            "catalyst_date_iso":  cand.get("catalyst_date_iso"),
-            "insider_score":      cand.get("insider_score"),
-            "momentum_score":     cand.get("momentum_score"),
-            "fund_accumulation_score": cand.get("fund_accumulation_score"),
+            # The dispatcher uses `ticker` as request-id throughout.
+            # We overload it with the composite custom_id so the same
+            # API works with multiple drugs per ticker.
+            "ticker":             custom_id,
+            "actual_ticker":      anchor["ticker"],
+            "drug":               anchor["drug"],
+            "snapshot_date":      anchor["snapshot_date"],
+            "anchor_nct_number":  anchor["nct_number"],
+            "anchor_next_catalyst_type": anchor["next_catalyst_type"],
+            "members":            g["members"],
+            "drug_signature":     g["drug_signature"],
+            "catalyst_signature": compute_catalyst_signature(
+                drug=anchor["drug"], stage=anchor.get("stage"),
+                next_catalyst_type=anchor["next_catalyst_type"],
+                catalyst_date_iso=anchor.get("catalyst_date_iso"),
+            ),
             "pack":               pack,
             "user_message":       build_user_message(pack),
             "web_search_tool":    tool_def,
@@ -164,6 +203,8 @@ def main() -> int:
                         help="Override config dispatch.mode")
     parser.add_argument("--force-refresh", action="store_true",
                         help="Bypass identity cache; dispatch every candidate")
+    parser.add_argument("--defined-only", action="store_true",
+                        help="Restrict to catalysts with defined timing (HTML 'Defined timing' tab)")
     parser.add_argument("--resume-run", type=int, default=None, metavar="RUN_ID",
                         help="D51 — recover a half-completed batch run")
     parser.add_argument("--yes", action="store_true",
@@ -219,10 +260,23 @@ def main() -> int:
                 f"poll_and_collect_batch failed: {e}\n"
                 f"If the batch is still processing, rerun this command later."
             )
-        # Reconstruct per-ticker minimal info for write path.
+        # D23 — pull the request_index out of gate_config_json so the
+        # writeback can expand each result into one row per group member.
+        gate_cfg = json.loads(row["gate_config_json"] or "{}")
+        request_index = gate_cfg.get("request_index", {}) or {}
         per_ticker = []
         for r in results:
-            per_ticker.append({"ticker": r.ticker})
+            entry = request_index.get(r.ticker) or {}
+            per_ticker.append({
+                "ticker":                    r.ticker,
+                "actual_ticker":             entry.get("actual_ticker"),
+                "drug":                      entry.get("drug"),
+                "snapshot_date":             entry.get("snapshot_date"),
+                "anchor_nct_number":         entry.get("anchor_nct_number"),
+                "anchor_next_catalyst_type": entry.get("anchor_next_catalyst_type"),
+                "drug_signature":            entry.get("drug_signature"),
+                "members":                   entry.get("members") or [],
+            })
         wall = time.time() - started
         _write_results(
             results=results,
@@ -240,10 +294,20 @@ def main() -> int:
     explicit = ([t.strip().upper() for t in args.tickers.split(",") if t.strip()]
                 if args.tickers else None)
     candidates = fetch_hard_pass_candidates(args.biotech_db,
-                                            explicit_tickers=explicit)
+                                            explicit_tickers=explicit,
+                                            defined_timing_only=args.defined_only)
     if not candidates:
         print("[3_7_deep_dive] no hard-pass candidates; exiting.")
         return 0
+
+    # D25 — refresh live yfinance prices for every candidate ticker so the
+    # pack Claude sees carries the LATEST share price (not the M6.5
+    # snapshot price). Batched into one yfinance call.
+    candidate_tickers = sorted({c["ticker"] for c in candidates})
+    print(f"[3_7_deep_dive] refreshing live prices for {len(candidate_tickers)} ticker(s)…")
+    live_prices = get_live_prices(candidate_tickers, force=True)
+    n_live_ok = sum(1 for lp in live_prices.values() if lp.price_usd)
+    print(f"[3_7_deep_dive] live-price coverage: {n_live_ok}/{len(candidate_tickers)}")
 
     candidates_with_packs: list[tuple[dict, dict]] = []
     for cand in candidates:
@@ -257,41 +321,61 @@ def main() -> int:
         if pack is None:
             print(f"  WARN: no catalyst_snapshots row for {cand['ticker']} {cand['drug']}; skipping")
             continue
+        # D25 — overlay the live price into the pack's market_snapshot. If
+        # yfinance failed for this ticker we keep whatever M6.5 cached.
+        lp = live_prices.get(cand["ticker"])
+        if lp and lp.price_usd:
+            pack["market_snapshot"]["last_price_usd"]   = lp.price_usd
+            pack["market_snapshot"]["last_price_as_of"] = lp.fetched_at_utc
+            pack["market_snapshot"]["price_source"]    = "yfinance-live (D25)"
+            basic = pack["market_snapshot"].get("fully_diluted_shares_count") \
+                    or pack["market_snapshot"].get("basic_shares_count")
+            if basic:
+                pack["market_snapshot"]["market_cap_fdsc_usd"] = float(basic) * float(lp.price_usd)
         candidates_with_packs.append((cand, pack))
 
-    # ── Step 2 — identity cache filter ─────────────────
+    # ── Step 2 — D23 group by drug, then drug-level cache filter ─
+    candidate_packs: dict[tuple, dict] = {
+        (c["ticker"], c["drug"], c["nct_number"], c["next_catalyst_type"]): pack
+        for c, pack in candidates_with_packs
+    }
+    raw_candidates = [{**cand,
+                       "catalyst_date_iso": cand.get("catalyst_date_iso")}
+                      for cand, _ in candidates_with_packs]
+    drug_groups = group_candidates_by_drug(raw_candidates)
     with deep_dives_connect() as dd_conn:
-        to_dispatch_lookup, skipped = partition_feed_by_cache(
+        groups_to_dispatch, groups_skipped = partition_drug_groups_by_cache(
             dd_conn,
-            candidates=[{**cand,
-                         "catalyst_date_iso": cand.get("catalyst_date_iso")}
-                        for cand, _ in candidates_with_packs],
+            groups=drug_groups,
             current_prompt_version=cfg.prompt_version,
             force_refresh=args.force_refresh,
         )
-    dispatch_keys = {(c["ticker"], c["drug"], c["nct_number"], c["next_catalyst_type"])
-                     for c in to_dispatch_lookup}
-    candidates_to_dispatch = [
-        (cand, pack) for cand, pack in candidates_with_packs
-        if (cand["ticker"], cand["drug"], cand["nct_number"], cand["next_catalyst_type"]) in dispatch_keys
-    ]
 
-    n_total = len(candidates_with_packs)
-    n_dispatch = len(candidates_to_dispatch)
-    n_skipped = len(skipped)
-    print(f"[3_7_deep_dive] candidates: {n_total}  to dispatch: {n_dispatch}  cache-hit skipped: {n_skipped}")
-    if n_skipped > 0:
+    n_candidates = len(candidates_with_packs)
+    n_groups_total = len(drug_groups)
+    n_groups_dispatch = len(groups_to_dispatch)
+    n_groups_skipped = len(groups_skipped)
+    n_dispatch = n_groups_dispatch         # API call count
+    n_rows_to_write = sum(len(g["members"]) for g in groups_to_dispatch)
+    print(f"[3_7_deep_dive] candidates: {n_candidates}  "
+          f"drug-groups: {n_groups_total}  "
+          f"to dispatch (1 API per drug): {n_dispatch}  "
+          f"will populate {n_rows_to_write} catalyst row(s);  "
+          f"cache-hit skipped: {n_groups_skipped}")
+    if n_groups_skipped > 0:
         by_reason: dict[str, int] = {}
-        for c in skipped:
-            r = c["cache_lookup"].reason
+        for g in groups_skipped:
+            r = g["cache_lookup"].reason
             by_reason[r] = by_reason.get(r, 0) + 1
         for r, n in sorted(by_reason.items()):
             print(f"    skip reason={r}: {n}")
+    dedup_saved = n_candidates - n_groups_total
+    if dedup_saved > 0:
+        print(f"[3_7_deep_dive] D23 drug-dedup saved {dedup_saved} API call(s) "
+              f"({n_groups_total} groups across {n_candidates} catalysts)")
 
     if n_dispatch == 0:
         print("[3_7_deep_dive] nothing to dispatch (all cached); refreshing reports only.")
-        # Skip the gate, skip the API call. Still want the renderer to pick up
-        # the existing rows; caller can run scripts/3_6_render_scores.py.
         return 0
 
     # ── Step 3 — cost estimate ─────────────────────────
@@ -299,11 +383,17 @@ def main() -> int:
         config_dir / Path(cfg.system_prompt_path).name,
         config_dir / Path(cfg.few_shot_examples_path).name,
     )
+    # Sample up to 5 anchor packs for token estimation.
+    sample_anchor_packs = [
+        candidate_packs[(g["anchor"]["ticker"], g["anchor"]["drug"],
+                         g["anchor"]["nct_number"], g["anchor"]["next_catalyst_type"])]
+        for g in groups_to_dispatch[:5]
+    ]
     sample_packs = [json.dumps(p, default=str)
-                    for _, p in candidates_to_dispatch[:5]] or [json.dumps({})]
+                    for p in sample_anchor_packs] or [json.dumps({})]
     est = estimate_cost(EstimateInputs(
-        snapshot_date=",".join(sorted({c["snapshot_date"]
-                                        for c, _ in candidates_to_dispatch})),
+        snapshot_date=",".join(sorted({g["anchor"]["snapshot_date"]
+                                        for g in groups_to_dispatch})),
         prompt_version=cfg.prompt_version,
         model=cfg.model,
         cached_prefix_text=cached_prefix,
@@ -312,10 +402,20 @@ def main() -> int:
         max_output_tokens=cfg.max_output_tokens,
         max_uses_web_search=cfg.web_search.max_uses,
         pricing=cfg.pricing.model_dump(),
+        sync_concurrency=cfg.dispatch.sync_concurrency,
     ))
-    est_total = est.production_total_usd
+    # D21: pick the scenario that matches the dispatch mode actually
+    # going to run. Was previously hard-coded to scenarios[2] (cache+batch)
+    # which under-reports sync-mode cost by ~2×.
+    resolved_mode = args.mode or cfg.dispatch.mode
+    if resolved_mode == "batch":
+        est_total = est.scenarios[2].total_usd
+        mode_label = "cache+batch"
+    else:
+        est_total = est.scenarios[1].total_usd
+        mode_label = f"cache-only (sync@concurrency={cfg.dispatch.sync_concurrency})"
     print()
-    print(f"[3_7_deep_dive] estimated production cost (cache+batch): ${est_total:.2f}")
+    print(f"[3_7_deep_dive] estimated cost ({mode_label}): ${est_total:.2f}")
     print(f"[3_7_deep_dive] cost ceiling: ${cfg.cost_ceiling_usd:.2f}")
     if est_total > cfg.cost_ceiling_usd:
         raise SystemExit(
@@ -346,9 +446,10 @@ def main() -> int:
             print("Aborted.")
             return 0
 
-    # ── Step 5 — prepare payloads ──────────────────────
-    per_ticker = _prepare_per_ticker(
-        candidates_to_dispatch,
+    # ── Step 5 — prepare payloads (D23 per drug group) ──
+    per_ticker = _prepare_per_group(
+        groups_to_dispatch,
+        candidate_packs,
         config_dir=config_dir,
         domains_path=cfg.web_search.domains_path,
         max_uses=cfg.web_search.max_uses,
@@ -358,16 +459,48 @@ def main() -> int:
     # ── Step 6 — open run, dispatch ────────────────────
     started = time.time()
     snapshot_label = ",".join(sorted({p["snapshot_date"] for p in per_ticker}))
+    # D23 — minimal request_index so --resume-run can rebuild the
+    # writeback context without re-querying biotech.db.
+    request_index = {
+        p["ticker"]: {
+            "actual_ticker":             p["actual_ticker"],
+            "drug":                      p["drug"],
+            "snapshot_date":             p["snapshot_date"],
+            "anchor_nct_number":         p["anchor_nct_number"],
+            "anchor_next_catalyst_type": p["anchor_next_catalyst_type"],
+            "drug_signature":            p["drug_signature"],
+            "members": [
+                {
+                    "ticker":             m["ticker"],
+                    "snapshot_date":      m.get("snapshot_date"),
+                    "drug":               m["drug"],
+                    "nct_number":         m["nct_number"],
+                    "next_catalyst_type": m["next_catalyst_type"],
+                    "stage":              m.get("stage"),
+                    "catalyst_date_iso":  m.get("catalyst_date_iso"),
+                    "insider_score":      m.get("insider_score"),
+                    "momentum_score":     m.get("momentum_score"),
+                    "fund_accumulation_score": m.get("fund_accumulation_score"),
+                }
+                for m in p["members"]
+            ],
+        }
+        for p in per_ticker
+    }
     gate_config = {
         "tickers_explicit":  explicit or "rolling-view hard-pass",
         "force_refresh":     args.force_refresh,
         "cost_estimate_usd": est_total,
-        "n_dispatch":        n_dispatch,
-        "n_skipped":         n_skipped,
-        "skip_reasons":      {r: int(n) for r, n in (
-            (rr, ll) for rr, ll in (
-                ((c["cache_lookup"].reason, 1) for c in skipped))
-        )},
+        "n_api_calls":       n_dispatch,
+        "n_drug_groups":     n_groups_total,
+        "n_catalysts":       n_candidates,
+        "n_rows_to_write":   n_rows_to_write,
+        "n_skipped_groups":  n_groups_skipped,
+        "skip_reasons":      {g["cache_lookup"].reason:
+                              sum(1 for x in groups_skipped
+                                  if x["cache_lookup"].reason == g["cache_lookup"].reason)
+                              for g in groups_skipped},
+        "request_index":     request_index,
     }
     batch_id: str | None = None
     run_id: int | None = None
@@ -513,87 +646,144 @@ def _write_results(
                 dd_conn.commit()
                 continue
 
-            # Compounding (Python modifiers).
             mods_cfg = {
                 "insider":  cfg.modifiers.insider.model_dump(),
                 "funds":    cfg.modifiers.funds.model_dump(),
                 "momentum": cfg.modifiers.momentum.model_dump(),
             }
             clamps_cfg = cfg.clamps.model_dump()
-            weeks = weeks_between(
-                (prep or {}).get("catalyst_date_iso"), None,
-                snapshot_date or "1970-01-01",
-            ) if prep else 1
-            expectancy = compute_expectancy(
-                p_clinical=parsed.catalyst_outcome["p_clinical"],
-                expected_move_on_hit_pct=parsed.catalyst_outcome["expected_move_on_hit_pct"],
-                expected_move_on_miss_pct=parsed.catalyst_outcome["expected_move_on_miss_pct"],
-                insider_score=(prep or {}).get("insider_score"),
-                fund_accumulation_score=(prep or {}).get("fund_accumulation_score"),
-                momentum_score=(prep or {}).get("momentum_score"),
-                weeks_to_catalyst=weeks,
-                modifiers=mods_cfg,
-                clamps=clamps_cfg,
-            )
 
-            # Persist deep_dives row.
-            row = {
-                "snapshot_date":       snapshot_date,
-                "ticker":              parsed.ticker,
-                "drug":                (prep or {}).get("drug"),
-                "nct_number":          (prep or {}).get("nct_number"),
-                "next_catalyst_type":  (prep or {}).get("next_catalyst_type"),
-                "run_id":              run_id,
-                "p_clinical":          parsed.catalyst_outcome["p_clinical"],
-                "p_clinical_low":      parsed.catalyst_outcome.get("p_clinical_low"),
-                "p_clinical_high":     parsed.catalyst_outcome.get("p_clinical_high"),
-                "expected_move_on_hit_pct":  parsed.catalyst_outcome["expected_move_on_hit_pct"],
-                "expected_move_on_miss_pct": parsed.catalyst_outcome["expected_move_on_miss_pct"],
-                "rnpv_total_usd":      parsed.rnpv_total_usd,
-                "rnpv_per_share_usd":  parsed.rnpv_per_share_usd,
-                "lead_indication":     parsed.lead_indication,
-                "management_track_record_score": parsed.management_track_record.get("score"),
-                "acquisition_target_score":      parsed.acquisition_target.get("score"),
-                "rnpv_by_indication_json":   json.dumps(parsed.rnpv_by_indication, default=str),
-                "drug_profile_json":         json.dumps(parsed.drug_profile, default=str),
-                "clinical_evidence_json":    json.dumps(parsed.clinical_evidence, default=str),
-                "financial_overhang_json":   json.dumps(parsed.financial_overhang, default=str),
-                "catalyst_date_sanity_json": json.dumps(parsed.catalyst_date_sanity_check, default=str),
-                "key_risks_json":            json.dumps(parsed.key_risks, default=str),
-                "thesis_summary":      parsed.thesis_summary,
-                "reasoning_trace":     parsed.reasoning_trace,
-                "insider_score_input":           expectancy.insider_score_input,
-                "fund_accumulation_score_input": expectancy.fund_accumulation_score_input,
-                "momentum_score_input":          expectancy.momentum_score_input,
-                "m_insider":  expectancy.m_insider,
-                "m_funds":    expectancy.m_funds,
-                "m_momentum": expectancy.m_momentum,
-                "p_final":    expectancy.p_final,
-                "e_move_pct": expectancy.e_move_pct,
-                "expectancy_pct":          expectancy.expectancy_pct,
-                "weeks_to_catalyst_mid":   expectancy.weeks_to_catalyst,
-                "expectancy_per_week_pct": expectancy.expectancy_per_week_pct,
-                "prompt_version":  cfg.prompt_version,
-                "model":           cfg.model,
-                "response_id":     res.response_id,
-                "raw_text":        res.raw_text,
-                "input_tokens":    res.input_tokens,
-                "output_tokens":   res.output_tokens,
-                "cache_read_tokens":     res.cache_read_tokens,
-                "cache_creation_tokens": res.cache_creation_tokens,
-                "web_search_calls":      res.web_search_calls,
-                "usd_cost":        res_usd,
-                "catalyst_signature": (prep or {}).get("catalyst_signature"),
-            }
-            upsert_deep_dive_row(dd_conn, row)
+            # D23 — one API call, multiple deep_dives rows. The Claude
+            # output is shared across members; each member gets its own
+            # expectancy because catalyst_date_iso + per-row M6 scores vary.
+            members = (prep or {}).get("members") or []
+            anchor_nct  = (prep or {}).get("anchor_nct_number")
+            anchor_type = (prep or {}).get("anchor_next_catalyst_type")
+            anchor_attributed = False    # full cost/tokens go on anchor only
 
-            # Persist web_search_cache entries.
+            # D25 — record the price Claude saw + derive $ targets so the
+            # renderer can recompute share-price-appreciation intraday.
+            anchor_pack = (prep or {}).get("pack") or {}
+            price_at_api_time = ((anchor_pack.get("market_snapshot") or {})
+                                 .get("last_price_usd"))
+            move_on_hit_pct  = parsed.catalyst_outcome["expected_move_on_hit_pct"]
+            move_on_miss_pct = parsed.catalyst_outcome["expected_move_on_miss_pct"]
+            if price_at_api_time:
+                target_on_hit  = price_at_api_time * (1.0 + move_on_hit_pct  / 100.0)
+                target_on_miss = price_at_api_time * (1.0 + move_on_miss_pct / 100.0)
+            else:
+                target_on_hit = target_on_miss = None
+
+            for member in members:
+                weeks = weeks_between(
+                    member.get("catalyst_date_iso"), None,
+                    snapshot_date or "1970-01-01",
+                )
+                expectancy = compute_expectancy(
+                    p_clinical=parsed.catalyst_outcome["p_clinical"],
+                    expected_move_on_hit_pct=parsed.catalyst_outcome["expected_move_on_hit_pct"],
+                    expected_move_on_miss_pct=parsed.catalyst_outcome["expected_move_on_miss_pct"],
+                    insider_score=member.get("insider_score"),
+                    fund_accumulation_score=member.get("fund_accumulation_score"),
+                    momentum_score=member.get("momentum_score"),
+                    weeks_to_catalyst=weeks,
+                    modifiers=mods_cfg,
+                    clamps=clamps_cfg,
+                )
+
+                is_anchor = (member.get("nct_number") == anchor_nct
+                             and member.get("next_catalyst_type") == anchor_type)
+                # Cost/tokens land on the anchor row only so
+                # SUM(usd_cost) over the run still equals the real bill.
+                # Copies carry 0 and point at the anchor via anchor_*.
+                if is_anchor and not anchor_attributed:
+                    row_usd_cost = res_usd
+                    row_input_tokens = res.input_tokens
+                    row_output_tokens = res.output_tokens
+                    row_cache_read = res.cache_read_tokens
+                    row_cache_create = res.cache_creation_tokens
+                    row_web_search = res.web_search_calls
+                    row_anchor_nct = None        # anchor's own row has NULL anchor_*
+                    row_anchor_type = None
+                    anchor_attributed = True
+                else:
+                    row_usd_cost = 0.0
+                    row_input_tokens = 0
+                    row_output_tokens = 0
+                    row_cache_read = 0
+                    row_cache_create = 0
+                    row_web_search = 0
+                    row_anchor_nct = anchor_nct
+                    row_anchor_type = anchor_type
+
+                row = {
+                    "snapshot_date":       member.get("snapshot_date") or snapshot_date,
+                    "ticker":              member["ticker"],
+                    "drug":                member["drug"],
+                    "nct_number":          member["nct_number"],
+                    "next_catalyst_type":  member["next_catalyst_type"],
+                    "run_id":              run_id,
+                    "p_clinical":          parsed.catalyst_outcome["p_clinical"],
+                    "p_clinical_low":      parsed.catalyst_outcome.get("p_clinical_low"),
+                    "p_clinical_high":     parsed.catalyst_outcome.get("p_clinical_high"),
+                    "expected_move_on_hit_pct":  parsed.catalyst_outcome["expected_move_on_hit_pct"],
+                    "expected_move_on_miss_pct": parsed.catalyst_outcome["expected_move_on_miss_pct"],
+                    "rnpv_total_usd":      parsed.rnpv_total_usd,
+                    "rnpv_per_share_usd":  parsed.rnpv_per_share_usd,
+                    "lead_indication":     parsed.lead_indication,
+                    "management_track_record_score": parsed.management_track_record.get("score"),
+                    "acquisition_target_score":      parsed.acquisition_target.get("score"),
+                    "rnpv_by_indication_json":   json.dumps(parsed.rnpv_by_indication, default=str),
+                    "drug_profile_json":         json.dumps(parsed.drug_profile, default=str),
+                    "clinical_evidence_json":    json.dumps(parsed.clinical_evidence, default=str),
+                    "financial_overhang_json":   json.dumps(parsed.financial_overhang, default=str),
+                    "catalyst_date_sanity_json": json.dumps(parsed.catalyst_date_sanity_check, default=str),
+                    "key_risks_json":            json.dumps(parsed.key_risks, default=str),
+                    "thesis_summary":      parsed.thesis_summary,
+                    "reasoning_trace":     parsed.reasoning_trace,
+                    "insider_score_input":           expectancy.insider_score_input,
+                    "fund_accumulation_score_input": expectancy.fund_accumulation_score_input,
+                    "momentum_score_input":          expectancy.momentum_score_input,
+                    "m_insider":  expectancy.m_insider,
+                    "m_funds":    expectancy.m_funds,
+                    "m_momentum": expectancy.m_momentum,
+                    "p_final":    expectancy.p_final,
+                    "e_move_pct": expectancy.e_move_pct,
+                    "expectancy_pct":          expectancy.expectancy_pct,
+                    "weeks_to_catalyst_mid":   expectancy.weeks_to_catalyst,
+                    "expectancy_per_week_pct": expectancy.expectancy_per_week_pct,
+                    "prompt_version":  cfg.prompt_version,
+                    "model":           cfg.model,
+                    "response_id":     res.response_id,
+                    "raw_text":        res.raw_text,
+                    "input_tokens":          row_input_tokens,
+                    "output_tokens":         row_output_tokens,
+                    "cache_read_tokens":     row_cache_read,
+                    "cache_creation_tokens": row_cache_create,
+                    "web_search_calls":      row_web_search,
+                    "usd_cost":              row_usd_cost,
+                    "catalyst_signature": compute_catalyst_signature(
+                        drug=member["drug"], stage=member.get("stage"),
+                        next_catalyst_type=member["next_catalyst_type"],
+                        catalyst_date_iso=member.get("catalyst_date_iso"),
+                    ),
+                    "drug_signature":             (prep or {}).get("drug_signature"),
+                    "anchor_nct_number":          row_anchor_nct,
+                    "anchor_next_catalyst_type":  row_anchor_type,
+                    "price_at_api_time_usd":      price_at_api_time,
+                    "target_price_on_hit_usd":    target_on_hit,
+                    "target_price_on_miss_usd":   target_on_miss,
+                }
+                upsert_deep_dive_row(dd_conn, row)
+
+            # Persist web_search_cache entries — tag with the actual ticker.
+            actual_ticker = (prep or {}).get("actual_ticker") or res.ticker
             for r in (res.server_tool_results or []):
                 url = r.get("url") or ""
                 if not url:
                     continue
                 upsert_web_search_cache_row(
-                    dd_conn, url=url, ticker=res.ticker,
+                    dd_conn, url=url, ticker=actual_ticker,
                     snapshot_date=snapshot_date, run_id=run_id,
                     search_query=r.get("query") or "",
                     title=r.get("title") or "",
@@ -605,10 +795,15 @@ def _write_results(
             dd_conn.commit()
             success_count += 1
 
-        # Close run.
+        # Close run. "list price" = no-cache, no-batch equivalent — i.e.
+        # all cache_read + cache_create tokens billed as regular input.
+        # Useful to show realized cache savings.
         list_price_total = _usd_cost_per_call(
             pricing=cfg.pricing.model_dump(),
-            input_tokens=token_totals["input"], output_tokens=token_totals["output"],
+            input_tokens=(token_totals["input"]
+                          + token_totals["cache_read"]
+                          + token_totals["cache_create"]),
+            output_tokens=token_totals["output"],
             cache_read_tokens=0, cache_creation_tokens=0,
             web_search_calls=token_totals["search_calls"],
             batch_mode=False,
@@ -637,8 +832,8 @@ def _write_results(
     print(f"  Tokens (in / out):    {token_totals['input']:,} / {token_totals['output']:,}")
     print(f"  Cache (read / create):{token_totals['cache_read']:,} / {token_totals['cache_create']:,}")
     print(f"  Web searches:         {token_totals['search_calls']}")
-    print(f"  USD cost (paid):      ${token_totals['usd']:,.2f}")
-    print(f"  USD if list-price:    ${list_price_total:,.2f}")
+    print(f"  USD cost (estimated): ${token_totals['usd']:,.2f}  (calibrated; verify on console.anthropic.com)")
+    print(f"  USD if no caching:    ${list_price_total:,.2f}  (cache_read+cache_create billed as regular input)")
     print("-" * 70)
     if rate_limited:
         print()

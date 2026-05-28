@@ -81,14 +81,22 @@ The exact piecewise/log shapes live in `config/module_7.yaml`. **All modifiers a
                                   │
                                   ▼
 ┌─── M7 — Claude API deep-dive (NEW) ────────────────────────────────┐
-│  1. Read M6 shortlist (hard_pass=1, user-selected slice)           │
-│  2. Build per-ticker context pack (catalyst + fundamentals + drug) │
-│  3. Estimate cost; render Outputs/cost_estimate_<date>.html        │
-│  4. Mandatory [y/N] gate                                           │
-│  5. Dispatch (Anthropic Batch API, prompt-cached prefix)           │
-│  6. Parse + validate JSON; persist to data/claude_deep_dives.db    │
-│  7. Apply Python modifiers → expectancy table                      │
-│  8. Render Outputs/expectancy_ranking.html                         │
+│  1. Read M6 shortlist (hard_pass=1, optional --tickers / --defined-│
+│     only filter)                                                    │
+│  2. Build per-catalyst context pack (catalyst + fundamentals + drug)│
+│  3. D23: group by (ticker, drug); pick anchor per group;           │
+│     drug-signature cache check (skip groups unchanged since prior   │
+│     successful deep-dive)                                           │
+│  4. Estimate cost (D21: mode-aware scenario; D22: calibration 0.10) │
+│     → Outputs/m7_cost_estimate.html                                 │
+│  5. Mandatory [y/N] gate; cost-ceiling refusal if over budget      │
+│  6. Dispatch ONE Anthropic call per drug-group (Batch API default; │
+│     50% discount; prompt-cached prefix)                             │
+│  7. Parse + validate JSON; expand one response → N deep_dives rows │
+│     (one per catalyst in the group); cost+tokens land on anchor    │
+│     row only                                                        │
+│  8. Re-render Outputs/catalyst_scores.html (3 new M7 columns +      │
+│     expanded-row deep-dive block; sidecar data.js refresh)          │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -459,26 +467,56 @@ CREATE TABLE web_search_cache (
 -- the rendering query.
 ```
 
-### 5.8 Dispatch — copied verbatim from `2_Funds_parser` M6
+### 5.8 Dispatch — copied verbatim from `2_Funds_parser` M6, then D21/D22/D23 layered on
 
 | Pattern | Source | Why preserve |
 |---|---|---|
-| `cache_control: {type: "ephemeral"}` on the system block | `dispatch.py:253-263` | 100% cache hit across a run |
-| `submit_batch()` + `poll_and_collect_batch()` split | `dispatch.py:332-369` | Crash recovery (`--resume-run N`) |
-| Persist `batch_id` to `deep_dive_runs` *before* polling starts | `6_score.py:1000-1013` | Same |
-| Per-result `commit()` in the parse loop | `6_score.py:1147` | One bad row doesn't roll back the batch |
-| Mandatory `[y/N]` gate, only `--yes` bypasses, EOFError → abort | `6_score.py:898-922` | Memory: `claude-api` + D48 |
-| `cost_calibration_factor: 0.10` in pricing | `scoring.yaml:89` | Memory: `project_anthropic_cost_calibration` |
-| `extract_json_block` + `_balance_truncated_json` | `parsing.py:70-149` | Tolerates truncated responses |
-| Web-search result writeback to `web_search_cache` | `dispatch.py:188-232` + `6_score.py:1135-1146` | Audit + future Tier B prior research (if added) |
+| `cache_control: {type: "ephemeral"}` on the system block | `dispatch.py` | 100% cache hit across a run |
+| `submit_batch()` + `poll_and_collect_batch()` split | `dispatch.py` | Crash recovery (`--resume-run N`) |
+| Persist `batch_id` to `deep_dive_runs` *before* polling starts | dispatcher | Same |
+| Per-result `commit()` in the parse loop | dispatcher | One bad row doesn't roll back the batch |
+| Mandatory `[y/N]` gate, only `--yes` bypasses, EOFError → abort | dispatcher | Memory: `claude-api` + D48 |
+| `extract_json_block` + `_balance_truncated_json` | `parsing.py` | Tolerates truncated responses |
+| Web-search result writeback to `web_search_cache` | `dispatch.py` + dispatcher | Audit + future Tier B prior research |
+
+**Production mode is `batch` (D21, locked 2026-05-28).** 50% discount on tokens, minutes-to-24h SLA. `sync_concurrency: 1` defensively forces sequential dispatch when someone passes `--mode sync` — otherwise concurrent calls write redundant cache copies and lose the prompt-caching benefit. Speed is explicitly *not* optimised; cost is.
+
+**One API call per drug group, N rows per result (D23).** The dispatch unit is the drug, not the catalyst — see §5.12.1 for the full rule. The pre-flight estimator reports `catalysts → drug-groups → API calls` so the user can see how many calls the dedup saved.
 
 ### 5.9 Cost estimate
 
-Same three-scenario engine (`no-optim`, `cache-only`, `cache+batch`) as M6. Reuse `2_Funds_parser/src/module_6/cost_estimate.py` with two changes:
-1. Drop Tier B/C breakdown (M7 is single-tier full).
-2. Read pricing from `config/module_7.yaml::pricing` instead.
+Three-scenario engine (`no-optim`, `cache-only`, `cache+batch`) — implementation in [src/module_7/cost_estimate.py](../src/module_7/cost_estimate.py). Pricing is read from `config/module_7.yaml::pricing`.
 
-Estimated cost per 20–30 ticker run (per `2_Funds_parser` empirical billing × calibration factor 0.10): **~$5–15**.
+**Scenario semantics (post D21):**
+
+| Scenario | Models | When it matters |
+|---|---|---|
+| `no-optim` | Every call sends the full prefix uncached | Sanity floor — never the production path |
+| `cache-only` | Sync-mode reality at `sync_concurrency: C`: `cache_create = prefix × min(N, C)` writes, `cache_read = prefix × max(0, N−C)` reads, NO batch discount | Picked as production when `dispatch.mode: sync` |
+| **`cache+batch`** | **Optimistic 1 cache_create + (N−1) cache_reads (batch intra-request sharing), 50% discount on all token costs** | **Picked as production when `dispatch.mode: batch` (the default)** |
+
+The dispatcher's ceiling check (`cost_ceiling_usd`) compares the mode-appropriate scenario, not always `cache+batch` (D21 fix — previously under-reported sync cost by ~2×).
+
+**Bugs fixed in D21:**
+
+1. `_usd_cost_per_call` no longer subtracts `cache_read + cache_create` from `input_tokens`. Anthropic's SDK reports the three buckets as disjoint; subtracting clamps to zero and silently drops the input cost.
+2. The post-run "USD if no caching" line now adds `cache_read + cache_create` back into `input_tokens` so it correctly represents what the call would have cost without prompt caching at all — useful to quantify realised cache savings.
+3. `EstimateInputs.sync_concurrency` is a passthrough so the `cache-only` scenario reflects the configured concurrency.
+
+**Calibration history (D21 / D22):**
+
+| Date | Mode evidence | Calibration | Notes |
+|---|---|---:|---|
+| original | 2_Funds_parser M6 batch invoices | 0.10 | Inherited; assumed correct for M7. |
+| D21 | First M7 sync invoice ($3.01 actual vs $3.74 raw-formula) | 0.80 | Sync over-corrected by 8× — bumped. |
+| D22 | First M7 batch invoice ($0.20 actual vs $2.15 raw-formula) | **0.10** | Batch is the production mode. Single value reflects batch reality. Sync now over-estimates ~8× (safe direction — conservative warning). |
+
+Locked by `tests/test_module7_config.py::test_cost_calibration_factor_locked` — bumping requires editing the assertion, forcing a deliberate decisions.md entry.
+
+**Practical numbers (post D21/D22/D23, full 69-catalyst rolling-view feed):**
+
+- Pre-D23: 69 API calls. Pre-D22 estimate: $4.80 (under-reported). Real batch cost: ~$0.50-0.80.
+- Post-D23: ~55-64 API calls (BPC-string-overlap-dependent). Real batch cost lands slightly lower.
 
 ### 5.10 Selection editor
 
@@ -704,6 +742,62 @@ Two fields are also in the PK (`drug`, `next_catalyst_type`) so a change to eith
 
 Implementation: [src/module_7/cache.py](../src/module_7/cache.py) — `compute_catalyst_signature`, `lookup_cache`, `partition_feed_by_cache`.
 
+> **Upgrade — D23 (2026-05-28):** the cache lookup unit is now the **drug**, not the individual catalyst PK. See §5.12.1 below. The catalyst-level signature defined here is still computed and stored on every row for traceability + back-compat, but the dispatcher's dedup/cache check uses `drug_signature`.
+
+---
+
+## 5.12.1 Drug-level dispatch dedup (D23 — locked 2026-05-28)
+
+**Rule:** When a single `(ticker, drug)` pair appears across N hard-pass catalyst rows (different `next_catalyst_type` and/or `nct_number`), the dispatcher issues **ONE** Anthropic call for that drug. The response is written N times to `deep_dives` (one row per catalyst PK), all sharing the Claude output but each carrying per-row expectancy.
+
+**Why:** Catalysts under the same drug (e.g., interim → topline of the same trial, or two-cohort splits) share the same thesis evidence, POS rubric, rNPV, mgmt assessment, and financial overhang. A second API call would burn ~$0.05 in batch mode for substantially identical reasoning. D23 dedups that.
+
+**This preserves the D17 invariant.** The drug signature hashes over EVERY catalyst's `(type, date)` tuple for the drug, not just one — so adding/removing/changing ANY catalyst still triggers a re-dispatch:
+
+```
+drug_signature = lower_strip(drug)
+               | lower_strip(stage)
+               | sorted([(lower_strip(catalyst_type), catalyst_date_iso) for c in catalysts])
+                 joined "ct1~cd1,ct2~cd2,…"
+```
+
+**Dispatcher behaviour:**
+
+1. Build candidate list (post `--tickers` / `--defined-only` filters).
+2. Group candidates by `(ticker, drug)` — `group_candidates_by_drug`.
+3. Pick an **anchor** per group: the earliest-dated catalyst, then lex by `(nct_number, catalyst_type)`. Deterministic.
+4. Compute `drug_signature` for the whole group.
+5. Cache check: skip the group when ANY prior successful `deep_dives` row for `(ticker, drug)` has matching `drug_signature` + `prompt_version`.
+6. Augment the anchor's pack with `catalyst.sibling_catalysts` listing the other catalysts in the group (so Claude can reason about the full schedule).
+7. One Anthropic request per group, with `custom_id = ticker__sha8(drug)` (unique even when one ticker has multiple drugs).
+8. On writeback, parse once and persist N rows. The **anchor row** carries the full `usd_cost` + token counts; **copy rows** carry zero, and identify the anchor via `anchor_nct_number` + `anchor_next_catalyst_type` (NULL on the anchor itself).
+
+**Per-row vs shared fields:**
+
+| Shared across all N rows (Claude output) | Per-row (Python computes) |
+|---|---|
+| `p_clinical`, `_low`, `_high` | `weeks_to_catalyst_mid` (per-row catalyst_date_iso) |
+| `expected_move_on_hit_pct`, `_miss_pct` | `m_insider`, `m_funds`, `m_momentum` (per-row M6 scores) |
+| `rnpv_total_usd`, `rnpv_per_share_usd`, `lead_indication` | `p_final`, `e_move_pct`, `expectancy_pct`, `expectancy_per_week_pct` |
+| All `*_json` blocks, `thesis_summary`, `reasoning_trace` | `catalyst_signature` (D17 per-row sig for traceability) |
+| `prompt_version`, `model`, `response_id`, `raw_text` | `usd_cost` (anchor only; copies = 0) |
+
+**Cost accounting:** `SUM(usd_cost)` over deep_dives in a run still equals the real bill because the full cost lands on the anchor row only.
+
+**Known limitation — exact-string drug match.** Dedup is keyed on the BPC `drug` field verbatim. When the SAME molecule appears under different BPC drug strings (e.g., KURA ziftomenib stored as both `"Ziftomenib (in combination with SoC...)"` and `"ziftomenib in combination with gilteritinib..."`), it doesn't collapse — the strings differ. ACRS-ATI-052 (both stored as exactly `"ATI-052"`) does dedup. A future enhancement could add drug-name normalisation; not in scope here.
+
+**Schema (additive migration, no destructive change):**
+
+- `deep_dives.drug_signature` — D23 cache key.
+- `deep_dives.anchor_nct_number` + `anchor_next_catalyst_type` — non-NULL on copy rows; NULL on the anchor row itself.
+- `deep_dive_runs.gate_config_json.request_index` — minimal mapping `custom_id → {actual_ticker, drug, members, drug_signature, anchor_*}` so `--resume-run` can rebuild writeback context without re-querying biotech.db.
+
+Implementation:
+- [src/module_7/cache.py](../src/module_7/cache.py) — `compute_drug_signature`, `lookup_drug_cache`, `group_candidates_by_drug`, `partition_drug_groups_by_cache`.
+- [src/module_7/context_pack.py](../src/module_7/context_pack.py) — `augment_pack_with_drug_siblings`.
+- [scripts/3_7_deep_dive.py](../scripts/3_7_deep_dive.py) — `_prepare_per_group` + the expanded-row writeback loop.
+- [scripts/3_7_estimate_cost.py](../scripts/3_7_estimate_cost.py) — drug-grouping reported in the pre-flight summary.
+
 ---
 
 ## 5.13 Storage rules (locked — carried from 2_Funds_parser M5 rev 2 + D32 + D49)
@@ -741,8 +835,8 @@ web_search:
   domains_path: config/module_7_web_search_domains.yaml
 
 dispatch:
-  mode: batch                                 # 'batch' | 'sync'
-  sync_concurrency: 8
+  mode: batch                                 # 'batch' | 'sync' — production: batch (D21)
+  sync_concurrency: 1                         # D21: keep at 1 for cache sharing under sync
   poll_interval_s: 30
   timeout_s: 86400
 
@@ -864,10 +958,19 @@ Still TBD before implementation:
 
 ---
 
-## 10. Decisions to log (when we proceed)
+## 10. Decisions log — entries to date
 
-- **D-next: Module 7 design pinned** — strategy (this file), modifier shapes, schema, single-horizon catalyst-window scoring.
-- **D-next+1: Module 6.5 FDSC enrichment** — SEC XBRL + capital-raise PFW heuristic + yfinance price → `data/fundamentals.db`.
+All landed in [spec/decisions.md](decisions.md). Headline list:
+
+- **D15** — M6.5 fundamentals + FDSC enrichment (2026-05-28).
+- **D16** — M7 core pure-compute layers (config, scoring, parsing, cost_estimate, deep_dives_db, prompt) (2026-05-28).
+- **D17** — Catalyst-identity cache rule (2026-05-28).
+- **D18** — M6.5 bug fixes (PFW shares + TTM cumulative-YTD + orchestrator order) (2026-05-28).
+- **D19** — M7 LLM-side build (context_pack, dispatch, prompts, renderer, server, bat wiring) (2026-05-28).
+- **D20** — m7-v2 prompt expansion: 13 high-value patterns ported from 2_Funds_parser M6 (2026-05-28).
+- **D21** — Cost-formula audit + recalibration after first real (sync) invoice: `cost_calibration_factor` 0.10 → 0.80, fix `non_cached_input` subtraction bug, set `sync_concurrency: 1`, `dispatch.mode: batch` as the production default (2026-05-28).
+- **D22** — Recalibration after first batch invoice: `cost_calibration_factor` 0.80 → 0.10; batch is the production mode, single-value calibration reflects batch reality, sync now over-estimates ~8× (safe direction) (2026-05-28).
+- **D23** — Drug-level dispatch dedup: one API call per `(ticker, drug)`, N rows per result; `drug_signature` preserves D17's "re-run if catalyst changed" invariant; additive schema migration for `drug_signature` + `anchor_*` columns (2026-05-28).
 
 ---
 

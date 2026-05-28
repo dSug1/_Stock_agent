@@ -316,3 +316,176 @@ def test_partition_writes_signature_on_each_candidate(tmp_path: Path):
             cx, cands, current_prompt_version="m7-v1:abc1234",
         )
     assert to_dispatch[0]["catalyst_signature"] == "tx45|phase2|topline data|2026-09-15"
+
+
+# ───────────────────────── D23 drug-level cache ────────────────────
+
+
+from module_7.cache import (  # noqa: E402
+    compute_drug_signature,
+    group_candidates_by_drug,
+    lookup_drug_cache,
+    partition_drug_groups_by_cache,
+)
+
+
+def test_drug_signature_order_insensitive():
+    a = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Conference Presentation", "2026-06-15"),
+                   ("Initial Data", "2026-08-01")],
+    )
+    b = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Initial Data", "2026-08-01"),
+                   ("Conference Presentation", "2026-06-15")],
+    )
+    assert a == b
+
+
+def test_drug_signature_changes_when_catalyst_date_changes():
+    """D23 preserves D17's invariant: re-run if any catalyst's date moved."""
+    a = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Conference Presentation", "2026-06-15")],
+    )
+    b = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Conference Presentation", "2026-07-15")],
+    )
+    assert a != b
+
+
+def test_drug_signature_changes_when_catalyst_added():
+    a = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Conference Presentation", "2026-06-15")],
+    )
+    b = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Conference Presentation", "2026-06-15"),
+                   ("Initial Data", "2026-08-01")],
+    )
+    assert a != b
+
+
+def test_drug_signature_changes_when_stage_changes():
+    a = compute_drug_signature(
+        drug="ziftomenib", stage="phase2",
+        catalysts=[("Initial Data", "2026-08-01")],
+    )
+    b = compute_drug_signature(
+        drug="ziftomenib", stage="phase3",
+        catalysts=[("Initial Data", "2026-08-01")],
+    )
+    assert a != b
+
+
+def test_group_candidates_collapses_same_drug():
+    cands = [
+        dict(ticker="KURA", drug="ziftomenib", nct_number="NCT05735184",
+             next_catalyst_type="Conference Presentation",
+             catalyst_date_iso="2026-06-15", stage="phase3"),
+        dict(ticker="KURA", drug="ziftomenib", nct_number="NCT06001788",
+             next_catalyst_type="Initial Data",
+             catalyst_date_iso="2026-08-01", stage="phase2"),
+        dict(ticker="MBX", drug="MBX 4291", nct_number="NCT07142707",
+             next_catalyst_type="Initial Data",
+             catalyst_date_iso="2026-09-01", stage="phase2"),
+    ]
+    groups = group_candidates_by_drug(cands)
+    assert len(groups) == 2
+    kura = next(g for g in groups if g["ticker"] == "KURA")
+    mbx  = next(g for g in groups if g["ticker"] == "MBX")
+    assert len(kura["members"]) == 2
+    assert len(mbx["members"])  == 1
+    # Anchor is earliest catalyst_date.
+    assert kura["anchor"]["next_catalyst_type"] == "Conference Presentation"
+
+
+def test_drug_cache_hit_when_signature_matches(tmp_path: Path):
+    init_deep_dives_db(tmp_path / "dd.db")
+    with db_connect(tmp_path / "dd.db") as cx:
+        # Write a prior successful row carrying the drug_signature.
+        row = {
+            **_make_pk(ticker="KURA", drug="ziftomenib",
+                       nct_number="NCT05735184",
+                       next_catalyst_type="Conference Presentation"),
+            "run_id": 7, "p_clinical": 0.75,
+            "prompt_version": "m7-v2:abcdef0",
+            "model": "claude-opus-4-7",
+            "drug_signature": "ziftomenib|phase3|conference presentation~2026-06-15",
+            "raw_text": "raw",
+        }
+        upsert_deep_dive_row(cx, row)
+        res = lookup_drug_cache(
+            cx, ticker="KURA", drug="ziftomenib",
+            current_drug_signature="ziftomenib|phase3|conference presentation~2026-06-15",
+            current_prompt_version="m7-v2:abcdef0",
+        )
+    assert res.is_hit is True
+    assert res.reason == "identity_match"
+
+
+def test_drug_cache_miss_when_signature_differs(tmp_path: Path):
+    init_deep_dives_db(tmp_path / "dd.db")
+    with db_connect(tmp_path / "dd.db") as cx:
+        row = {
+            **_make_pk(ticker="KURA", drug="ziftomenib",
+                       nct_number="NCT05735184",
+                       next_catalyst_type="Conference Presentation"),
+            "run_id": 7, "p_clinical": 0.75,
+            "prompt_version": "m7-v2:abcdef0",
+            "model": "claude-opus-4-7",
+            "drug_signature": "ziftomenib|phase3|conference presentation~2026-06-15",
+            "raw_text": "raw",
+        }
+        upsert_deep_dive_row(cx, row)
+        res = lookup_drug_cache(
+            cx, ticker="KURA", drug="ziftomenib",
+            current_drug_signature="ziftomenib|phase3|conference presentation~2026-07-15",
+            current_prompt_version="m7-v2:abcdef0",
+        )
+    assert res.is_hit is False
+    assert res.reason == "identity_changed"
+
+
+def test_drug_cache_legacy_null_signature_treated_as_miss(tmp_path: Path):
+    """Rows from before D23 have drug_signature=NULL and must not grant hits."""
+    init_deep_dives_db(tmp_path / "dd.db")
+    with db_connect(tmp_path / "dd.db") as cx:
+        row = {
+            **_make_pk(ticker="KURA", drug="ziftomenib",
+                       nct_number="NCT05735184",
+                       next_catalyst_type="Conference Presentation"),
+            "run_id": 7, "p_clinical": 0.75,
+            "prompt_version": "m7-v2:abcdef0",
+            "model": "claude-opus-4-7",
+            # drug_signature deliberately absent — legacy row.
+            "raw_text": "raw",
+        }
+        upsert_deep_dive_row(cx, row)
+        res = lookup_drug_cache(
+            cx, ticker="KURA", drug="ziftomenib",
+            current_drug_signature="anything",
+            current_prompt_version="m7-v2:abcdef0",
+        )
+    assert res.is_hit is False
+    assert res.reason == "no_prior_row"
+
+
+def test_partition_drug_groups_force_refresh_dispatches_all(tmp_path: Path):
+    init_deep_dives_db(tmp_path / "dd.db")
+    groups = group_candidates_by_drug([
+        dict(ticker="KURA", drug="ziftomenib", nct_number="NCT1",
+             next_catalyst_type="Initial Data",
+             catalyst_date_iso="2026-08-01", stage="phase2"),
+    ])
+    with db_connect(tmp_path / "dd.db") as cx:
+        to_dispatch, skipped = partition_drug_groups_by_cache(
+            cx, groups, current_prompt_version="m7-v2:x",
+            force_refresh=True,
+        )
+    assert len(to_dispatch) == 1
+    assert to_dispatch[0]["cache_lookup"].reason == "force_refresh"
+    assert skipped == []

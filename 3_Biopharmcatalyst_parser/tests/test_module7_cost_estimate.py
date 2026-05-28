@@ -154,6 +154,30 @@ def test_production_total_property():
 # ─────────────────────── HTML renderer ─────────────────────
 
 
+# ─────────────────────── D21 sync_concurrency model ────────
+
+
+def test_sync_concurrency_higher_means_more_cache_creation():
+    """D21: at sync_concurrency=C, the first C parallel calls each write
+    their own cache; only subsequent waves can read. Higher C → more
+    cache_create tokens and less cache_read tokens in the cache-only
+    (sync-realistic) scenario."""
+    low = estimate_cost(_inputs(n_tickers=20, sync_concurrency=1))
+    high = estimate_cost(_inputs(n_tickers=20, sync_concurrency=8))
+    assert high.scenarios[1].cache_creation_tokens_total \
+        > low.scenarios[1].cache_creation_tokens_total
+    assert high.scenarios[1].cache_read_tokens_total \
+        < low.scenarios[1].cache_read_tokens_total
+
+
+def test_sync_concurrency_does_not_affect_cache_batch_scenario():
+    """cache+batch models the batch-mode optimistic path (1 write,
+    N-1 reads) — independent of sync_concurrency."""
+    low = estimate_cost(_inputs(n_tickers=20, sync_concurrency=1))
+    high = estimate_cost(_inputs(n_tickers=20, sync_concurrency=8))
+    assert low.scenarios[2].total_usd == high.scenarios[2].total_usd
+
+
 def test_render_html_produces_file(tmp_path: Path):
     out = estimate_cost(_inputs())
     target = tmp_path / "cost_estimate.html"

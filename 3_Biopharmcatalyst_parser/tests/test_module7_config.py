@@ -75,8 +75,12 @@ def test_modifier_range_order_validated(tmp_path: Path):
         load_module_7_config(tmpf)
 
 
-def test_cost_calibration_factor_is_0_10():
-    """Memory: project_anthropic_cost_calibration locks this at 0.10 in the
-    shipped YAML; bumping it requires a deliberate decisions.md entry."""
+def test_cost_calibration_factor_locked():
+    """Locks the shipped calibration factor; bumping requires a deliberate
+    decisions.md entry. History:
+      • Originally 0.10 (inherited from 2_Funds_parser M6 batch mode).
+      • D21 bumped to 0.80 from first sync-mode invoice ($3.01).
+      • D22 reverted to 0.10 from first batch-mode invoice ($0.20);
+        batch is the production mode."""
     cfg = load_module_7_config(default_config_path())
     assert cfg.pricing.cost_calibration_factor == 0.10

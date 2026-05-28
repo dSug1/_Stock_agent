@@ -279,6 +279,45 @@ def build_context_pack(
     return pack
 
 
+# ───────────────── pack augmentation for D23 drug-dedup ────────────
+
+
+def augment_pack_with_drug_siblings(
+    pack: dict, drug_group_members: list[dict],
+) -> dict:
+    """D23 — annotate an anchor pack with the other catalysts of the same
+    drug so Claude sees the full event schedule when one API call's
+    output will be replicated across rows.
+
+    `drug_group_members` is the candidate list returned by
+    cache.group_candidates_by_drug — each entry carries at minimum
+    next_catalyst_type, nct_number, catalyst_date_iso.
+
+    The pack's primary `catalyst` block stays anchored to the original
+    catalyst (the one the dispatcher chose as the API anchor). Siblings
+    are added under `catalyst.sibling_catalysts`. Returns a shallow copy
+    when siblings exist; otherwise returns the original pack unchanged.
+    """
+    anchor_nct = pack["identity"]["nct_number"]
+    anchor_type = pack["catalyst"]["next_catalyst_type"]
+    siblings: list[dict] = []
+    for m in drug_group_members:
+        if (m.get("nct_number") == anchor_nct
+                and m.get("next_catalyst_type") == anchor_type):
+            continue
+        siblings.append({
+            "nct_number":         m.get("nct_number"),
+            "next_catalyst_type": m.get("next_catalyst_type"),
+            "catalyst_date_iso":  m.get("catalyst_date_iso"),
+        })
+    if not siblings:
+        return pack
+    new_pack = dict(pack)
+    new_pack["catalyst"] = dict(pack["catalyst"])
+    new_pack["catalyst"]["sibling_catalysts"] = siblings
+    return new_pack
+
+
 # ───────────────── catalyst-signature helper for cache ─────────────
 
 
@@ -308,6 +347,7 @@ def fetch_hard_pass_candidates(
     biotech_db_path: Path,
     *,
     explicit_tickers: Optional[list[str]] = None,
+    defined_timing_only: bool = False,
 ) -> list[dict]:
     """Return the rolling-view hard-pass feed used by M6.5 + M7.
 
@@ -319,6 +359,10 @@ def fetch_hard_pass_candidates(
     still requires `hard_pass = 1`. To include hard-fail rows, the caller
     must use a `--include-soft-fail` flag in the dispatcher and bypass
     this helper.
+
+    When ``defined_timing_only`` is True, restricts to rows with
+    timing_bucket = 'catalyst_date_defined' — the same set the HTML
+    report shows on its default "Defined timing" tab.
     """
     from database.db import get_connection  # type: ignore
     conn = get_connection(biotech_db_path)
@@ -349,6 +393,8 @@ def fetch_hard_pass_candidates(
             placeholders = ",".join("?" * len(explicit_tickers))
             sql += f" AND cs.ticker IN ({placeholders})"
             params.extend(explicit_tickers)
+        if defined_timing_only:
+            sql += " AND cs.timing_bucket = 'catalyst_date_defined'"
         sql += " ORDER BY cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type"
         rows = conn.execute(sql, params).fetchall()
     finally:
