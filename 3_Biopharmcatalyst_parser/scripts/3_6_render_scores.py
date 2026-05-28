@@ -541,6 +541,7 @@ JS = r"""
     if (state.tickerFilter && state.tickerFilter.length) {
       const t = state.tickerFilter.toLowerCase();
       if (!String(r.ticker || '').toLowerCase().includes(t) &&
+          !String(r.name || '').toLowerCase().includes(t) &&
           !String(r.drug || '').toLowerCase().includes(t)) return false;
     }
     return true;
@@ -571,7 +572,7 @@ JS = r"""
 
     const tbody = document.getElementById('rows-body');
     if (!sorted.length) {
-      tbody.innerHTML = '<tr><td colspan="11" class="no-rows">No rows match the current filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="13" class="no-rows">No rows match the current filters.</td></tr>';
       return;
     }
 
@@ -585,6 +586,7 @@ JS = r"""
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
         <td><span class="ticker">${escapeHtml(r.ticker)}</span></td>
+        <td>${escapeHtml(r.name || '')}</td>
         <td>${escapeHtml(r.drug || '')}</td>
         <td><span class="tag stage">${escapeHtml(r.stage || '')}</span></td>
         <td>${escapeHtml(r.next_catalyst_type || '')}</td>
@@ -709,7 +711,7 @@ JS = r"""
 
     const tr2 = document.createElement('tr');
     tr2.className = 'expand-row';
-    tr2.innerHTML = `<td colspan="12">${buildExpandPanel(r)}</td>`;
+    tr2.innerHTML = `<td colspan="13">${buildExpandPanel(r)}</td>`;
     tr.classList.add('expanded');
     tr.parentNode.insertBefore(tr2, tr.nextSibling);
   }
@@ -922,7 +924,7 @@ def _html_template(*, snap: date, rows: list[dict], kpis: dict,
       {stage_opts}
     </select>
   </label>
-  <label>search <input type="text" id="ticker-filter" placeholder="ticker or drug"></label>
+  <label>search <input type="text" id="ticker-filter" placeholder="ticker, name, or drug"></label>
   <button class="reset" id="reset-filters">reset</button>
   <span class="visible-count" id="visible-count">…</span>
 </div>
@@ -932,6 +934,7 @@ def _html_template(*, snap: date, rows: list[dict], kpis: dict,
     <tr>
       <th>#</th>
       <th data-col="ticker">Ticker</th>
+      <th data-col="name">Name</th>
       <th data-col="drug">Drug</th>
       <th data-col="stage">Stage</th>
       <th data-col="next_catalyst_type">Catalyst type</th>

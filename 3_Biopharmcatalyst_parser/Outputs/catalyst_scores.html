@@ -234,7 +234,7 @@ tbody td .score {
   Snapshot <code>2026-05-27</code> ·
   rules <code>v1.0:df80f1a</code> ·
   funds quarters: 2026-03-31 vs 2025-12-31 ·
-  generated 2026-05-27T18:08:24Z
+  generated 2026-05-28T03:40:25Z
 </div>
 
 <div class="kpi-strip">
@@ -288,7 +288,7 @@ tbody td .score {
       <option value="phase0">phase0</option><option value="phase1">phase1</option><option value="phase2">phase2</option><option value="phase3">phase3</option><option value="phase4">phase4</option><option value="phase5">phase5</option>
     </select>
   </label>
-  <label>search <input type="text" id="ticker-filter" placeholder="ticker or drug"></label>
+  <label>search <input type="text" id="ticker-filter" placeholder="ticker, name, or drug"></label>
   <button class="reset" id="reset-filters">reset</button>
   <span class="visible-count" id="visible-count">…</span>
 </div>
@@ -298,6 +298,7 @@ tbody td .score {
     <tr>
       <th>#</th>
       <th data-col="ticker">Ticker</th>
+      <th data-col="name">Name</th>
       <th data-col="drug">Drug</th>
       <th data-col="stage">Stage</th>
       <th data-col="next_catalyst_type">Catalyst type</th>
@@ -419,6 +420,7 @@ tbody td .score {
     if (state.tickerFilter && state.tickerFilter.length) {
       const t = state.tickerFilter.toLowerCase();
       if (!String(r.ticker || '').toLowerCase().includes(t) &&
+          !String(r.name || '').toLowerCase().includes(t) &&
           !String(r.drug || '').toLowerCase().includes(t)) return false;
     }
     return true;
@@ -449,7 +451,7 @@ tbody td .score {
 
     const tbody = document.getElementById('rows-body');
     if (!sorted.length) {
-      tbody.innerHTML = '<tr><td colspan="11" class="no-rows">No rows match the current filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="13" class="no-rows">No rows match the current filters.</td></tr>';
       return;
     }
 
@@ -463,6 +465,7 @@ tbody td .score {
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
         <td><span class="ticker">${escapeHtml(r.ticker)}</span></td>
+        <td>${escapeHtml(r.name || '')}</td>
         <td>${escapeHtml(r.drug || '')}</td>
         <td><span class="tag stage">${escapeHtml(r.stage || '')}</span></td>
         <td>${escapeHtml(r.next_catalyst_type || '')}</td>
@@ -587,7 +590,7 @@ tbody td .score {
 
     const tr2 = document.createElement('tr');
     tr2.className = 'expand-row';
-    tr2.innerHTML = `<td colspan="12">${buildExpandPanel(r)}</td>`;
+    tr2.innerHTML = `<td colspan="13">${buildExpandPanel(r)}</td>`;
     tr.classList.add('expanded');
     tr.parentNode.insertBefore(tr2, tr.nextSibling);
   }
