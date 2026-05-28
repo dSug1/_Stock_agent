@@ -657,7 +657,56 @@ The local HTTP server (`scripts/3_7_serve_selection.py`) serves the same `Output
 
 ---
 
-## 5.12 Storage rules (locked — carried from 2_Funds_parser M5 rev 2 + D32 + D49)
+## 5.12 Catalyst-identity cache (D17 — locked 2026-05-28)
+
+**Rule:** Skip the Anthropic call for a candidate when the catalyst's **identity** is unchanged versus the most recent successful prior deep-dive for the same `(ticker, drug, nct_number, next_catalyst_type)` — and dispatch when **any** identity field has changed.
+
+**Identity = 4 fields** captured at write time in `deep_dives.catalyst_signature`:
+
+```
+catalyst_signature = lower_strip(drug)
+                   | lower_strip(stage)               (from catalyst_snapshots.stage)
+                   | lower_strip(next_catalyst_type)
+                   | lower_strip(catalyst_date_iso)   (from catalyst_snapshots.catalyst_date
+                                                       OR catalyst_timing.date_min/date_max)
+```
+
+Two fields are also in the PK (`drug`, `next_catalyst_type`) so a change to either yields a new PK → no prior row → automatic cache miss. The remaining two (`stage`, `catalyst_date_iso`) are the *additional* identity dimensions captured by the signature.
+
+**Cache hit (skip dispatch) requires ALL of:**
+- A prior successful `deep_dives` row exists for the same `(ticker, drug, nct_number, next_catalyst_type)` (`p_clinical IS NOT NULL`).
+- Its `catalyst_signature` equals the candidate's current signature.
+- Its `prompt_version` equals the current `prompt_version` (so a YAML edit invalidates wholesale).
+
+**Cache miss reasons (every one of these dispatches):**
+
+| Reason | Trigger |
+|---|---|
+| `no_prior_row` | First time we've seen this catalyst PK. |
+| `prior_row_failed` | Earlier attempt landed in `deep_dive_errors`; retry. |
+| `identity_changed` | Any of drug / stage / catalyst_type / date changed since the prior row. |
+| `prompt_version_changed` | User edited `module_7.yaml` or the system prompt / few-shots. |
+| `force_refresh` | User passed `--force-refresh` on the CLI. |
+
+**No TTL.** Identity is the only criterion (per user rule). A catalyst whose identity hasn't changed in 3 months is still a cache hit; one that changed yesterday is a miss.
+
+**Re-run consequences:**
+
+| Scenario | Behavior |
+|---|---|
+| Same-day re-run (`.bat`), no BPC drop, no config edit | All cached → **0 API calls, $0 spent** |
+| New BPC drop tomorrow that doesn't change identity for ticker X | X still cache-hits |
+| New BPC drop changes a catalyst date (Q3 → September) | X dispatches |
+| New BPC drop changes stage (phase2 → phase3) | X dispatches |
+| Config edit (modifier tuning, prompt rewrite) | All dispatch (SHA-7 bumps) |
+| `--tickers TCRX` with prior identity-match row for TCRX | Skipped (gate still applies) |
+| `--force-refresh` | Everything dispatches |
+
+Implementation: [src/module_7/cache.py](../src/module_7/cache.py) — `compute_catalyst_signature`, `lookup_cache`, `partition_feed_by_cache`.
+
+---
+
+## 5.13 Storage rules (locked — carried from 2_Funds_parser M5 rev 2 + D32 + D49)
 
 These four rules govern every file M6.5 / M7 writes. They mirror what M5/M6 of `2_Funds_parser` and the existing 3_Biopharm M5/M6 already do:
 

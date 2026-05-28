@@ -1,0 +1,77 @@
+# Module 7 — Claude API deep-dive config.
+# Spec: spec/module_7_spec.md.
+# Decisions: spec/decisions.md § D15 (M6.5) + § D16 (M7).
+#
+# Edits to this file change the content hash, which is appended to
+# `prompt_version` so re-runs after a tuning edit invalidate the prior
+# row's PK (same trick as module_6/config.py).
+
+# ---------------- Prompt / model ----------------
+model: claude-opus-4-7
+prompt_version_label: m7-v1
+max_output_tokens: 12500
+system_prompt_path: config/module_7_system_prompt.md
+few_shot_examples_path: config/module_7_few_shots.md
+
+# ---------------- Web search (single-tier biotech) ----------------
+web_search:
+  enabled: true
+  max_uses: 10                      # per-ticker budget; matches 2_Funds_parser M6 post-D54
+  domains_path: config/module_7_web_search_domains.yaml
+
+# ---------------- Selection ----------------
+selection:
+  source_html: Outputs/catalyst_scores.html
+  sidecar_json: Outputs/catalyst_scores_selection.json
+  hard_pass_only: true              # M7 ignores hard-fail rows even if checked
+
+# ---------------- Dispatch ----------------
+dispatch:
+  mode: batch                       # 'batch' | 'sync'
+  sync_concurrency: 8               # only used in sync mode
+  poll_interval_s: 30               # batch polling cadence
+  timeout_s: 86400                  # batch hard deadline
+
+# ---------------- Modifiers ----------------
+# Linear remap of M6's 0-100 signal scores into bounded multiplicative
+# modifiers. Spec §5.2 + §5.6. Re-tune here without touching code.
+modifiers:
+  insider:
+    min_multiplier: 0.85
+    max_multiplier: 1.15
+  funds:
+    min_multiplier: 0.85
+    max_multiplier: 1.15
+  momentum:
+    min_multiplier: 0.95            # tighter — momentum is timing, not thesis
+    max_multiplier: 1.05
+
+# ---------------- Expectancy clamps ----------------
+# Final guards applied AFTER Claude returns; complements the schema bounds
+# enforced by parsing.py.
+clamps:
+  p_final_min: 0.05
+  p_final_max: 0.95
+  move_on_hit_pct_max: 400.0
+  move_on_miss_pct_min: -90.0
+
+# ---------------- Pricing (for the cost estimator) ----------------
+# Verify against https://www.anthropic.com/pricing at first run; values
+# below match 2_Funds_parser config/scoring.yaml::pricing as of 2026-04-28.
+pricing:
+  model: claude-opus-4-7
+  input_per_mtok: 15.00
+  output_per_mtok: 75.00
+  cache_read_multiplier: 0.10
+  cache_creation_multiplier: 0.10   # empirical (2_Funds_parser D44), not docs-quoted 1.25
+  batch_discount: 0.50
+  web_search_per_1k: 10.00
+  search_result_avg_tokens: 1500
+  cost_calibration_factor: 0.10     # memory: project_anthropic_cost_calibration
+
+# Estimator aborts dispatch when scenario_cache_batch.total_usd exceeds this.
+cost_ceiling_usd: 50.0
+
+# ---------------- Failure handling ----------------
+failures:
+  abort_threshold_pct: 5.0          # abort if >5% tickers fail to parse

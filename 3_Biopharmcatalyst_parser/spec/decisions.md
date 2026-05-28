@@ -909,3 +909,131 @@ Field-level diffs against the prior CSVs are limited to known-equivalent represe
 - The legacy v3.csv and v4.csv files are NOT preserved separately. The user uploads only docx going forward; the auto-converted CSV is the authoritative artifact.
 
 ---
+
+## D15 — M6.5 fundamentals + FDSC enrichment (2026-05-28)
+
+**Built:** `src/module_6_5/{fundamentals_db, edgar_client, price_client, pfw_estimator, enrich}.py` + `scripts/3_6_5_enrich_fundamentals.py` + `tests/test_module6_5_*.py`.
+
+**Architecture:**
+- New SQLite store `data/fundamentals.db` with three tables (`financials`, `capital_raises`, `fetch_log`) mirroring `2_Funds_parser/data/fundamentals.db` schema. Two 3_Biopharm-specific columns on `financials`: `last_price_usd / last_price_as_of` and `market_cap_fdsc_usd = (basic_shares + pfw) × last_price`, plus `pfw_source` and `pfw_share_dilution_warning` for audit.
+- `edgar_client.py` is copy-adapted from `2_Funds_parser/src/module_4c/edgar_client.py` per the existing 3_Biopharm convention (D1 §4.3.4): we do NOT cross-project import. HTTP underlay delegates to `module_2.edgar_client.http_get` so M2, M3, M6.5 all share one process-global rate limiter (9.5 req/s under SEC's 10/s fair-use cap). This is the key plumbing decision — `_EDGAR_LIMITER` is a singleton inside `module_2.edgar_client` and reusing it via import (not re-instantiating) keeps the aggregate request rate correct.
+- `price_client.py` is self-contained — uses yfinance directly with batched `yf.download`, falls back to per-ticker `yf.Ticker(...).history()` on shape mismatch. No separate prices.db sidecar; the last close is stored inline on the `financials` row. Memory `project_data_provider_switch` flags yfinance as a pre-deploy swap target.
+- `pfw_estimator.py` is the heuristic v1: `prefunded_warrants_count = SUM(capital_raises.shares_issued WHERE raise_type='pfw' AND filing_date >= today − 730 days)`. PFW raises are classified inside `edgar_client.classify_raise_type` when the filing body text contains "pre-funded" or "prefunded". Known over-count limitation (warrants may have been exercised); `pfw_source='capital_raises_sum_2yr'` makes the provenance visible. v2 = 10-Q footnote parsing.
+- A `pfw_share_dilution_warning` boolean fires when estimated PFW count ≥ 25% of `basic_shares_count` (configurable). Claude reads this in the pack and can call out PFW overhang.
+
+**Orchestrator (`enrich.run_enrichment`):**
+- Default feed: `SELECT DISTINCT ticker FROM catalyst_scores WHERE hard_pass=1` on the latest snapshot_date. `--tickers` overrides.
+- Per-source TTLs gate against `fetch_log.last_fetched_at`: companyfacts 30 d, capital_raises 14 d, price 1 d. `--force-refresh` bypasses.
+- Resolves ticker→CIK via the existing M2 `ticker_cik_map` cache (single source of truth across M2/M3/M6.5).
+- Prices fetched in one batched yfinance call up front; XBRL + capital_raises per ticker, fail-open with `fetch_log` audit row.
+- Per-ticker commit so a crash mid-feed doesn't roll back already-enriched tickers (mirrors M6's D51 pattern).
+
+**Test coverage:** 18 tests across `test_module6_5_fundamentals_db.py` + `test_module6_5_pfw_estimator.py` (schema, idempotent init, upsert round-trips, COALESCE-don't-clobber on conditional-GET fields, PFW lookback window, dilution-warning threshold).
+
+**Spec deviations from module_7_spec.md §4:**
+- PFW raises are stored in the `capital_raises` table (not in a dedicated `prefunded_warrants` table). Reasons: same source filing, same parser, same TTL — splitting them adds zero value but doubles the read joins. The renderer/M7 pack builder filters by `raise_type='pfw'` when it needs the PFW subset.
+- `prefunded_warrants_count` is recomputed on the LATEST `financials` row every M6.5 run, not stored per-period. Reason: PFW exercise/expiration is event-driven, not period-aligned. Older periods retain the value M6.5 stamped at the time of their fetch — that's the audit trail.
+
+---
+
+## D16 — M7 core pure-compute layers (config, scoring, parsing, cost_estimate, deep_dives_db, prompt) (2026-05-28)
+
+**Built (this turn — LLM dispatch path NOT YET built):**
+- `config/module_7.yaml` (prompt_version `m7-v1`, model `claude-opus-4-7`, cost_calibration_factor 0.10, modifier ranges, expectancy clamps, pricing block) + `src/module_7/config.py` (pydantic v2 loader, SHA-7 content hash appended to `prompt_version` per the M6 convention).
+- `src/module_7/deep_dives_db.py` — `data/claude_deep_dives.db` with four tables: `deep_dives` (per-catalyst per-run rows carrying Claude's raw text verbatim + structured fields + Python-applied modifiers + final expectancy), `deep_dive_runs` (audit), `deep_dive_errors` (parse + API failures), `web_search_cache` (server_tool_use results). One read helper `latest_deep_dive_per_catalyst(conn, snapshot_date)` returns max-run-id rows for the renderer LEFT-JOIN.
+- `src/module_7/scoring.py` — pure math: `remap_signal_to_modifier` linear-remaps M6's 0-100 signal score onto a bounded modifier range; `compute_expectancy` compounds `p_clinical × m_insider × m_funds → p_final` (clamped) + asymmetric `E[move] = p_final × hit + (1-p_final) × miss` + `expectancy = E[move] × m_momentum` + `expectancy/week`. None inputs collapse to the modifier band midpoint so a missing signal cannot tilt expectancy.
+- `src/module_7/parsing.py` — JSON-fence extractor with truncated-response recovery (brace-balancing) copy-adapted from 2_Funds_parser M6. All 10 m7-v1 HARD RULES enforced inside `parse_deep_dive` with structured `ParseError(kind, detail)`. Catalyst-already-passed gets its own `error_kind` so callers route it to `deep_dive_errors` not `schema_violation`.
+- `src/module_7/cost_estimate.py` — three-scenario estimator (no-optim / cache-only / cache+batch). `cost_calibration_factor` (default 0.10 per memory `project_anthropic_cost_calibration`) multiplies the FINAL total of every scenario. Web-search fee correctly excluded from the batch discount (per Anthropic docs).
+- `src/module_7/prompt.py` — cacheable-prefix loader (system_prompt.md + few_shots.md → one string with a single `cache_control: {type: "ephemeral"}` breakpoint at the end). System prompt + few-shots themselves are NOT YET drafted — that's a Turn 2 deliverable that needs user review before dispatch.
+
+**Compounding formula locked:**
+
+```
+p_clinical    ∈ [0.10, 0.90]                    (Claude)
+m_insider     = linear_remap(M6 insider_score   ∈ [0,100] → [0.85, 1.15])
+m_funds       = linear_remap(M6 funds_score     ∈ [0,100] → [0.85, 1.15])
+m_momentum    = linear_remap(M6 momentum_score  ∈ [0,100] → [0.95, 1.05])
+p_final       = clamp(p_clinical × m_insider × m_funds, 0.05, 0.95)
+move_on_hit_pct  = clamp(Claude_hit,  -inf, 400)
+move_on_miss_pct = clamp(Claude_miss, -90, +inf)
+E[move_pct]      = p_final × move_on_hit_pct + (1 − p_final) × move_on_miss_pct
+expectancy_pct   = E[move_pct] × m_momentum
+expectancy/week  = expectancy_pct / max(weeks_to_catalyst, 1)
+```
+
+**Why split this from the dispatch layer:** Pure-compute pieces have no API calls and no money risk. They get unit-tested in isolation (76 tests added: 21 scoring + 26 parsing + 14 cost_estimate + 9 deep_dives_db + 6 config). The dispatch layer (context_pack builder, Anthropic SDK calls, mandatory `[y/N]` cost gate, batch submit/poll, system prompt + few-shots drafting, renderer modifications, selection HTTP server, .bat wiring) lands in Turn 2 after this turn's contract is verified.
+
+**Test coverage:** 369 tests pass total (279 prior + 90 new, plus 4 unrelated skips).
+- `test_module7_config.py` (6) — default YAML validates, SHA-7 hash shifts on edit, pricing/model consistency, extra-fields forbidden, calibration_factor pinned at 0.10.
+- `test_module7_scoring.py` (21) — modifier remap, neutral signals don't tilt, clamps fire, asymmetric E[move], outlier clamps, time normalisation, audit-echo of original weeks_to_catalyst.
+- `test_module7_parsing.py` (26) — JSON fence + truncated recovery; all 10 HARD RULES with both happy-path and violation cases.
+- `test_module7_cost_estimate.py` (14) — three scenarios in order, cache+batch cheapest, batch discount only on tokens not search fee, calibration factor application, scaling sanity.
+- `test_module7_deep_dives_db.py` (9) — schema, idempotent init, run lifecycle, INSERT OR REPLACE on PK collision, web_search_cache COALESCE-don't-clobber, `latest_deep_dive_per_catalyst` picks MAX(run_id).
+
+**Deferred to Turn 2 (pending user signoff on this turn's contract):**
+- `src/module_7/context_pack.py` — per-ticker pack builder (joins biotech.db + fundamentals.db; strips insider/funds/momentum/M6-composite per spec §5.1).
+- `src/module_7/dispatch.py` — Anthropic SDK wrapper, sync + batch, mandatory `[y/N]` cost gate, submit/poll split for D51-style crash recovery.
+- `src/module_7/render_join.py` — LEFT-JOIN payload builder consumed by `scripts/3_6_render_scores.py`.
+- `config/module_7_system_prompt.md` + `config/module_7_few_shots.md` + `config/module_7_web_search_domains.yaml` — content needs user review before any dispatch.
+- `scripts/3_7_estimate_cost.py` + `scripts/3_7_deep_dive.py` + `scripts/3_7_serve_selection.py`.
+- Renderer modifications to `scripts/3_6_render_scores.py` per spec §5.11 (three new columns + deep-dive block below catalyst text).
+- `run_3_Biopharmcatalyst_parser.bat` insertion of M6.5 + M7 steps; `daily_orchestrator.py` hook (per memory `feedback_update_daily_runner`).
+
+---
+
+## D17 — M7 catalyst-identity cache rule (locked 2026-05-28)
+
+**Decision (user-locked):** M7 skips the Anthropic call for a candidate when the catalyst's **identity** (drug, stage, next_catalyst_type, catalyst_date) is unchanged versus the most recent successful prior deep-dive for the same `(ticker, drug, nct_number, next_catalyst_type)`. Any change to any of those four fields triggers a fresh dispatch. **No TTL** — identity is the only criterion.
+
+This replaces the original spec proposal of a 7-day TTL-based cache. The user's rule is sharper: a catalyst that hasn't changed in 3 months still has the same expectancy estimate (the science hasn't moved), so re-paying for a deep-dive is wasteful. Conversely, a catalyst whose date moved from "Q3 2026" to "September 2026" is materially different and warrants re-scoring.
+
+**Built:** `src/module_7/cache.py` (`compute_catalyst_signature`, `lookup_cache`, `partition_feed_by_cache`, `CacheLookup` dataclass) + `deep_dives.catalyst_signature` column added via additive migration + 20 unit tests in `tests/test_module7_cache.py`.
+
+**Identity normalisation:** lower-cased and stripped before signature concatenation, so `"TX45 "` vs `"tx45"` does NOT invalidate the cache.
+
+**Cache miss reasons** (one of these dispatches): `no_prior_row`, `prior_row_failed` (`p_clinical IS NULL`), `identity_changed`, `prompt_version_changed`, `force_refresh`. Each candidate carries its `cache_lookup.reason` after `partition_feed_by_cache`, surfaced in the dispatch summary so the user can audit why each ticker was dispatched or skipped.
+
+**Why also gate on `prompt_version`:** A YAML edit (modifier tuning, system-prompt rewrite, model swap) changes the SHA-7 appended to `prompt_version`. We want any such edit to invalidate ALL prior rows for re-scoring against the new prompt. Identity match + prompt_version match → cache hit. Identity match + prompt_version mismatch → cache miss. Belt and suspenders.
+
+**Why not also gate on pack content hash:** Considered but rejected. The pack content beyond the four identity fields (e.g., new insider trades since prior run, new fund position deltas, momentum delta) feeds the Python modifier remap downstream of Claude — it does NOT change `p_clinical` or the move estimates Claude returns. Adding a pack-hash gate would force dispatch for content changes Claude is blind to anyway, defeating the purpose. Re-tuning modifier weights is a YAML edit and already invalidates via `prompt_version`.
+
+---
+
+## D18 — M6.5 bug fixes after first dry run (locked 2026-05-28)
+
+Three bugs surfaced when M6.5 ran against the 52 hard-pass tickers. All fixed in this turn before any LLM dispatch.
+
+### D18.a — PFW share-count extractor was generating bogus billions
+
+**Bug:** For PFW (pre-funded warrant) filings, the body parser computed `shares_issued = gross_proceeds / price_per_share`. The `_RE_PRICE_PER_SHARE` regex matches **`$0.0001 per share`** (the warrant *exercise* price, not the offering price), yielding `shares = gross / 0.0001 = absurd billions`. ACET's `prefunded_warrants_count` came back as 48 billion (4,800× the basic-share count).
+
+**Fix:** Three new PFW-specific regexes (`_RE_PFW_SHARES_BY_WARRANTS`, `_RE_PFW_SHARES_TO_PURCHASE`, `_RE_PFW_AGGREGATE_OF_SHARES`) extracting share counts directly from prospectus cover-page language. When `raise_type == 'pfw'`, the parser uses `extract_pfw_share_count` and **never** falls back to `gross / pps`. Counts > 5e9 (above any biotech float) and < 1000 (noise) are rejected. Counts that don't match any pattern return `None` (safe failure — the M7 pack will tell Claude "PFW detected, count unparseable").
+
+**Result:** ACET now 10M PFW (real prospectus value). 31/63 PFW filings (49%) yield clean counts; the other 51% safely return None. Max PFW count across all 52 tickers: 27.8M shares — biotech-scale, no more astronomical artifacts.
+
+### D18.b — Operating cash flow TTM was inflated by cumulative-YTD double-counting
+
+**Bug:** `_ttm_sum` summed the 4 most recent quarterly `operating_cf` values. But XBRL reports these *cumulatively within a fiscal year*: Q1 = 3 months, Q2 = 6 months YTD, Q3 = 9 months YTD, 10-K = full year. Summing the last 4 cumulative values double-counts every period inside the cumulative sum. KURA's TTM came out as **−$439M** (real annual burn is closer to $100M); reported runway was **1.1 months** (real ≈ 6 months).
+
+**Fix:** `_ttm_sum` now uses XBRL `start` + `end` date spans to detect cumulative-YTD rows. Strategy: (1) annual row (10-K or 365-day span) wins; (2) else four single-quarter rows (~90-day span) summed; (3) else group rows by fiscal year, sort within FY ascending, **difference consecutive entries** to recover incremental quarters, sum the most recent 4; (4) else None (not a fake sum).
+
+**Result:** KURA OpCF TTM now −$78M, runway 6.0 months. AGIO −$380M → 3.6 months. SNDX −$278M → 15.2 months. TYRA −$102M → 10.0 months. BMEA −$56M → 9.5 months. All biotech-plausible.
+
+### D18.c — Orchestrator step order leaked prior-run garbage into PFW estimate
+
+**Bug:** `enrich.run_enrichment` computed the PFW estimate **before** persisting this run's fresh `capital_raises` rows. The estimate read `cached_pfw_rows` from the DB — which still held the prior-run bogus 48B values — and summed them with this run's fresh (smaller) values. Even after the D18.a regex fix, the financials row's `prefunded_warrants_count` came back at 48B because the orchestrator read stale data before overwriting it.
+
+**Fix:** Moved `upsert_capital_raise` to run **before** the PFW estimate. The estimate now re-queries `capital_raises` after the upsert, reading only the post-fix values.
+
+**Combined post-fix state on the 52-ticker feed:**
+
+| Metric | First run (buggy) | After all three fixes |
+|---|---|---|
+| Max PFW count | 48,009,600,000 (ACET) | 27,807,482 |
+| KURA runway | 1.1 months | 6.0 months |
+| PFW share-count recall | 8% (5/63) | 49% (31/63) |
+| Tests passing | 369 + 90 = 459 ❌ (1 fail) | 406 (37 new + 369 prior) ✓ |
+
+External cross-check vs yfinance for 8 spot-check tickers: `basic_shares_count` matches yfinance.sharesOutstanding within ±0.22% for established tickers and ±4.3% for early-stage (drift is post-quarter share issuance, expected). All prices match to the cent.
+
+---
