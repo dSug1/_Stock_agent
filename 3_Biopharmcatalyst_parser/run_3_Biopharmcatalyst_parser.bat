@@ -3,8 +3,9 @@ REM ============================================================
 REM Biopharmcatalyst Parser orchestrator.
 REM Lives inside 3_Biopharmcatalyst_parser/. Shared venv at ..\.venv\.
 REM
-REM Build order (per spec §9): M0 -> M1 -> M5 -> M4 -> M2 -> M3 -> M6.
-REM Each module gated by y/N. M0 always runs (idempotent, free).
+REM Build order (per spec §9): funds-refresh -> M0a (docx->csv) -> M0b (db init)
+REM   -> M1 -> M5 -> M4 -> M2 -> M3 -> M6.  Each module gated by y/N.
+REM M0a + M0b always run (idempotent, free).
 REM ============================================================
 
 setlocal EnableDelayedExpansion
@@ -48,10 +49,24 @@ if errorlevel 1 (
 )
 
 REM ============================================================
-REM Module 0 — initialize schema (always; idempotent)
+REM Module 0a — convert any new BPC catalyst .docx exports into the
+REM CSV format M1 expects. Auto-skipped when each CSV is newer than
+REM its sibling .docx; idempotent.
 REM ============================================================
 echo.
-echo === Module 0: initializing data\biotech.db ===
+echo === Module 0a: converting any new _csv_source/*.docx -^> .csv ===
+python scripts\3_0_convert_docx_to_csv.py
+if errorlevel 1 (
+    echo [WARN] docx-to-csv conversion reported a failure; continuing.
+    echo        If M1 then fails because a CSV is missing or malformed,
+    echo        re-run with --force to rebuild from the source docx.
+)
+
+REM ============================================================
+REM Module 0b — initialize schema (always; idempotent)
+REM ============================================================
+echo.
+echo === Module 0b: initializing data\biotech.db ===
 python scripts\3_0_init_db.py
 if errorlevel 1 (
     echo [FATAL] Module 0 failed.

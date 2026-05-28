@@ -1,18 +1,179 @@
-# Module 0 — Database bootstrap
+# Module 0 — Bootstrap (docx→csv + database)
 
-**Plain-English purpose:** Module 0 creates the empty SQLite file that
-every other module will read from and write to. It is the **only**
-module that creates tables; every later module only inserts/updates rows
-inside the structure M0 lays down.
+**Plain-English purpose:** Module 0 does TWO things before the rest of
+the pipeline can run:
 
-If you think of the pipeline as a building, **Module 0 pours the
-foundation and lays out the empty rooms.** Modules 1–5 move furniture
-in. Nothing is "ingested," nothing reaches the internet, nothing is
-calculated — M0 is pure plumbing.
+- **Module 0a** — convert any new BPC `.docx` exports in `_csv_source/`
+  into the 19-column `.csv` files M1 ingests. This is what makes "drop
+  the docx in, run the pipeline" work; you no longer convert docx → csv
+  by hand.
+- **Module 0b** — create the empty SQLite file (`data/biotech.db`) and
+  the eight tables every later module reads from and writes to.
+
+If you think of the pipeline as a building, **Module 0a delivers the
+raw materials and Module 0b pours the foundation and lays out the empty
+rooms.** Modules 1–6 move furniture in. Nothing is "ingested" yet, no
+network calls, no calculations — M0 is pure plumbing.
+
+Both sub-modules are idempotent: re-running them on an already-prepared
+project does nothing visible (the CSVs are skipped because they're
+already fresh; the database is opened-and-closed without modifying
+anything).
 
 ---
 
-## What it actually does, step by step
+## Module 0a — `.docx` → `.csv` conversion
+
+### Why this exists
+
+The user gets catalyst data from BPC's website by selecting their data
+table and pasting it into a Word document. The resulting `.docx`
+contains the **raw HTML** of the table inside its paragraph text —
+not a native Word table. Up until D11, we asked the user to also do
+the `docx → csv` conversion by hand using Word's "Save as CSV" or a
+script outside the pipeline. That manual step has two failure modes:
+
+1. **Format drift.** Different conversion routes produce dates in
+   different formats (DD/MM/YYYY vs ISO YYYY-MM-DD). This bit us in D11
+   — the v3 CSV used DD/MM/YYYY but the v4 CSV switched to ISO,
+   silently NULL-ing the `catalyst_date` column on the first v4
+   ingest.
+2. **Noise pollution.** The visible cell text contains UI cruft like
+   `"$213.12 -2.58 -1.20%"` for prices, `"FTD"` (Fast Track
+   Designation) badges appended to drug names, and `"… read more"`
+   truncation on long catalyst texts. A naive text-extraction process
+   picks up all of it.
+
+M0a solves both: it always pulls from BPC's `blurred-text` HTML
+attribute (the canonical sort/copy value used by their JS), so every
+docx produces a structurally identical CSV regardless of when the
+user exported it.
+
+### What it actually does, step by step
+
+When you run `scripts/3_0_convert_docx_to_csv.py`:
+
+1. **Scans `_csv_source/` for `*.docx` files** (skipping Word's
+   `~$lock` files). For each docx, decides whether to convert:
+   - CSV missing → convert.
+   - CSV newer than docx → skip (the CSV is already fresh).
+   - CSV older than docx OR `--force` passed → reconvert.
+
+2. **Opens the docx via `python-docx`** and concatenates the text of
+   every paragraph. That concatenated string is the raw HTML BPC
+   placed in the document.
+
+3. **Parses the HTML with BeautifulSoup** and locates the first
+   `<table>` and its `<tbody>`. Walks every `<tr>` and reads the 20
+   `<td>` cells.
+
+4. **For each `<td>`, applies one of four extraction modes** depending
+   on the target CSV column:
+
+   | Mode | Behaviour |
+   |---|---|
+   | `blurred_or_text` | If the cell contains a `<div blurred-text="…">`, return that attribute. Else, return the visible text. Used for Ticker, Name, Price, Drug, Stage, Catalyst Date, Catalyst, Historical LOA, Historical POP, Market Cap, Last Updated, No Of Shares. |
+   | `text` | Plain visible text, whitespace collapsed. Used for NCT Number, Indication, Status, Next Catalyst, Conference. |
+   | `price_history` | The 30-day price column's `blurred-text` is `"price,unix_ts,price,unix_ts,…"` — keep the even-indexed values (the prices) and join them with `"; "`. |
+   | `sentiment` | Parse `"Community NN% NN% NN%"` from the visible text and format as `"Bull X% / Neutral Y% / Bear Z%"`. Defaults to `"Bull -% / Neutral -% / Bear -%"` when there's no community vote. |
+
+5. **Drops docx column 9 ("Options")** — that's a "View" hyperlink
+   column with no data, not in the M1 CSV schema. So 20 docx columns
+   become 19 CSV columns.
+
+6. **Writes the CSV** to the docx's sibling path (replacing the `.docx`
+   extension with `.csv`). UTF-8, comma-separated, double-quoted where
+   needed, with the same 19-column header M1 expects.
+
+7. **Reports counts** — rows written and rows skipped (a row is
+   skipped only if it has fewer than 20 cells; in practice this never
+   happens for real BPC exports).
+
+### Drug and Catalyst columns are special
+
+These two columns **must** use `blurred-text` (not visible text):
+
+- **`Drug`** — the visible text appends FDA-designation badges like
+  `"FTD"` (Fast Track), `"BTD"` (Breakthrough Therapy), `"ODD"` (Orphan
+  Drug), and the link text `"View Clinical Trial Data"`. Using the
+  visible text breaks the M1 primary key — a row that was previously
+  ingested as `Emraclidine (CVL-231)` would re-ingest as a NEW row
+  `Emraclidine (CVL-231) FTD` after BPC's badge classification
+  changes. The `blurred-text` attribute always carries just the
+  drug name.
+
+- **`Catalyst`** — the visible text is truncated by BPC's UI at a
+  fixed length with a `"… read more"` suffix. Long catalyst texts
+  lose their full body. The `blurred-text` attribute carries the
+  complete unedited text.
+
+This is why the converter ships defaults that favour `blurred-text`
+heavily; an earlier draft that used visible text broke the PK on 129
+of 600 rows because of FDA-badge changes.
+
+### How to run M0a
+
+```bash
+# Auto-scan _csv_source/, convert anything new (called by the .bat)
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py
+
+# Reconvert everything even if CSVs are already fresh
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py --force
+
+# Convert a single docx (e.g. dropped outside _csv_source/)
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py \
+    /path/to/biotech_catalysts_v5.docx --out /path/to/biotech_catalysts_v5.csv
+
+# Verbose
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py -v
+```
+
+### Test coverage
+
+`tests/test_docx_converter.py` — 22 tests:
+
+- 8 unit tests on the cell-level extractors (`blurred_or_text`
+  prefer/fallback, whitespace collapsing, price-history parsing,
+  sentiment regex, no-vote default).
+- 4 invariants on `COLUMN_MAP` (19 columns, docx col 9 dropped, valid
+  modes, Drug+Catalyst use `blurred_or_text`).
+- 6 row-level tests on a synthetic 20-cell row covering each special
+  case (FDA-badge stripping, ISO dates, integer-string market cap,
+  semicolon-joined price history, sentiment formatting).
+- 4 end-to-end tests against the real `biotech_catalysts_v3.docx` and
+  `biotech_catalysts_v4.docx` (600 + 100 rows, every Catalyst Date is
+  ISO, no Drug contains a stripped FDA badge fragment).
+
+### Acceptance against the live docx files
+
+Running on `_csv_source/biotech_catalysts_v3.docx` produces a 600-row
+CSV whose PKs (Ticker, Drug, NCT Number, Next Catalyst) match the
+prior manually-converted v3.csv 572-for-572 (28 within-CSV dupes
+coalesce in M1, as before). Same for v4: 100/100 PK match.
+
+Field-level diffs against the prior CSVs are limited to known-equivalent
+representations:
+
+- `Price`: `"12.51"` vs `"12.5100"` (parsed identically by `float()`).
+- `Catalyst Date`: `"31/12/2026"` (DD/MM/YYYY) vs `"2026-12-31"`
+  (ISO). M1 accepts both formats per D11.
+- `Last Updated`: `"26/05/2026 08:21"` vs `"2026-05-26 08:21:02"`
+  (ISO + seconds). M1 accepts both per D11.
+
+Going forward, all CSVs produced by M0a use ISO format consistently.
+
+---
+
+## Module 0b — Database bootstrap
+
+**Plain-English purpose:** Module 0b creates the empty SQLite file that
+every other module will read from and write to. It is the **only**
+module that creates tables; every later module only inserts/updates rows
+inside the structure M0b lays down.
+
+---
+
+### What M0b actually does, step by step
 
 When you run `scripts/3_0_init_db.py`:
 

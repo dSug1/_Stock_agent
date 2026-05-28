@@ -91,9 +91,66 @@ Cross-cutting rules that govern how the pipeline is invoked, where files live, a
 
 ---
 
-## 2. Database Schema (Module 0)
+## 2. Module 0 — Bootstrap (docx→csv conversion + DB schema)
 
-The schema is bootstrapped at first run by `db.py:initialize_db()`. The function is idempotent (uses `CREATE TABLE IF NOT EXISTS`).
+Module 0 has two sub-steps that always run at the top of the pipeline (idempotent, free):
+
+### 2.0 Module 0a — `.docx` → `.csv` conversion
+
+The user pastes BPC's website data table into a Word document. That `.docx` therefore contains a raw HTML `<table>` inside its paragraph stream — not a Word-native table. M0a parses that HTML and writes the 19-column CSV that M1's pydantic schema expects.
+
+**Auto-mode (default behaviour from the orchestrator):** scan `_csv_source/*.docx` and, for any `.docx` whose sibling `.csv` is missing or older than the docx, convert it. The CLI:
+
+```bash
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py            # auto-scan _csv_source/
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py --force    # rebuild every CSV from its docx
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_0_convert_docx_to_csv.py _csv_source/biotech_catalysts_v4.docx   # single-file mode
+```
+
+**Extraction rules** — for each `<tr>` in the table, take the 20 `<td>` cells and emit 19 CSV columns (the docx col-9 "Options" is dropped):
+
+| CSV column | docx col | Source | Notes |
+|---|---:|---|---|
+| `Ticker` | 0 | blurred-text | |
+| `Name` | 1 | blurred-text | |
+| `Price` | 2 | blurred-text | e.g. `213.1200` (numeric string, 4 decimals from BPC) |
+| `30 Day Price Change` | 3 | blurred-text, even indices | parse `"p,ts,p,ts,…"`; keep prices, join with `; ` |
+| `Drug` | 4 | **blurred-text required** | visible text appends FDA badges ("FTD", "BTD", "ODD") and "View Clinical Trial Data" link text that pollute the PK |
+| `NCT Number` | 5 | text | |
+| `Indication` | 6 | text | |
+| `Stage` | 7 | blurred-text | visible text shows human label ("PDUFA priority review"); attribute carries the canonical `phaseN` |
+| `Status` | 8 | text | |
+| (col 9 Options) | 9 | **dropped** | not in the M1 schema |
+| `Next Catalyst` | 10 | text | |
+| `Catalyst Date` | 11 | blurred-text | ISO `YYYY-MM-DD` (visible text shows DD/MM/YYYY ET) |
+| `Catalyst` | 12 | **blurred-text required** | visible text is UI-truncated with `"… read more"`; attribute carries the full body |
+| `Conference` | 13 | text | (no blurred-text attribute on this column) |
+| `Historical LOA` | 14 | blurred-text | |
+| `Historical POP` | 15 | blurred-text | |
+| `Bullish or Bearish` | 16 | **special parser** | regex `Community NN% NN% NN%` → `"Bull X% / Neutral Y% / Bear Z%"`; defaults to `"Bull -% / Neutral -% / Bear -%"` on no match |
+| `Market Cap` | 17 | blurred-text | integer string (e.g. `376538886012` not `"376.54B"`) |
+| `Last Updated` | 18 | blurred-text | ISO `YYYY-MM-DD HH:MM:SS` |
+| `No Of Shares` | 19 | blurred-text | integer string |
+
+**Why `blurred-text` is canonical** — BPC's website uses this attribute on the inner `<div>` of each cell to carry the sort/copy/export value. The visible text contains UI noise (`$` prefixes, suffixes like " ET", screen-reader labels, FDA-badge tags, truncation ellipses). The attribute is consistently present on every cell that has a non-text canonical form.
+
+**Idempotency and edit detection** — `auto_convert_directory()` compares mtimes:
+- CSV missing → convert.
+- CSV exists and `csv.mtime >= docx.mtime` → skip with `[INFO] skip … — CSV is up-to-date`.
+- CSV older than docx (or `--force` passed) → reconvert.
+
+**Acceptance criteria (verified on the live v3 + v4 docx)**:
+
+| File | Rows | PK match vs prior manually-converted CSV |
+|---|---:|:--:|
+| `biotech_catalysts_v3.docx` | 600 | 572/572 PKs match (28 within-CSV dupes coalesce in M1, as before) |
+| `biotech_catalysts_v4.docx` | 100 | 100/100 PKs match |
+
+Field-level diffs against the prior manually-converted CSVs are limited to known-equivalent representations: ISO vs `DD/MM/YYYY` dates (M1 accepts both per D11), trailing decimal places on `Price` (parsed by `float()`), and ISO timestamps with seconds (M1 accepts `%Y-%m-%d %H:%M:%S` per D11).
+
+### Module 0b — Database schema bootstrap
+
+The schema is bootstrapped at first run by `db.py:initialize_db()`. The function is idempotent (uses `CREATE TABLE IF NOT EXISTS`). Tables are documented per-table in the subsections below.
 
 ### 2.1 `catalyst_snapshots`
 

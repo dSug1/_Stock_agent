@@ -850,3 +850,62 @@ Full repo suite: **257 tests passing** (236 → 257).
 - `_q1_consensus_report.py` keeps its legacy filename (the script itself, not its output) to avoid breaking any external references. The output filename is now generic.
 
 ---
+
+## D14 — Docx-to-CSV conversion in Module 0a (2026-05-28)
+
+**Trigger:** the user uploads BPC catalyst data as `.docx` files (Word documents containing pasted HTML from BPC's website) and wants the pipeline to convert them automatically. Until D14 the user had to convert docx→csv outside the pipeline; that manual step caused the D11 format-drift bug (v3 used DD/MM/YYYY, v4 silently switched to ISO YYYY-MM-DD because of a different conversion route).
+
+**Built:** new package + script + orchestrator step.
+
+| File | Role |
+|---|---|
+| `src/docx_converter/__init__.py` | Package init; re-exports `convert`, `auto_convert_directory`, `extract_table`, `COLUMN_MAP`. |
+| `src/docx_converter/convert.py` | Pure functions: cell extractors, `row_to_dict`, `convert(docx, csv)`, `auto_convert_directory(source_dir, force=False)`. |
+| `scripts/3_0_convert_docx_to_csv.py` | CLI; auto-scans `_csv_source/*.docx` by default; single-file mode via positional arg; `--force` rebuilds even fresh CSVs. |
+| `tests/test_docx_converter.py` | 22 tests across unit / row-level / end-to-end on real docx files. |
+| `run_3_Biopharmcatalyst_parser.bat` | New "Module 0a" step (before existing M0 db init, which is renamed "Module 0b"). |
+
+### Extraction insight: `blurred-text` is canonical
+
+BPC's website tags each cell's inner `<div>` with a `blurred-text` HTML attribute carrying the machine-readable value. The visible cell text contains UI noise (`$213.12 -2.58 -1.20%` for prices, `"FTD"` Fast-Track-Designation badges appended to drug names, `"… read more"` truncation on long catalyst texts, " ET" timezone suffix on dates). **The converter always prefers `blurred-text` over visible text** and falls back to text only when the attribute is absent.
+
+### Column extraction rules (19 CSV columns from 20 docx columns)
+
+| CSV column | docx col | Mode | Why this mode |
+|---|---:|---|---|
+| `Ticker`, `Name`, `Price`, `Stage`, `Catalyst Date`, `Last Updated`, `Market Cap`, `No Of Shares`, `Historical LOA`, `Historical POP` | 0–2, 7, 11, 14, 15, 17, 18, 19 | `blurred_or_text` | Canonical numeric/structured values; visible text has formatting noise. |
+| `30 Day Price Change` | 3 | `price_history` | Blurred-text is `p,ts,p,ts,…`; keep prices (even indices), join with `; `. |
+| **`Drug`** | 4 | **`blurred_or_text`** (mandatory) | Visible text appends FDA badges (`FTD`/`BTD`/`ODD`) and `"View Clinical Trial Data"`. Without blurred-text, 129 of 600 rows would fail PK match against the prior manually-converted CSV. |
+| **`Catalyst`** | 12 | **`blurred_or_text`** (mandatory) | Visible text is truncated by BPC's UI with `"… read more"`. Without blurred-text, ~206 of 600 rows lose their full catalyst body. |
+| `NCT Number`, `Indication`, `Status`, `Next Catalyst`, `Conference` | 5, 6, 8, 10, 13 | `text` | Either no blurred-text attribute or identical to visible text. |
+| (docx col 9 "Options") | 9 | **dropped** | A `View` hyperlink with no data, not in the M1 schema. |
+| `Bullish or Bearish` | 16 | `sentiment` | Visible text is `"Community 50% 30% 20% <drug> How are you feeling…"`; regex `Community NN% NN% NN%` extracts the three percentages; format as `"Bull X% / Neutral Y% / Bear Z%"`. Defaults to `"Bull -% / Neutral -% / Bear -%"` when no community vote is present. |
+
+### Idempotency
+
+`auto_convert_directory()` checks mtimes. If the sibling CSV exists AND is newer than the docx, the conversion is skipped. `--force` overrides. This matches D2/D4's pattern for M1 / M4 ingest — re-running the orchestrator on an unchanged docx is a no-op.
+
+### Output format implications for M1
+
+Every CSV produced by M0a uses ISO format for dates and timestamps (because `blurred-text` consistently returns ISO). The M1 pydantic schema was extended in D11 to accept both DD/MM/YYYY (legacy v3) and ISO formats; that flexibility remains in case anyone hand-edits a CSV, but going forward all auto-converted CSVs are ISO-only.
+
+### Acceptance against the live docx files
+
+```
+biotech_catalysts_v3.docx → 600 rows, 0 skipped, 572/572 PKs match the
+                            prior manually-converted v3.csv (28 within-CSV
+                            dupes coalesce in M1, as before).
+biotech_catalysts_v4.docx → 100 rows, 0 skipped, 100/100 PKs match the
+                            prior manually-converted v4.csv.
+```
+
+Field-level diffs against the prior CSVs are limited to known-equivalent representations: ISO vs DD/MM/YYYY dates, 4-decimal-place prices, ISO timestamps with seconds. These all parse to the same in-memory values via M1's pydantic validators.
+
+### Re-litigation policy
+
+- The 19-column CSV schema is locked. Adding a column requires updating both `COLUMN_MAP` and `module_1/csv_schema.py::EXPECTED_COLUMNS` in lock-step.
+- `Drug` and `Catalyst` MUST stay on `blurred_or_text`. A regression test in `test_docx_converter.py::test_column_map_drug_and_catalyst_use_blurred_or_text` enforces this.
+- The orchestrator runs M0a unconditionally before M0b. If M0a fails (e.g., python-docx import error), the .bat prints a warning and continues — M1 will then fail loudly if a required CSV is missing, which is the correct fail-loud behaviour for a missing input.
+- The legacy v3.csv and v4.csv files are NOT preserved separately. The user uploads only docx going forward; the auto-converted CSV is the authoritative artifact.
+
+---
