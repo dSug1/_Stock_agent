@@ -1,18 +1,29 @@
-"""Render a self-contained HTML report of Module 6's catalyst_scores.
+"""Render Module 6's catalyst_scores as a templated HTML report.
 
-Reads ``catalyst_scores`` JOIN ``catalyst_snapshots`` + ``catalyst_timing``
-for one snapshot (default: most recent) and writes
-``Outputs/catalyst_scores.html``. Fully self-contained — embedded CSS,
-vanilla JS, JSON data; no external dependencies.
+Splits output into two files in ``Outputs/``:
 
-Run from `3_Biopharmcatalyst_parser/`:
+  * ``catalyst_scores.html``       — static template (CSS + JS + DOM
+    skeleton). Rewritten only when the renderer's CSS/JS/markup changes
+    (detected via a content-hash meta tag).
+  * ``catalyst_scores_data.js``    — sidecar payload (``window.__DATA = {...}``).
+    Rewritten on EVERY run. This is the only file the daily pipeline touches.
+
+The HTML loads the sidecar via ``<script src="catalyst_scores_data.js"></script>``;
+all DOM construction (KPI strip, score-distribution bar, tabs, table)
+happens client-side from ``window.__DATA``. The user can double-click the
+HTML from Explorer — no local HTTP server required (same-directory
+``<script src>`` works under ``file://``).
+
+Run from ``3_Biopharmcatalyst_parser/``:
     PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_6_render_scores.py
+    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_6_render_scores.py --rebuild-template
 """
 from __future__ import annotations
 
 import argparse
-import html
+import hashlib
 import json
+import re
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta
@@ -27,14 +38,99 @@ if str(SRC) not in sys.path:
 from database.db import get_connection  # noqa: E402
 
 
-OUTPUT_PATH = PROJECT_ROOT / "Outputs" / "catalyst_scores.html"
+OUTPUT_DIR = PROJECT_ROOT / "Outputs"
+HTML_PATH = OUTPUT_DIR / "catalyst_scores.html"
+DATA_PATH = OUTPUT_DIR / "catalyst_scores_data.js"
 INSIDER_WINDOW_DAYS = 365  # matches Module 6's lookback_days default
 
 
-def _fetch_score_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
-    rows = conn.execute(
-        """
+# =====================================================================
+# DB queries
+# =====================================================================
+
+def _max_snapshot_date(conn: sqlite3.Connection) -> str | None:
+    r = conn.execute("SELECT MAX(snapshot_date) FROM catalyst_scores").fetchone()
+    return r[0] if r and r[0] else None
+
+
+def _fetch_score_rows(
+    conn: sqlite3.Connection,
+    *,
+    snap: date | None = None,
+) -> tuple[list[dict], dict]:
+    """Fetch catalyst_scores rows. Two modes:
+
+    * ``snap`` is None (default) → ROLLING view: take MAX(snapshot_date)
+      per unique (ticker, drug, nct_number, next_catalyst_type) and
+      filter out catalysts whose `date_max` has now passed (catalyst
+      materialized). This is the daily-pipeline view that accumulates
+      across CSV uploads instead of showing only the latest snapshot.
+    * ``snap`` is a specific date → SINGLE-snapshot view (legacy
+      behaviour, useful for audit replay of a historical render).
+
+    Returns ``(rows, meta)``. ``meta`` carries the snapshots covered,
+    the effective "today" used for materialization, and a count of
+    catalysts dropped because their window has now passed.
+    """
+    if snap is not None:
+        rows = conn.execute(
+            """
+            SELECT
+                cs.snapshot_date,
+                cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type,
+                cs.hard_pass, cs.fail_reasons, cs.timing_bucket,
+                cs.insider_gross_weighted_usd, cs.insider_score,
+                cs.return_30d_pct, cs.momentum_score,
+                cs.fund_quarter_latest, cs.fund_quarter_previous,
+                cs.funds_holding_latest, cs.funds_holding_previous,
+                cs.fund_accumulation_usd, cs.fund_accumulation_score,
+                cs.composite_score, cs.rules_version,
+                t.date_min, t.date_max, t.precision_tier, t.source_lane,
+                t.matched_phrase,
+                s.name, s.indication, s.stage, s.market_cap_usd,
+                s.price, s.catalyst_date, s.catalyst_text, s.conference
+            FROM catalyst_scores cs
+            LEFT JOIN catalyst_timing t USING
+                (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+            LEFT JOIN catalyst_snapshots s USING
+                (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+            WHERE cs.snapshot_date = ?
+            ORDER BY
+                cs.hard_pass DESC,
+                cs.composite_score DESC NULLS LAST,
+                cs.insider_score DESC NULLS LAST
+            """,
+            (snap.isoformat(),),
+        ).fetchall()
+        meta = {
+            "mode": "single",
+            "snapshots_covered": [snap.isoformat()],
+            "effective_today": snap.isoformat(),
+            "materialized_dropped": 0,
+        }
+        return [dict(r) for r in rows], meta
+
+    # Rolling view
+    max_snap_iso = _max_snapshot_date(conn)
+    if max_snap_iso is None:
+        return [], {
+            "mode": "rolling",
+            "snapshots_covered": [],
+            "effective_today": None,
+            "materialized_dropped": 0,
+        }
+
+    # Two queries from the same JOIN — one with materialization, one without,
+    # so we can report how many rows were dropped because date_max passed.
+    base_sql = """
+        WITH latest_per_catalyst AS (
+            SELECT ticker, drug, nct_number, next_catalyst_type,
+                   MAX(snapshot_date) AS max_snap
+            FROM catalyst_scores
+            GROUP BY ticker, drug, nct_number, next_catalyst_type
+        )
         SELECT
+            cs.snapshot_date,
             cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type,
             cs.hard_pass, cs.fail_reasons, cs.timing_bucket,
             cs.insider_gross_weighted_usd, cs.insider_score,
@@ -48,26 +144,53 @@ def _fetch_score_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
             s.name, s.indication, s.stage, s.market_cap_usd,
             s.price, s.catalyst_date, s.catalyst_text, s.conference
         FROM catalyst_scores cs
+        JOIN latest_per_catalyst l USING
+            (ticker, drug, nct_number, next_catalyst_type)
         LEFT JOIN catalyst_timing t USING
             (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
         LEFT JOIN catalyst_snapshots s USING
             (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
-        WHERE cs.snapshot_date = ?
+        WHERE cs.snapshot_date = l.max_snap
+    """
+
+    # Count materialized-only rows (date_max < effective today) for the meta info.
+    materialized_dropped = conn.execute(
+        base_sql.replace(
+            "SELECT\n            cs.snapshot_date,",
+            "SELECT COUNT(*) AS n,",
+        ).split("ORDER BY")[0]
+        + " AND t.date_max IS NOT NULL AND t.date_max < ?",
+        (max_snap_iso,),
+    ).fetchone()[0]
+
+    rows = conn.execute(
+        base_sql + """
+          AND (t.date_max IS NULL OR t.date_max >= ?)
         ORDER BY
             cs.hard_pass DESC,
             cs.composite_score DESC NULLS LAST,
             cs.insider_score DESC NULLS LAST
         """,
-        (snap.isoformat(),),
+        (max_snap_iso,),
     ).fetchall()
-    return [dict(r) for r in rows]
+
+    snapshots = [
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT snapshot_date FROM catalyst_scores ORDER BY snapshot_date"
+        ).fetchall()
+    ]
+    meta = {
+        "mode": "rolling",
+        "snapshots_covered": snapshots,
+        "effective_today": max_snap_iso,
+        "materialized_dropped": materialized_dropped,
+    }
+    return [dict(r) for r in rows], meta
 
 
 def _fetch_insider_trades(
     conn: sqlite3.Connection, snap: date, tickers: list[str],
 ) -> dict[str, list[dict]]:
-    """Up to 10 most-recent qualifying insider buys per ticker (CEO/CFO
-    only, since those are the only roles M6 actually scores)."""
     if not tickers:
         return {}
     floor_iso = (snap - timedelta(days=INSIDER_WINDOW_DAYS)).isoformat()
@@ -100,10 +223,8 @@ def _fetch_insider_trades(
 def _fetch_funds_breakdown(
     conn: sqlite3.Connection, tickers: list[str], q_latest: str | None, q_prev: str | None,
 ) -> dict[str, list[dict]]:
-    """Per-ticker per-fund position deltas, for the expand panel."""
     if not tickers or not q_latest or not q_prev:
         return {}
-    # ATTACH funds DB (read-only path coupling) — same pattern as ingest.py
     from module_6.config import default_config_path, load_scoring_config
     from module_6.funds_reader import resolve_funds_db_path
     cfg = load_scoring_config(default_config_path())
@@ -150,66 +271,9 @@ def _fetch_funds_breakdown(
     return out
 
 
-def _aggregate_kpis(rows: list[dict]) -> dict:
-    total = len(rows)
-    hard_pass = sum(1 for r in rows if r["hard_pass"])
-    defined = sum(
-        1 for r in rows
-        if r["hard_pass"] and r["timing_bucket"] == "catalyst_date_defined"
-    )
-    undefined = sum(
-        1 for r in rows
-        if r["hard_pass"] and r["timing_bucket"] == "catalyst_date_undefined"
-    )
-    fail_counts: dict[str, int] = {}
-    for r in rows:
-        if r["fail_reasons"]:
-            for code in r["fail_reasons"].split(","):
-                fail_counts[code] = fail_counts.get(code, 0) + 1
-
-    composites = [r["composite_score"] for r in rows if r["composite_score"] is not None]
-    score_dist = {"80-100": 0, "60-80": 0, "40-60": 0, "20-40": 0, "0-20": 0}
-    for c in composites:
-        if c >= 80: score_dist["80-100"] += 1
-        elif c >= 60: score_dist["60-80"] += 1
-        elif c >= 40: score_dist["40-60"] += 1
-        elif c >= 20: score_dist["20-40"] += 1
-        else: score_dist["0-20"] += 1
-
-    n_with_insider = sum(
-        1 for r in rows
-        if r["hard_pass"] and (r.get("insider_gross_weighted_usd") or 0) > 0
-    )
-    n_with_funds = sum(
-        1 for r in rows
-        if r["hard_pass"] and (r.get("fund_accumulation_usd") or 0) > 0
-    )
-
-    funds_q_latest = None
-    funds_q_prev = None
-    for r in rows:
-        if r["fund_quarter_latest"]:
-            funds_q_latest = r["fund_quarter_latest"]
-            funds_q_prev = r["fund_quarter_previous"]
-            break
-
-    rules_version = next((r["rules_version"] for r in rows if r.get("rules_version")), "")
-
-    return {
-        "total": total,
-        "hard_pass": hard_pass,
-        "excluded": total - hard_pass,
-        "defined": defined,
-        "undefined": undefined,
-        "fail_counts": fail_counts,
-        "score_dist": score_dist,
-        "n_with_insider": n_with_insider,
-        "n_with_funds": n_with_funds,
-        "funds_q_latest": funds_q_latest,
-        "funds_q_prev": funds_q_prev,
-        "rules_version": rules_version,
-    }
-
+# =====================================================================
+# Template — CSS + JS + HTML skeleton
+# =====================================================================
 
 CSS = """
 :root {
@@ -242,8 +306,6 @@ h1 { font-size: 18px; margin: 0 0 4px; }
   background: var(--bg-elev); padding: 2px 6px; border-radius: 4px;
   color: var(--accent); font-size: 11.5px;
 }
-
-/* KPI strip */
 .kpi-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -265,16 +327,10 @@ h1 { font-size: 18px; margin: 0 0 4px; }
 .kpi.purple .value { color: var(--purple); }
 .kpi .sub { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
 
-/* Score distribution bar */
 .score-dist {
-  display: flex;
-  gap: 2px;
-  margin-bottom: 16px;
-  height: 32px;
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  display: flex; gap: 2px; margin-bottom: 16px;
+  height: 32px; border-radius: 6px; overflow: hidden;
+  background: var(--bg-elev); border: 1px solid var(--border);
 }
 .score-dist .seg {
   display: flex; align-items: center; justify-content: center;
@@ -286,7 +342,6 @@ h1 { font-size: 18px; margin: 0 0 4px; }
 .score-dist .seg.s20 { background: #c2410c; }
 .score-dist .seg.s00 { background: #7f1d1d; }
 
-/* Tabs */
 .tabs {
   display: flex; gap: 4px; margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
@@ -309,7 +364,6 @@ h1 { font-size: 18px; margin: 0 0 4px; }
   font-size: 11px;
 }
 
-/* Filter bar */
 .filters {
   display: flex; gap: 12px; flex-wrap: wrap;
   background: var(--bg-elev);
@@ -339,7 +393,6 @@ h1 { font-size: 18px; margin: 0 0 4px; }
 .filters .reset:hover { color: var(--text); }
 .filters .visible-count { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 
-/* Table */
 table { width: 100%; border-collapse: collapse; }
 thead th {
   text-align: left; font-size: 11px; text-transform: uppercase;
@@ -350,17 +403,15 @@ thead th {
   cursor: pointer; user-select: none;
 }
 thead th:hover { color: var(--text); }
-thead th.sorted-asc::after  { content: " ▲"; color: var(--accent); }
-thead th.sorted-desc::after { content: " ▼"; color: var(--accent); }
+thead th.sorted-asc::after  { content: " \\25B2"; color: var(--accent); }
+thead th.sorted-desc::after { content: " \\25BC"; color: var(--accent); }
 tbody tr {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
 tbody tr:hover { background: var(--bg-row); }
 tbody tr.expanded { background: var(--bg-row); }
-tbody td {
-  padding: 7px 8px; vertical-align: top;
-}
+tbody td { padding: 7px 8px; vertical-align: top; }
 tbody td .ticker {
   font-weight: 600; color: var(--accent);
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -431,8 +482,12 @@ tbody td .score {
   padding: 0 2px;
   border-radius: 2px;
 }
-
 .no-rows { color: var(--text-dim); padding: 24px; text-align: center; font-style: italic; }
+.no-data {
+  background: var(--bg-elev); border: 1px dashed var(--border);
+  border-radius: 8px; padding: 24px;
+  color: var(--text-dim); text-align: center; margin: 30px 0;
+}
 """
 
 
@@ -461,10 +516,9 @@ JS = r"""
     sortCol: 'composite_score',
     sortDir: 'desc',
   }, loadFilters());
-
-  // Cast numerics that may have been stringified by JSON->localStorage cycle
   state.minComposite = Number(state.minComposite) || 0;
 
+  // ============ formatting helpers ============
   function scoreClass(s) {
     if (s == null) return 'zero';
     if (s >= 80) return 's80';
@@ -475,8 +529,7 @@ JS = r"""
   }
   function fmtScore(s) {
     if (s == null) return '<span class="score zero">—</span>';
-    const cls = scoreClass(s);
-    return `<span class="score ${cls}">${s.toFixed(1)}</span>`;
+    return `<span class="score ${scoreClass(s)}">${s.toFixed(1)}</span>`;
   }
   function fmtMcap(v) {
     if (v == null) return '—';
@@ -511,12 +564,151 @@ JS = r"""
     if (!phrase) return escapeHtml(text);
     const escaped = escapeHtml(text);
     const safePhrase = escapeHtml(phrase);
-    // simple case-insensitive highlight
     const re = new RegExp(safePhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
     return escaped.replace(re, (m) => `<mark>${m}</mark>`);
   }
 
-  // ============ rendering ============
+  // ============ aggregation ============
+  function aggregate(rows) {
+    const fail_counts = {};
+    const score_dist = {'80-100': 0, '60-80': 0, '40-60': 0, '20-40': 0, '0-20': 0};
+    let hard_pass = 0, defined = 0, undef = 0;
+    let n_with_insider = 0, n_with_funds = 0;
+    rows.forEach(r => {
+      if (r.hard_pass) {
+        hard_pass++;
+        if (r.timing_bucket === 'catalyst_date_defined') defined++;
+        else if (r.timing_bucket === 'catalyst_date_undefined') undef++;
+        if (r.insider_gross_weighted_usd && r.insider_gross_weighted_usd > 0) n_with_insider++;
+        if (r.fund_accumulation_usd && r.fund_accumulation_usd > 0) n_with_funds++;
+      }
+      if (r.fail_reasons) {
+        r.fail_reasons.split(',').forEach(c => {
+          if (c) fail_counts[c] = (fail_counts[c] || 0) + 1;
+        });
+      }
+      if (r.composite_score != null) {
+        const c = r.composite_score;
+        if (c >= 80) score_dist['80-100']++;
+        else if (c >= 60) score_dist['60-80']++;
+        else if (c >= 40) score_dist['40-60']++;
+        else if (c >= 20) score_dist['20-40']++;
+        else score_dist['0-20']++;
+      }
+    });
+    let funds_q_latest = null, funds_q_prev = null;
+    for (const r of rows) {
+      if (r.fund_quarter_latest) {
+        funds_q_latest = r.fund_quarter_latest;
+        funds_q_prev = r.fund_quarter_previous;
+        break;
+      }
+    }
+    return {
+      total: rows.length,
+      hard_pass,
+      excluded: rows.length - hard_pass,
+      defined,
+      undefined: undef,
+      fail_counts,
+      score_dist,
+      n_with_insider,
+      n_with_funds,
+      funds_q_latest,
+      funds_q_prev,
+    };
+  }
+
+  // ============ header / meta / KPIs ============
+  function renderMeta(data, kpis) {
+    document.getElementById('title').textContent = 'Catalyst scores — Module 6 output';
+    const fundsMeta = kpis.funds_q_latest
+      ? `funds quarters: ${escapeHtml(kpis.funds_q_latest)} vs ${escapeHtml(kpis.funds_q_prev || '?')}`
+      : 'funds DB not attached';
+    let viewMeta;
+    if (data.view_mode === 'rolling') {
+      const snaps = data.snapshots_covered || [];
+      const range = snaps.length > 1
+        ? `${snaps[0]} … ${snaps[snaps.length-1]} (${snaps.length} snapshots)`
+        : (snaps[0] || '?');
+      const dropped = data.materialized_dropped || 0;
+      viewMeta = `Rolling view <code>${escapeHtml(range)}</code> · `
+               + `as-of <code>${escapeHtml(data.effective_today || '?')}</code> · `
+               + `${dropped} materialized catalysts hidden`;
+    } else {
+      viewMeta = `Snapshot <code>${escapeHtml(data.snapshot_date)}</code>`;
+    }
+    document.getElementById('meta').innerHTML =
+      viewMeta + ' · ' +
+      `rules <code>${escapeHtml(data.rules_version || '?')}</code> · ` +
+      `${fundsMeta} · ` +
+      `data generated ${escapeHtml(data.generated_at || '?')}`;
+  }
+
+  function kpiCard(label, value, sub, klass) {
+    return `<div class="kpi ${klass || ''}">
+      <div class="label">${escapeHtml(label)}</div>
+      <div class="value">${escapeHtml(String(value))}</div>
+      <div class="sub">${escapeHtml(sub || '')}</div>
+    </div>`;
+  }
+  function renderKpiStrip(kpis) {
+    document.getElementById('kpi-strip').innerHTML =
+      kpiCard('Catalysts', kpis.total, 'snapshot total') +
+      kpiCard('Hard pass', kpis.hard_pass, `${kpis.excluded} excluded`, 'green') +
+      kpiCard('Defined timing', kpis.defined, 'specific/conference/month/quarter', 'indigo') +
+      kpiCard('Undefined timing', kpis.undefined, 'half/year', 'amber') +
+      kpiCard('With CEO/CFO buy', kpis.n_with_insider, 'of hard-pass rows', 'purple') +
+      kpiCard('With fund accum', kpis.n_with_funds, 'of hard-pass rows', 'slate');
+  }
+
+  function renderScoreDist(dist) {
+    const total = Object.values(dist).reduce((a, b) => a + b, 0) || 1;
+    const segs = [];
+    for (const [key, klass] of [['80-100','s80'],['60-80','s60'],['40-60','s40'],['20-40','s20'],['0-20','s00']]) {
+      const n = dist[key];
+      if (!n) continue;
+      const pct = 100 * n / total;
+      segs.push(`<div class="seg ${klass}" style="flex:${pct} 0 0" title="composite ${key}: ${n}">${n}</div>`);
+    }
+    document.getElementById('score-dist').innerHTML =
+      segs.length ? segs.join('') : '<div class="seg" style="flex:1">no hard_pass rows</div>';
+  }
+
+  function renderFailMeta(fail_counts) {
+    const order = ['H1','H2','H3','H4','H5'];
+    const parts = order.filter(k => fail_counts[k]).map(k => `${k}=${fail_counts[k]}`);
+    document.getElementById('fail-meta').textContent =
+      'Failures by rule (overlapping across rows): ' + (parts.length ? parts.join(', ') : '—');
+  }
+
+  function renderTabs(kpis) {
+    document.querySelectorAll('.tab').forEach(el => {
+      const t = el.dataset.tab;
+      el.classList.toggle('active', t === state.tab);
+      const countEl = el.querySelector('.count');
+      if (countEl) {
+        const n = t === 'catalyst_date_defined' ? kpis.defined
+                : t === 'catalyst_date_undefined' ? kpis.undefined
+                : kpis.excluded;
+        countEl.textContent = n;
+      }
+    });
+  }
+
+  function populateStageFilter(rows) {
+    const stages = Array.from(new Set(rows.map(r => r.stage).filter(Boolean))).sort();
+    const sel = document.getElementById('stage-filter');
+    // Preserve current value if it's still valid
+    const current = sel.value;
+    sel.innerHTML = '<option value="any">any</option>' +
+      stages.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+    if (current && Array.from(sel.options).some(o => o.value === current)) {
+      sel.value = current;
+    }
+  }
+
+  // ============ row filtering / sorting / table render ============
   function rowMatchesFilters(r) {
     if (state.tab === 'excluded') {
       if (r.hard_pass) return false;
@@ -552,32 +744,26 @@ JS = r"""
     const dir = state.sortDir === 'asc' ? 1 : -1;
     return rows.slice().sort((a, b) => {
       let av = a[col], bv = b[col];
-      // string vs number tolerant comparison
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
-      if (typeof av === 'string' && typeof bv === 'string') {
-        return av.localeCompare(bv) * dir;
-      }
+      if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir;
       return (av - bv) * dir;
     });
   }
 
   function renderTable() {
-    const tab = state.tab;
-    const filtered = window.__DATA.rows.filter(rowMatchesFilters);
+    const rows = window.__DATA.rows;
+    const filtered = rows.filter(rowMatchesFilters);
     const sorted = sortRows(filtered);
     document.getElementById('visible-count').textContent =
-      `${filtered.length} of ${window.__DATA.rows.length} rows`;
-
+      `${filtered.length} of ${rows.length} rows`;
     const tbody = document.getElementById('rows-body');
     if (!sorted.length) {
       tbody.innerHTML = '<tr><td colspan="13" class="no-rows">No rows match the current filters.</td></tr>';
       return;
     }
-
-    const isExcluded = tab === 'excluded';
-
+    const isExcluded = state.tab === 'excluded';
     tbody.innerHTML = sorted.map((r, i) => {
       const tagBucket = isExcluded
         ? (r.fail_reasons || '').split(',').filter(Boolean).map(c => `<span class="tag fail">${c}</span>`).join(' ')
@@ -601,12 +787,6 @@ JS = r"""
     }).join('');
   }
 
-  function renderTabs() {
-    document.querySelectorAll('.tab').forEach(el => {
-      el.classList.toggle('active', el.dataset.tab === state.tab);
-    });
-  }
-
   function renderSortIndicators() {
     document.querySelectorAll('thead th').forEach(th => {
       th.classList.remove('sorted-asc', 'sorted-desc');
@@ -620,16 +800,11 @@ JS = r"""
   function buildExpandPanel(r) {
     const trades = (window.__DATA.insider_trades[r.ticker] || []);
     const fundBreakdown = (window.__DATA.funds_breakdown[r.ticker] || []);
-
     let html = '<div class="expand-panel">';
-
-    // Catalyst text panel
     if (r.catalyst_text) {
       html += '<h4>Catalyst text (BPC)</h4>';
       html += `<div class="catalyst-text">${highlightPhrase(r.catalyst_text, r.matched_phrase)}</div>`;
     }
-
-    // Signal summary KV
     html += '<h4>Signal breakdown</h4>';
     html += '<div class="kv">';
     html += `<div class="k">Composite score</div><div>${r.composite_score != null ? r.composite_score.toFixed(2) : '—'}</div>`;
@@ -648,8 +823,6 @@ JS = r"""
     html += `<div class="k">Market cap / price</div><div>${fmtMcap(r.market_cap_usd)} / $${r.price != null ? r.price.toFixed(2) : '—'}</div>`;
     html += `<div class="k">NCT</div><div>${escapeHtml(r.nct_number || '—')}</div>`;
     html += '</div>';
-
-    // Insider trades table
     if (trades.length) {
       html += '<h4>Qualifying insider buys (CEO/CFO, last 365d)</h4>';
       html += '<table class="detail"><thead><tr>'
@@ -670,8 +843,6 @@ JS = r"""
     } else if (r.hard_pass) {
       html += '<h4>Qualifying insider buys (CEO/CFO, last 365d)</h4><div style="color:var(--text-dim);font-size:12px">None.</div>';
     }
-
-    // Funds breakdown table
     if (fundBreakdown.length) {
       html += '<h4>Per-fund position change</h4>';
       html += '<table class="detail"><thead><tr>'
@@ -691,7 +862,6 @@ JS = r"""
       });
       html += '</tbody></table>';
     }
-
     html += '</div>';
     return html;
   }
@@ -701,14 +871,10 @@ JS = r"""
     const r = window.__DATA.rows[idx];
     const next = tr.nextElementSibling;
     if (next && next.classList.contains('expand-row')) {
-      next.remove();
-      tr.classList.remove('expanded');
-      return;
+      next.remove(); tr.classList.remove('expanded'); return;
     }
-    // collapse any other open panel
     document.querySelectorAll('tr.expand-row').forEach(el => el.remove());
     document.querySelectorAll('tr.expanded').forEach(el => el.classList.remove('expanded'));
-
     const tr2 = document.createElement('tr');
     tr2.className = 'expand-row';
     tr2.innerHTML = `<td colspan="13">${buildExpandPanel(r)}</td>`;
@@ -716,61 +882,45 @@ JS = r"""
     tr.parentNode.insertBefore(tr2, tr.nextSibling);
   }
 
-  // ============ event wiring ============
-  function bind() {
+  // ============ wiring ============
+  function bind(kpis) {
     document.querySelectorAll('.tab').forEach(el => {
       el.addEventListener('click', () => {
         state.tab = el.dataset.tab;
-        saveFilters(state);
-        renderTabs();
-        renderTable();
+        saveFilters(state); renderTabs(kpis); renderTable();
       });
     });
-
     document.getElementById('min-composite').addEventListener('input', e => {
-      state.minComposite = Number(e.target.value) || 0;
-      saveFilters(state); renderTable();
+      state.minComposite = Number(e.target.value) || 0; saveFilters(state); renderTable();
     });
     document.getElementById('require-insider').addEventListener('change', e => {
-      state.requireInsider = e.target.value;
-      saveFilters(state); renderTable();
+      state.requireInsider = e.target.value; saveFilters(state); renderTable();
     });
     document.getElementById('require-funds').addEventListener('change', e => {
-      state.requireFunds = e.target.value;
-      saveFilters(state); renderTable();
+      state.requireFunds = e.target.value; saveFilters(state); renderTable();
     });
     document.getElementById('stage-filter').addEventListener('change', e => {
-      state.stage = e.target.value;
-      saveFilters(state); renderTable();
+      state.stage = e.target.value; saveFilters(state); renderTable();
     });
     document.getElementById('ticker-filter').addEventListener('input', e => {
-      state.tickerFilter = e.target.value;
-      saveFilters(state); renderTable();
+      state.tickerFilter = e.target.value; saveFilters(state); renderTable();
     });
     document.getElementById('reset-filters').addEventListener('click', () => {
-      state.minComposite = 0;
-      state.requireInsider = 'any';
-      state.requireFunds = 'any';
-      state.stage = 'any';
-      state.tickerFilter = '';
-      saveFilters(state);
-      restoreFormFromState();
-      renderTable();
+      state.minComposite = 0; state.requireInsider = 'any';
+      state.requireFunds = 'any'; state.stage = 'any'; state.tickerFilter = '';
+      saveFilters(state); restoreFormFromState(); renderTable();
     });
-
     document.querySelectorAll('thead th').forEach(th => {
       if (!th.dataset.col) return;
       th.addEventListener('click', () => {
         if (state.sortCol === th.dataset.col) {
           state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
         } else {
-          state.sortCol = th.dataset.col;
-          state.sortDir = 'desc';
+          state.sortCol = th.dataset.col; state.sortDir = 'desc';
         }
         saveFilters(state); renderSortIndicators(); renderTable();
       });
     });
-
     document.getElementById('rows-body').addEventListener('click', e => {
       const tr = e.target.closest('tr[data-idx]');
       if (tr) toggleRow(tr);
@@ -786,12 +936,21 @@ JS = r"""
   }
 
   function init() {
-    // Annotate each row with its absolute index for expand lookup
+    if (!window.__DATA || !window.__DATA.rows) {
+      document.getElementById('no-data').style.display = '';
+      return;
+    }
+    document.getElementById('no-data').style.display = 'none';
     window.__DATA.rows.forEach((r, i) => { r.__idx = i; });
-
-    bind();
+    const kpis = aggregate(window.__DATA.rows);
+    renderMeta(window.__DATA, kpis);
+    renderKpiStrip(kpis);
+    renderScoreDist(kpis.score_dist);
+    renderFailMeta(kpis.fail_counts);
+    populateStageFilter(window.__DATA.rows);
+    renderTabs(kpis);
+    bind(kpis);
     restoreFormFromState();
-    renderTabs();
     renderSortIndicators();
     renderTable();
   }
@@ -805,101 +964,35 @@ JS = r"""
 """
 
 
-def _html_template(*, snap: date, rows: list[dict], kpis: dict,
-                   insider_trades: dict, funds_breakdown: dict) -> str:
-    stages = sorted({r["stage"] for r in rows if r["stage"]})
-
-    data_payload = {
-        "snapshot_date": snap.isoformat(),
-        "rules_version": kpis["rules_version"],
-        "rows": rows,
-        "insider_trades": insider_trades,
-        "funds_breakdown": funds_breakdown,
-    }
-    payload_json = json.dumps(data_payload, default=str)
-
-    def kpi(label, value, sub="", klass=""):
-        return (
-            f'<div class="kpi {klass}">'
-            f'<div class="label">{html.escape(label)}</div>'
-            f'<div class="value">{html.escape(str(value))}</div>'
-            f'<div class="sub">{html.escape(sub)}</div>'
-            f'</div>'
-        )
-
-    # Score distribution bar segments
-    dist = kpis["score_dist"]
-    dist_total = sum(dist.values()) or 1
-    segs = []
-    for key, klass in [("80-100", "s80"), ("60-80", "s60"), ("40-60", "s40"),
-                       ("20-40", "s20"), ("0-20", "s00")]:
-        n = dist[key]
-        if n == 0: continue
-        pct = 100 * n / dist_total
-        segs.append(
-            f'<div class="seg {klass}" style="flex:{pct} 0 0" '
-            f'title="composite {key}: {n}">{n}</div>'
-        )
-    dist_bar = "".join(segs) if segs else '<div class="seg" style="flex:1">no hard_pass rows</div>'
-
-    fail_str = ", ".join(
-        f"{code}={n}" for code, n in sorted(kpis["fail_counts"].items())
-    ) or "—"
-
-    funds_meta = (
-        f"funds quarters: {kpis['funds_q_latest']} vs {kpis['funds_q_prev']}"
-        if kpis["funds_q_latest"] else "funds DB not attached"
-    )
-
-    stage_opts = "".join(
-        f'<option value="{html.escape(s)}">{html.escape(s)}</option>'
-        for s in stages
-    )
-
-    return f"""<!doctype html>
+# HTML skeleton — purely structural. No data. The data-script src points at
+# the sidecar file written separately on each pipeline run.
+HTML_SKELETON = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Catalyst scores — {html.escape(snap.isoformat())}</title>
-<style>{CSS}</style>
+<meta name="template-version" content="__TEMPLATE_VERSION__">
+<title>Catalyst scores</title>
+<style>__CSS__</style>
 </head>
 <body>
-<h1>Catalyst scores — Module 6 output</h1>
-<div class="meta">
-  Snapshot <code>{html.escape(snap.isoformat())}</code> ·
-  rules <code>{html.escape(kpis['rules_version'])}</code> ·
-  {html.escape(funds_meta)} ·
-  generated {datetime.utcnow().isoformat(timespec='seconds')}Z
+<h1 id="title">Catalyst scores</h1>
+<div class="meta" id="meta">loading…</div>
+
+<div id="no-data" class="no-data" style="display:none">
+  <strong>No data loaded.</strong><br>
+  This report expects a sibling file <code>catalyst_scores_data.js</code> next to this HTML.
+  Run <code>scripts/3_6_render_scores.py</code> to generate it, then refresh.
 </div>
 
-<div class="kpi-strip">
-  {kpi("Catalysts", kpis["total"], "snapshot total")}
-  {kpi("Hard pass", kpis["hard_pass"], f"{kpis['excluded']} excluded", "green")}
-  {kpi("Defined timing", kpis["defined"], "specific/conference/month/quarter", "indigo")}
-  {kpi("Undefined timing", kpis["undefined"], "half/year", "amber")}
-  {kpi("With CEO/CFO buy", kpis["n_with_insider"], "of hard-pass rows", "purple")}
-  {kpi("With fund accum", kpis["n_with_funds"], "of hard-pass rows", "slate")}
-</div>
-
-<div class="score-dist" title="composite_score distribution across hard_pass=1 rows">
-  {dist_bar}
-</div>
-
-<div class="meta" style="margin-top:-8px;margin-bottom:14px">
-  Failures by rule (overlapping across rows): {html.escape(fail_str)}
-</div>
+<div class="kpi-strip" id="kpi-strip"></div>
+<div class="score-dist" id="score-dist"></div>
+<div class="meta" id="fail-meta" style="margin-top:-8px;margin-bottom:14px"></div>
 
 <div class="tabs">
-  <button class="tab" data-tab="catalyst_date_defined">
-    Defined timing <span class="count">{kpis["defined"]}</span>
-  </button>
-  <button class="tab" data-tab="catalyst_date_undefined">
-    Undefined timing <span class="count">{kpis["undefined"]}</span>
-  </button>
-  <button class="tab" data-tab="excluded">
-    Excluded <span class="count">{kpis["excluded"]}</span>
-  </button>
+  <button class="tab" data-tab="catalyst_date_defined">Defined timing <span class="count">0</span></button>
+  <button class="tab" data-tab="catalyst_date_undefined">Undefined timing <span class="count">0</span></button>
+  <button class="tab" data-tab="excluded">Excluded <span class="count">0</span></button>
 </div>
 
 <div class="filters">
@@ -921,7 +1014,6 @@ def _html_template(*, snap: date, rows: list[dict], kpis: dict,
   <label>stage
     <select id="stage-filter">
       <option value="any">any</option>
-      {stage_opts}
     </select>
   </label>
   <label>search <input type="text" id="ticker-filter" placeholder="ticker, name, or drug"></label>
@@ -950,35 +1042,93 @@ def _html_template(*, snap: date, rows: list[dict], kpis: dict,
   <tbody id="rows-body"></tbody>
 </table>
 
-<script>window.__DATA = {payload_json};</script>
-<script>{JS}</script>
+<script src="catalyst_scores_data.js"></script>
+<script>__JS__</script>
 </body>
 </html>
 """
 
 
-def render(snapshot_date: date | None = None, out_path: Path = OUTPUT_PATH) -> Path:
+def _template_version() -> str:
+    """SHA-7 of CSS + JS + HTML skeleton. Bumps whenever any of the
+    three changes, so re-runs of the renderer can detect when the
+    on-disk template is out of sync and rewrite it."""
+    h = hashlib.sha256()
+    h.update(CSS.encode("utf-8"))
+    h.update(JS.encode("utf-8"))
+    h.update(HTML_SKELETON.encode("utf-8"))
+    return h.hexdigest()[:7]
+
+
+def _build_template_html() -> str:
+    return (HTML_SKELETON
+            .replace("__CSS__", CSS)
+            .replace("__JS__", JS)
+            .replace("__TEMPLATE_VERSION__", _template_version()))
+
+
+_TEMPLATE_META_RE = re.compile(
+    r'<meta\s+name="template-version"\s+content="([^"]*)"', re.IGNORECASE,
+)
+
+
+def _existing_template_version(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        head = path.read_text(encoding="utf-8")[:4096]
+    except OSError:
+        return None
+    m = _TEMPLATE_META_RE.search(head)
+    return m.group(1) if m else None
+
+
+# =====================================================================
+# Render
+# =====================================================================
+
+def render(
+    snapshot_date: date | None = None,
+    out_dir: Path = OUTPUT_DIR,
+    force_template: bool = False,
+) -> tuple[Path, Path, str]:
+    """Write the sidecar data file (always) and the HTML template
+    (only when needed). Returns (html_path, data_path, template_action)
+    where template_action is one of 'rebuilt' / 'up-to-date' / 'forced'.
+
+    When ``snapshot_date`` is None, renders the ROLLING view: latest
+    score per unique catalyst across all snapshots, with materialization
+    filter (date_max >= effective today). Otherwise renders that single
+    snapshot's rows (legacy behaviour).
+    """
     conn = get_connection()
     try:
-        if snapshot_date is None:
-            row = conn.execute(
-                "SELECT MAX(snapshot_date) FROM catalyst_scores"
-            ).fetchone()
-            if row is None or row[0] is None:
-                raise RuntimeError("catalyst_scores is empty — run Module 6 first")
-            snapshot_date = date.fromisoformat(row[0])
-
-        rows = _fetch_score_rows(conn, snapshot_date)
+        rows, query_meta = _fetch_score_rows(conn, snap=snapshot_date)
         if not rows:
             raise RuntimeError(
-                f"no catalyst_scores rows for snapshot {snapshot_date.isoformat()}"
+                "no catalyst_scores rows available — run Module 6 first"
+                if snapshot_date is None
+                else f"no catalyst_scores rows for snapshot {snapshot_date.isoformat()}"
             )
 
-        # Insider buys (CEO/CFO) for hard_pass tickers (saves payload size)
+        # For insider trades: anchor on the per-row snapshot_date when
+        # rolling (different rows may be scored against different
+        # snapshots). Simpler: fetch insider trades using each ticker's
+        # row snapshot_date as the anchor — but the query becomes more
+        # complex. Practical compromise: anchor on the effective-today
+        # for rolling view, on the requested snapshot for single view.
+        # This keeps insider data consistent with the headline "as of"
+        # date shown in the report.
+        anchor_iso = query_meta["effective_today"] or (
+            snapshot_date.isoformat() if snapshot_date else None
+        )
+        anchor_date = date.fromisoformat(anchor_iso) if anchor_iso else None
         hard_pass_tickers = sorted({r["ticker"] for r in rows if r["hard_pass"]})
-        insider_trades = _fetch_insider_trades(conn, snapshot_date, hard_pass_tickers)
+        insider_trades = (
+            _fetch_insider_trades(conn, anchor_date, hard_pass_tickers)
+            if anchor_date else {}
+        )
 
-        # Funds breakdown — only for hard_pass tickers with positive accumulation
         funds_tickers = sorted({
             r["ticker"] for r in rows
             if r["hard_pass"] and (r.get("fund_accumulation_usd") or 0) > 0
@@ -989,16 +1139,43 @@ def render(snapshot_date: date | None = None, out_path: Path = OUTPUT_PATH) -> P
                        if r.get("fund_quarter_previous")), None)
         funds_breakdown = _fetch_funds_breakdown(conn, funds_tickers, q_latest, q_prev)
 
-        kpis = _aggregate_kpis(rows)
-        page = _html_template(
-            snap=snapshot_date, rows=rows, kpis=kpis,
-            insider_trades=insider_trades, funds_breakdown=funds_breakdown,
-        )
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(page, encoding="utf-8")
-        return out_path
+        rules_version = next((r["rules_version"] for r in rows if r.get("rules_version")), "")
+        payload = {
+            "view_mode": query_meta["mode"],                  # 'rolling' | 'single'
+            "snapshots_covered": query_meta["snapshots_covered"],
+            "effective_today": query_meta["effective_today"],
+            "materialized_dropped": query_meta["materialized_dropped"],
+            "snapshot_date": anchor_iso,    # backwards compatibility for JS that reads this
+            "rules_version": rules_version,
+            "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "rows": rows,
+            "insider_trades": insider_trades,
+            "funds_breakdown": funds_breakdown,
+        }
     finally:
         conn.close()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data_path = out_dir / DATA_PATH.name
+    html_path = out_dir / HTML_PATH.name
+
+    # Always write the data sidecar.
+    data_js = "window.__DATA = " + json.dumps(payload, default=str) + ";\n"
+    data_path.write_text(data_js, encoding="utf-8")
+
+    # Conditionally write the HTML template.
+    current_ver = _template_version()
+    existing_ver = _existing_template_version(html_path)
+    if force_template:
+        html_path.write_text(_build_template_html(), encoding="utf-8")
+        action = "forced"
+    elif existing_ver != current_ver:
+        html_path.write_text(_build_template_html(), encoding="utf-8")
+        action = "rebuilt" if existing_ver else "created"
+    else:
+        action = "up-to-date"
+
+    return html_path, data_path, action
 
 
 def main() -> int:
@@ -1008,14 +1185,24 @@ def main() -> int:
         help="ISO snapshot date to render (default: most recent in catalyst_scores)",
     )
     parser.add_argument(
-        "--out", type=Path, default=OUTPUT_PATH,
-        help=f"output HTML path (default: {OUTPUT_PATH.relative_to(PROJECT_ROOT)})",
+        "--out-dir", type=Path, default=OUTPUT_DIR,
+        help=f"output directory (default: {OUTPUT_DIR.relative_to(PROJECT_ROOT)})",
+    )
+    parser.add_argument(
+        "--rebuild-template", action="store_true",
+        help="force the HTML template to be rewritten even if the version hash matches",
     )
     args = parser.parse_args()
 
-    out = render(snapshot_date=args.snapshot_date, out_path=args.out)
-    size_kb = out.stat().st_size / 1024
-    print(f"[3_6_render_scores] wrote {out} ({size_kb:.1f} KB)")
+    html_path, data_path, action = render(
+        snapshot_date=args.snapshot_date,
+        out_dir=args.out_dir,
+        force_template=args.rebuild_template,
+    )
+    data_kb = data_path.stat().st_size / 1024
+    html_kb = html_path.stat().st_size / 1024
+    print(f"[3_6_render_scores] data:     {data_path}  ({data_kb:.1f} KB) — refreshed")
+    print(f"[3_6_render_scores] template: {html_path}  ({html_kb:.1f} KB) — {action}")
     return 0
 
 

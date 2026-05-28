@@ -1,18 +1,29 @@
-"""Render a self-contained HTML report of Module 5's latest output.
+"""Render Module 5's catalyst-timing report as a templated HTML.
 
-Reads ``catalyst_timing`` JOIN ``catalyst_snapshots`` for one snapshot
-(default: most recent) and writes ``Outputs/catalyst_timings.html``.
-The HTML is fully self-contained — embedded CSS, JS, and JSON data;
-no external network dependencies.
+Splits output into two files in ``Outputs/``:
+
+  * ``catalyst_timings.html``       — static template (CSS + JS + DOM
+    skeleton). Rewritten only when the renderer's CSS/JS/markup changes
+    (detected via a content-hash meta tag).
+  * ``catalyst_timings_data.js``    — sidecar payload (``window.__DATA = {...}``).
+    Rewritten on every pipeline run.
+
+Default view is **rolling**: latest timing per unique
+(ticker, drug, nct, type) across all snapshots, with materialization
+filter (date_max >= effective today). Pass ``--snapshot-date YYYY-MM-DD``
+for legacy single-snapshot view.
 
 Run from `3_Biopharmcatalyst_parser/`:
     PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_5_render_timings.py
+    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_5_render_timings.py --rebuild-template
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
+import re
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta
@@ -27,7 +38,9 @@ if str(SRC) not in sys.path:
 from database.db import DEFAULT_DB_PATH, get_connection  # noqa: E402
 
 
-OUTPUT_PATH = PROJECT_ROOT / "Outputs" / "catalyst_timings.html"
+OUTPUT_DIR = PROJECT_ROOT / "Outputs"
+OUTPUT_PATH = OUTPUT_DIR / "catalyst_timings.html"
+DATA_PATH = OUTPUT_DIR / "catalyst_timings_data.js"
 
 
 # Match colors across KPI strip + bars + chips + table-cell tags.
@@ -62,10 +75,72 @@ EXECUTIVE_ROLES = ("CEO", "CFO", "COO", "CMO", "CSO", "President", "Chair")
 INSIDER_WINDOW_DAYS = 365
 
 
-def _fetch_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
-    rows = conn.execute(
-        """
+def _max_snapshot_date(conn: sqlite3.Connection) -> str | None:
+    r = conn.execute("SELECT MAX(snapshot_date) FROM catalyst_timing").fetchone()
+    return r[0] if r and r[0] else None
+
+
+def _fetch_rows(
+    conn: sqlite3.Connection,
+    *,
+    snap: date | None = None,
+) -> tuple[list[dict], dict]:
+    """Fetch catalyst_timing+catalyst_snapshots rows. Two modes:
+
+    * ``snap`` is None (default) → ROLLING view: latest timing row per
+      (ticker, drug, nct_number, next_catalyst_type) across all
+      snapshots, filtered to ``date_max >= effective_today``.
+    * ``snap`` is a specific date → single-snapshot legacy view.
+
+    Returns ``(rows, meta)``.
+    """
+    if snap is not None:
+        rows = conn.execute(
+            """
+            SELECT
+                t.snapshot_date,
+                t.ticker, t.drug, t.nct_number, t.next_catalyst_type,
+                t.date_min, t.date_max, t.precision_tier, t.source_lane,
+                t.matched_phrase, t.rules_version, t.computed_at,
+                s.name, s.indication, s.stage, s.status,
+                s.catalyst_date, s.catalyst_text, s.conference,
+                s.market_cap_usd, s.price, s.sentiment
+            FROM catalyst_timing t
+            JOIN catalyst_snapshots s USING
+                (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+            WHERE t.snapshot_date = ?
+            ORDER BY
+                CASE WHEN t.date_min IS NULL THEN 1 ELSE 0 END,
+                t.date_min ASC,
+                t.ticker ASC
+            """,
+            (snap.isoformat(),),
+        ).fetchall()
+        return [dict(r) for r in rows], {
+            "mode": "single",
+            "snapshots_covered": [snap.isoformat()],
+            "effective_today": snap.isoformat(),
+            "materialized_dropped": 0,
+        }
+
+    max_snap_iso = _max_snapshot_date(conn)
+    if max_snap_iso is None:
+        return [], {
+            "mode": "rolling",
+            "snapshots_covered": [],
+            "effective_today": None,
+            "materialized_dropped": 0,
+        }
+
+    base = """
+        WITH latest_per_catalyst AS (
+            SELECT ticker, drug, nct_number, next_catalyst_type,
+                   MAX(snapshot_date) AS max_snap
+            FROM catalyst_timing
+            GROUP BY ticker, drug, nct_number, next_catalyst_type
+        )
         SELECT
+            t.snapshot_date,
             t.ticker, t.drug, t.nct_number, t.next_catalyst_type,
             t.date_min, t.date_max, t.precision_tier, t.source_lane,
             t.matched_phrase, t.rules_version, t.computed_at,
@@ -73,17 +148,48 @@ def _fetch_rows(conn: sqlite3.Connection, snap: date) -> list[dict]:
             s.catalyst_date, s.catalyst_text, s.conference,
             s.market_cap_usd, s.price, s.sentiment
         FROM catalyst_timing t
+        JOIN latest_per_catalyst l USING (ticker, drug, nct_number, next_catalyst_type)
         JOIN catalyst_snapshots s USING
             (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
-        WHERE t.snapshot_date = ?
+        WHERE t.snapshot_date = l.max_snap
+    """
+    materialized_dropped = conn.execute(
+        """
+        WITH latest_per_catalyst AS (
+            SELECT ticker, drug, nct_number, next_catalyst_type,
+                   MAX(snapshot_date) AS max_snap
+            FROM catalyst_timing
+            GROUP BY ticker, drug, nct_number, next_catalyst_type
+        )
+        SELECT COUNT(*) FROM catalyst_timing t
+        JOIN latest_per_catalyst l USING (ticker, drug, nct_number, next_catalyst_type)
+        WHERE t.snapshot_date = l.max_snap
+          AND t.date_max IS NOT NULL AND t.date_max < ?
+        """,
+        (max_snap_iso,),
+    ).fetchone()[0]
+    rows = conn.execute(
+        base + """
+          AND (t.date_max IS NULL OR t.date_max >= ?)
         ORDER BY
             CASE WHEN t.date_min IS NULL THEN 1 ELSE 0 END,
             t.date_min ASC,
             t.ticker ASC
         """,
-        (snap.isoformat(),),
+        (max_snap_iso,),
     ).fetchall()
-    return [dict(r) for r in rows]
+
+    snapshots = [
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT snapshot_date FROM catalyst_timing ORDER BY snapshot_date"
+        ).fetchall()
+    ]
+    return [dict(r) for r in rows], {
+        "mode": "rolling",
+        "snapshots_covered": snapshots,
+        "effective_today": max_snap_iso,
+        "materialized_dropped": materialized_dropped,
+    }
 
 
 def _fetch_insider_activity(
@@ -245,6 +351,7 @@ def _row_for_json(r: dict, snap: date,
     t = r["ticker"]
     s = insider_summary.get(t)
     return {
+        "snapshot_date": r["snapshot_date"] if "snapshot_date" in r.keys() else None,
         "ticker": t,
         "drug": r["drug"],
         "name": r["name"],
@@ -276,41 +383,69 @@ def _row_for_json(r: dict, snap: date,
     }
 
 
-def _build_html(
+def _build_payload(
     *,
-    snap: date,
+    anchor_date: date,
+    query_meta: dict,
     summary: dict,
     months: list[dict],
     rows_json: list[dict],
     rules_version: str,
     computed_at: str,
     db_path: Path,
-) -> str:
-    data_blob = json.dumps(
-        {
-            "snapshot_date": snap.isoformat(),
-            "computed_at": computed_at,
-            "rules_version": rules_version,
-            "summary": summary,
-            "months": months,
-            "rows": rows_json,
-            "lane_color": LANE_COLOR,
-            "lane_label": LANE_LABEL,
-            "lane_order": LANE_ORDER,
-            "tier_order": TIER_ORDER,
-            "executive_roles": list(EXECUTIVE_ROLES),
-            "insider_window_days": INSIDER_WINDOW_DAYS,
-            "db_path": str(db_path),
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    # Embed escaping for `</script>` paranoia.
-    data_blob_safe = data_blob.replace("</", "<\\/")
+) -> dict:
+    return {
+        "view_mode": query_meta["mode"],
+        "snapshots_covered": query_meta["snapshots_covered"],
+        "effective_today": query_meta["effective_today"],
+        "materialized_dropped": query_meta["materialized_dropped"],
+        "snapshot_date": anchor_date.isoformat(),  # also used by JS for window arithmetic
+        "computed_at": computed_at,
+        "rules_version": rules_version,
+        "summary": summary,
+        "months": months,
+        "rows": rows_json,
+        "lane_color": LANE_COLOR,
+        "lane_label": LANE_LABEL,
+        "lane_order": LANE_ORDER,
+        "tier_order": TIER_ORDER,
+        "executive_roles": list(EXECUTIVE_ROLES),
+        "insider_window_days": INSIDER_WINDOW_DAYS,
+        "db_path": str(db_path),
+    }
 
-    return _HTML_TEMPLATE.replace("__DATA_JSON__", data_blob_safe).replace(
-        "__SNAPSHOT__", html.escape(snap.isoformat())
-    )
+
+def _template_version() -> str:
+    """SHA-7 of the HTML template string — bumps on any CSS/JS/markup
+    change, so the renderer can detect a stale on-disk template."""
+    return hashlib.sha256(_HTML_TEMPLATE.encode("utf-8")).hexdigest()[:7]
+
+
+def _build_template_html() -> str:
+    return _HTML_TEMPLATE.replace("__TEMPLATE_VERSION__", _template_version())
+
+
+def _build_data_js(payload: dict) -> str:
+    blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # Defend against an accidental "</script>" inside any string field.
+    blob_safe = blob.replace("</", "<\\/")
+    return f"window.__DATA = {blob_safe};\n"
+
+
+_TEMPLATE_META_RE = re.compile(
+    r'<meta\s+name="template-version"\s+content="([^"]*)"', re.IGNORECASE,
+)
+
+
+def _existing_template_version(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        head = path.read_text(encoding="utf-8")[:4096]
+    except OSError:
+        return None
+    m = _TEMPLATE_META_RE.search(head)
+    return m.group(1) if m else None
 
 
 _HTML_TEMPLATE = r"""<!doctype html>
@@ -318,7 +453,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Catalyst Timing Report — __SNAPSHOT__</title>
+<meta name="template-version" content="__TEMPLATE_VERSION__">
+<title>Catalyst Timing Report</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -474,7 +610,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 </head>
 <body>
 
-<h1>Catalyst Timing Report — <span id="snapshot-label">__SNAPSHOT__</span></h1>
+<h1>Catalyst Timing Report — <span id="snapshot-label">…</span></h1>
 <div class="meta" id="meta"></div>
 
 <div class="kpis" id="kpis"></div>
@@ -536,8 +672,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
   <tbody id="tbody"></tbody>
 </table>
 
+<script src="catalyst_timings_data.js"></script>
 <script>
-const DATA = __DATA_JSON__;
+const DATA = window.__DATA || {rows: [], summary: {windows: {}, lane_counts: {}, tier_counts: {}, insider: {}}, months: []};
 const LS_KEY = "biotech_m5_filters_v1";
 
 // ---- helpers -----------------------------------------------------------
@@ -556,11 +693,31 @@ const fmtMcap = (v) => {
 };
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// ---- title + snapshot label -------------------------------------------
+(function setHeader() {
+  const lbl = document.getElementById("snapshot-label");
+  if (DATA.view_mode === "rolling") {
+    const snaps = DATA.snapshots_covered || [];
+    const range = snaps.length > 1
+      ? `${snaps[0]} … ${snaps[snaps.length-1]} (${snaps.length} snapshots)`
+      : (snaps[0] || "?");
+    lbl.textContent = `Rolling: ${range} (as-of ${DATA.effective_today || "?"})`;
+    document.title = `Catalyst Timing Report — Rolling as-of ${DATA.effective_today || ""}`;
+  } else {
+    lbl.textContent = DATA.snapshot_date || "?";
+    document.title = `Catalyst Timing Report — ${DATA.snapshot_date || ""}`;
+  }
+})();
+
 // ---- meta line ---------------------------------------------------------
+const _dropMsg = DATA.materialized_dropped
+  ? ` · <span style="color:var(--text-faint)">${DATA.materialized_dropped} materialized hidden</span>`
+  : "";
 $("#meta").innerHTML =
   `Computed <code>${escapeHtml(DATA.computed_at)}</code> · ` +
   `rules <code>${escapeHtml(DATA.rules_version)}</code> · ` +
-  `<code>${DATA.summary.total}</code> rows from <code>${escapeHtml(DATA.db_path)}</code>`;
+  `<code>${DATA.summary.total}</code> rows from <code>${escapeHtml(DATA.db_path)}</code>` +
+  _dropMsg;
 $("#insider-window-label").textContent = DATA.insider_window_days;
 
 // ---- KPI strip ---------------------------------------------------------
@@ -987,53 +1144,50 @@ rerender();
 """
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--snapshot-date", type=date.fromisoformat, default=None,
-        help="ISO snapshot date to render (default: most recent in catalyst_timing)",
-    )
-    parser.add_argument(
-        "--output", type=Path, default=OUTPUT_PATH,
-        help=f"output HTML path (default: {OUTPUT_PATH.relative_to(PROJECT_ROOT)})",
-    )
-    args = parser.parse_args()
+def render(
+    snapshot_date: date | None = None,
+    out_dir: Path = OUTPUT_DIR,
+    force_template: bool = False,
+) -> tuple[Path, Path, str, dict]:
+    """Write the sidecar data file (always) and the HTML template
+    (only when version-mismatched or missing).
 
+    Default mode (``snapshot_date=None``) is rolling: latest timing per
+    catalyst across all snapshots, materialization-filtered. Pass an
+    explicit date for legacy single-snapshot render.
+
+    Returns ``(html_path, data_path, template_action, summary)``.
+    """
     conn = get_connection()
     try:
-        if args.snapshot_date:
-            snap = args.snapshot_date
-        else:
-            row = conn.execute(
-                "SELECT MAX(snapshot_date) FROM catalyst_timing"
-            ).fetchone()
-            if row is None or row[0] is None:
-                print("error: catalyst_timing is empty — run Module 5 first",
-                      file=sys.stderr)
-                return 2
-            snap = date.fromisoformat(row[0])
-
-        rows = _fetch_rows(conn, snap)
+        rows, query_meta = _fetch_rows(conn, snap=snapshot_date)
         if not rows:
-            print(f"error: no catalyst_timing rows at snapshot {snap.isoformat()}",
-                  file=sys.stderr)
-            return 2
+            raise RuntimeError(
+                "no catalyst_timing rows — run Module 5 first"
+                if snapshot_date is None
+                else f"no catalyst_timing rows at snapshot {snapshot_date.isoformat()}"
+            )
 
-        # Insider activity (last 90 days from snap, both EDGAR + BPC).
+        # Anchor everything that needs a "today" on effective_today (or the
+        # explicit snapshot for single-mode). This is what JS uses for
+        # window arithmetic too.
+        anchor_iso = query_meta["effective_today"] or (
+            snapshot_date.isoformat() if snapshot_date else None
+        )
+        anchor_date = date.fromisoformat(anchor_iso)
+
         distinct_tickers = sorted({r["ticker"] for r in rows})
         insider_summary, recent_trades = _fetch_insider_activity(
-            conn, snap, distinct_tickers,
+            conn, anchor_date, distinct_tickers,
         )
 
-        summary = _build_summary(rows, snap)
-        months = _build_monthly_histogram(rows, snap)
+        summary = _build_summary(rows, anchor_date)
+        months = _build_monthly_histogram(rows, anchor_date)
         rows_json = [
-            _row_for_json(r, snap, insider_summary, recent_trades)
+            _row_for_json(r, anchor_date, insider_summary, recent_trades)
             for r in rows
         ]
 
-        # Add insider-activity KPIs to the summary blob so the HTML can
-        # surface them in the top strip + window cards.
         catalysts_with_insider_buys = sum(
             1 for r in rows_json if r["insider_all_buys"] > 0
         )
@@ -1051,13 +1205,12 @@ def main() -> int:
             "window_days": INSIDER_WINDOW_DAYS,
         }
 
-        # Pull rules_version + computed_at from the first row (consistent
-        # across the snapshot — same compute-timing run touched all rows).
         rules_version = rows[0]["rules_version"] or ""
         computed_at = rows[0]["computed_at"] or ""
 
-        html_out = _build_html(
-            snap=snap,
+        payload = _build_payload(
+            anchor_date=anchor_date,
+            query_meta=query_meta,
             summary=summary,
             months=months,
             rows_json=rows_json,
@@ -1065,25 +1218,66 @@ def main() -> int:
             computed_at=computed_at,
             db_path=DEFAULT_DB_PATH,
         )
-
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(html_out, encoding="utf-8")
-
-        print(f"[3_5_render_timings] wrote {args.output.relative_to(PROJECT_ROOT)}")
-        print(f"  snapshot:        {snap.isoformat()}")
-        print(f"  total rows:      {summary['total']}")
-        print(f"  discovery (T+14..T+180):  {summary['windows']['discovery']}")
-        print(f"  execution (T+14..T+60):   {summary['windows']['execution']}")
-        print(f"  past or unknown:          {summary['windows']['past_or_unknown']}")
-        print(f"  catalysts with any insider buys (last {INSIDER_WINDOW_DAYS}d): "
-              f"{summary['insider']['catalysts_with_any_insider_buys']}")
-        print(f"  catalysts with C-suite/Chair buys (last {INSIDER_WINDOW_DAYS}d): "
-              f"{summary['insider']['catalysts_with_exec_buys']}")
-        print(f"  tickers with C-suite/Chair buys (last {INSIDER_WINDOW_DAYS}d): "
-              f"{summary['insider']['tickers_with_exec_buys']}")
-        return 0
     finally:
         conn.close()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data_path = out_dir / DATA_PATH.name
+    html_path = out_dir / OUTPUT_PATH.name
+
+    data_path.write_text(_build_data_js(payload), encoding="utf-8")
+
+    current_ver = _template_version()
+    existing_ver = _existing_template_version(html_path)
+    if force_template:
+        html_path.write_text(_build_template_html(), encoding="utf-8")
+        action = "forced"
+    elif existing_ver != current_ver:
+        html_path.write_text(_build_template_html(), encoding="utf-8")
+        action = "rebuilt" if existing_ver else "created"
+    else:
+        action = "up-to-date"
+
+    return html_path, data_path, action, summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--snapshot-date", type=date.fromisoformat, default=None,
+        help="ISO snapshot date for legacy single-snapshot render "
+             "(default: rolling view across all snapshots)",
+    )
+    parser.add_argument(
+        "--out-dir", type=Path, default=OUTPUT_DIR,
+        help=f"output directory (default: {OUTPUT_DIR.relative_to(PROJECT_ROOT)})",
+    )
+    parser.add_argument(
+        "--rebuild-template", action="store_true",
+        help="force the HTML template to be rewritten even if the version hash matches",
+    )
+    args = parser.parse_args()
+
+    html_path, data_path, action, summary = render(
+        snapshot_date=args.snapshot_date,
+        out_dir=args.out_dir,
+        force_template=args.rebuild_template,
+    )
+    data_kb = data_path.stat().st_size / 1024
+    html_kb = html_path.stat().st_size / 1024
+    print(f"[3_5_render_timings] data:     {data_path}  ({data_kb:.1f} KB) — refreshed")
+    print(f"[3_5_render_timings] template: {html_path}  ({html_kb:.1f} KB) — {action}")
+    print(f"  total rows:               {summary['total']}")
+    print(f"  discovery (T+14..T+180):  {summary['windows']['discovery']}")
+    print(f"  execution (T+14..T+60):   {summary['windows']['execution']}")
+    print(f"  past or unknown:          {summary['windows']['past_or_unknown']}")
+    print(f"  catalysts with any insider buys (last {INSIDER_WINDOW_DAYS}d): "
+          f"{summary['insider']['catalysts_with_any_insider_buys']}")
+    print(f"  catalysts with C-suite/Chair buys (last {INSIDER_WINDOW_DAYS}d): "
+          f"{summary['insider']['catalysts_with_exec_buys']}")
+    print(f"  tickers with C-suite/Chair buys (last {INSIDER_WINDOW_DAYS}d): "
+          f"{summary['insider']['tickers_with_exec_buys']}")
+    return 0
 
 
 if __name__ == "__main__":

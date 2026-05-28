@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -180,6 +180,18 @@ class CatalystRow(BaseModel):
             raise ValueError(f"could not parse as int: {v!r}") from e
 
     # ---- date / timestamp fields -------------------------------------
+    # BPC has shipped at least two CSV format generations: v3 used
+    # DD/MM/YYYY and DD/MM/YYYY HH:MM; v4 (2026-05-28+) uses ISO
+    # YYYY-MM-DD and YYYY-MM-DD HH:MM:SS. Try each in order; first
+    # match wins. See decisions.md D11.
+    _DATE_FORMATS: ClassVar[tuple[str, ...]] = ("%d/%m/%Y", "%Y-%m-%d")
+    _TIMESTAMP_FORMATS: ClassVar[tuple[str, ...]] = (
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+    )
+
     @field_validator("catalyst_date", mode="before")
     @classmethod
     def _v_catalyst_date(cls, v: Any) -> date | None:
@@ -191,12 +203,14 @@ class CatalystRow(BaseModel):
         if isinstance(v, date):
             return v
         s = str(v).strip()
-        try:
-            return datetime.strptime(s, "%d/%m/%Y").date()
-        except ValueError:
-            # Spec §3.4: unparseable → NULL + warn (NOT row-rejecting).
-            log.warning("Catalyst Date %r does not parse as DD/MM/YYYY; storing NULL", s)
-            return None
+        for fmt in cls._DATE_FORMATS:
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        # Spec §3.4: unparseable → NULL + warn (NOT row-rejecting).
+        log.warning("Catalyst Date %r does not parse as any known format; storing NULL", s)
+        return None
 
     @field_validator("bpc_last_updated", mode="before")
     @classmethod
@@ -207,8 +221,10 @@ class CatalystRow(BaseModel):
         if isinstance(v, datetime):
             return v
         s = str(v).strip()
-        try:
-            return datetime.strptime(s, "%d/%m/%Y %H:%M")
-        except ValueError:
-            log.warning("Last Updated %r does not parse as DD/MM/YYYY HH:MM; storing NULL", s)
-            return None
+        for fmt in cls._TIMESTAMP_FORMATS:
+            try:
+                return datetime.strptime(s, fmt)
+            except ValueError:
+                continue
+        log.warning("Last Updated %r does not parse as any known format; storing NULL", s)
+        return None

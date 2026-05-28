@@ -57,7 +57,7 @@ momentum:
 
 funds:
   db_path_relative_to_repo_root: 2_Funds_parser/2_fundparser.db
-  normalisation_cap_usd: 50_000_000
+  normalisation_cap_usd: 40_000_000
   stale_warning_days: 180
 
 composite:

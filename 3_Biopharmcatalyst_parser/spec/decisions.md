@@ -568,6 +568,178 @@ MBX top of the leaderboard matches D7's MBX/$525,663-CEO-buy observation. SNDX (
 - **Momentum curve anchors** look right empirically (top-ranked tickers cluster near peak); fine-tune after a few more weekly snapshots.
 - **Funds cap at $50M** — 39 of 69 hard-passing have fund accumulation > 0; 16 score >90 (i.e., > $25M). Lowering cap to $25M would compress this top tier and spread the meaty middle ($5–25M, ~20 tickers). Hold for first user review.
 - **MBX composite 88.8 vs ALXO undefined-bucket 89.1** — the absolute scale is comparable across buckets even though ranking is per-bucket. Decide whether to also expose a global rank.
-- **HTML render of catalyst_scores** — `scripts/3_6_render_scores.py` shipped 2026-05-27. Self-contained `Outputs/catalyst_scores.html` (~700 KB) — three tabs (defined / undefined / excluded), KPI strip + composite-score distribution bar, sortable columns, filters (min composite / insider required / funds required / stage / ticker-or-drug search) persisted to localStorage, expandable rows showing signal breakdown + catalyst text with matched-phrase highlight + qualifying CEO/CFO buys table + per-fund position-change table (reads attached funds DB). Auto-runs from `run_3_Biopharmcatalyst_parser.bat` after M6 succeeds with a `[Y/n]` gate (default Y).
+- **HTML render of catalyst_scores** — `scripts/3_6_render_scores.py` shipped 2026-05-27. Self-contained `Outputs/catalyst_scores.html` (~700 KB) — three tabs (defined / undefined / excluded), KPI strip + composite-score distribution bar, sortable columns, filters (min composite / insider required / funds required / stage / ticker-or-drug search) persisted to localStorage, expandable rows showing signal breakdown + catalyst text with matched-phrase highlight + qualifying CEO/CFO buys table + per-fund position-change table (reads attached funds DB). Auto-runs from `run_3_Biopharmcatalyst_parser.bat` after M6 succeeds with a `[Y/n]` gate (default Y). **Refactored 2026-05-28 (D11)** to a template/data split — see D11 for the architecture.
+
+---
+
+## D11 — M1 multi-format date parser + M6 renderer template/data split (2026-05-28)
+
+Two unrelated calibrations from a single 2026-05-28 pipeline run; recorded together because both happened in one session.
+
+### M1 — accept both BPC date formats
+
+**Trigger:** BPC shipped a new `biotech_catalysts_v4.csv` that uses ISO date formats (`YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`) instead of the v3 `DD/MM/YYYY` / `DD/MM/YYYY HH:MM` format. M1's pydantic validators were silently NULL-ing every `Catalyst Date` and `Last Updated` field on the first v4 ingest (100 rows landed but with date columns blank).
+
+**Built:** extended `_v_catalyst_date` and `_v_last_updated` in `src/module_1/csv_schema.py` to iterate through a list of known formats and accept the first match. Both formats now ship as `ClassVar` tuples on the model:
+
+```python
+_DATE_FORMATS: ClassVar[tuple[str, ...]] = ("%d/%m/%Y", "%Y-%m-%d")
+_TIMESTAMP_FORMATS: ClassVar[tuple[str, ...]] = (
+    "%d/%m/%Y %H:%M",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%d/%m/%Y %H:%M:%S",
+)
+```
+
+**Why `ClassVar` and not bare tuple:** pydantic v2 treats undeclared class attributes as `ModelPrivateAttr`, which is not iterable inside a validator. The `ClassVar` annotation tells pydantic the attribute is a class constant, not a model field.
+
+**Calibration scope:** unparseable values still degrade to NULL + log warning (no row rejection). The list is order-sensitive — DD/MM/YYYY comes first because v3 is the historical norm; extending to a third format means appending to the tuple, no other code changes.
+
+**Test coverage:** the existing 16 `test_ingest_catalysts.py` tests continue to pass (they cover the DD/MM/YYYY path); add ISO-format fixtures the next time M1 is touched.
+
+**Live results:** v4 ingest now produces `catalyst_date = 2026-05-30` (parsed) instead of NULL for the first row. Both snapshots intact: 2026-05-27 (572 rows from v3) and 2026-05-28 (100 rows from v4) coexist in `catalyst_snapshots`, enabling cross-snapshot slip-detection joins.
+
+### M6 renderer — template + sidecar split
+
+**Trigger:** user request to avoid rebuilding the full HTML on every pipeline run. The original `3_6_render_scores.py` wrote a single ~700 KB file containing CSS + JS + embedded JSON data on each invocation.
+
+**Built:** refactored to a two-file architecture:
+
+| File | Written | Size | Purpose |
+|---|---|---|---|
+| `Outputs/catalyst_scores.html` | **only when CSS/JS/markup changes** | ~30 KB | Static template — CSS, JS bundle, empty DOM skeleton, `<script src="catalyst_scores_data.js">` |
+| `Outputs/catalyst_scores_data.js` | every render run | ~125 KB | `window.__DATA = {...};` — payload only |
+
+The HTML carries a `<meta name="template-version" content="<sha7>">` tag whose value is `SHA-256(CSS + JS + HTML_SKELETON)[:7]`. On each render, the script reads the existing HTML's meta value and compares to the current source hash:
+
+- match → skip the HTML write, only refresh data → reported as `template: up-to-date`
+- mismatch → rebuild HTML → `template: rebuilt`
+- file missing → `template: created`
+- `--rebuild-template` flag → unconditional rebuild → `template: forced`
+
+**Architectural consequence:** all DOM construction (KPI strip cards, score-distribution bar segments, tab counts, stage-filter options, fail-reason summary, meta line) moved from server-side Python f-strings to client-side JS that reads `window.__DATA` on `DOMContentLoaded`. The template HTML is now data-agnostic and could in principle be served as a static asset that loads any compatible data file.
+
+**Why `<script src="...">` instead of `fetch()`:** `<script src="local_file.js">` works under `file://` in all browsers; `fetch()` from `file://` is blocked by CORS in Chrome/Edge (Firefox prompts). The user opens the report by double-clicking the HTML in Explorer — no local HTTP server required. This preserves the existing UX.
+
+**Daily-pipeline impact:** post-refactor, the M6 render step rewrites only the 125 KB sidecar; the 30 KB template is touched once per code change (effectively never during normal operation). Pipeline runs are imperceptibly faster but, more importantly, the template file is now stable enough to be checked into git / shared as a reference asset / customized by the user without fear of being overwritten on the next run.
+
+**Test coverage:** 7 new tests in `tests/test_render_scores_template.py` covering:
+1. `_template_version()` is deterministic on identical input
+2. Template HTML carries no inline data assignment
+3. Version hash changes when any of CSS / JS / skeleton change
+4. `_existing_template_version()` extracts the meta tag correctly
+5. Returns None when the HTML file is missing
+6. End-to-end render produces both files with the right shape
+7. Mismatched on-disk version triggers a rebuild
+
+Full repo suite: **227 tests passing** (220 prior + 7 new).
+
+**M5 renderer (`3_5_render_timings.py`, ~1090 lines)** has NOT been refactored to the same pattern. It remains monolithic for now. Same refactor is straightforward but mechanical; deferred until next M5 touch. **Done in D12 (2026-05-28)**.
+
+---
+
+## D12 — Renderers go rolling-view by default + M5 templated like M6 (2026-05-28)
+
+Two coupled refactors prompted by the user feedback that ingesting a fresh BPC CSV (v4) collapsed the M6 report to a single row instead of showing the cumulative shortlist.
+
+### Rolling-view as the default for both `3_5_render_timings.py` and `3_6_render_scores.py`
+
+**Trigger:** the user uploaded `biotech_catalysts_v4.csv` (100 rows, near-term-events filter) as a NEW snapshot (2026-05-28) alongside the existing 2026-05-27 snapshot (572 rows from v3). The renderers defaulted to "most recent snapshot" semantics — M6 rendered just 1 hard-pass row (the imminent-events universe v4 mostly fails H3). The user wants the HTML to be the CUMULATIVE actionable shortlist across all snapshots, not just the latest single-snapshot view.
+
+**Implemented:** both renderers now take a "rolling" path by default:
+
+```sql
+WITH latest_per_catalyst AS (
+  SELECT ticker, drug, nct_number, next_catalyst_type, MAX(snapshot_date) AS max_snap
+  FROM <catalyst_timing | catalyst_scores>
+  GROUP BY ticker, drug, nct_number, next_catalyst_type
+)
+SELECT * FROM <table> t
+JOIN latest_per_catalyst l USING (ticker, drug, nct_number, next_catalyst_type)
+WHERE t.snapshot_date = l.max_snap
+  AND (t.date_max IS NULL OR t.date_max >= ?)   -- effective today
+```
+
+For each unique catalyst PK, the renderer takes the row from the most recent snapshot that touched that catalyst, then drops any catalyst whose `date_max` has passed by the database's effective "today" (= the global `MAX(snapshot_date)`). This is the user's stated rule: "Data should be excluded only if they have been screened out by the pipeline (catalyst already materialized, etc.)."
+
+**Reported in the payload:**
+- `view_mode: 'rolling' | 'single'`
+- `snapshots_covered: [...]` — every snapshot_date contributing rows
+- `effective_today: 'YYYY-MM-DD'` — the database's max snapshot date
+- `materialized_dropped: N` — count of catalysts removed because `date_max < effective_today`
+
+The HTML renders these in the meta line so the user sees `Rolling view 2026-05-27 … 2026-05-28 (2 snapshots) · as-of 2026-05-28 · 6 materialized catalysts hidden`.
+
+**Single-snapshot mode preserved** via `--snapshot-date YYYY-MM-DD` (audit replay). When passed, the renderer reverts to the legacy `WHERE snapshot_date = ?` query and reports `view_mode: 'single'`.
+
+**Empirical numbers on the live DB (2026-05-27 v3 + 2026-05-28 v4 snapshots):**
+
+| Renderer | Rolling-view rows | Single-snapshot 2026-05-28 rows |
+|---|---:|---:|
+| M5 (`catalyst_timings`) | 572 | 100 |
+| M6 (`catalyst_scores`)  | 572 | 100 |
+
+For M6, the rolling view restores the 36 / 33 / 503 (defined / undefined / excluded) bucket split that the user expected to see, vs the 1 / 0 / 99 collapsed view on the single-snapshot default.
+
+**Materialized dropped:** 6 catalysts on the current DB — the LINZESS PDUFA, ALGS readout, and a handful of late-May 2026 conference presentations whose windows ended on or before 2026-05-28.
+
+### M5 renderer brought up to D11's template/data split
+
+**Trigger:** D11 left the M5 renderer as a monolithic 1090-line file emitting a single ~150 KB HTML on every run. User asked for the same template/data architecture as D11's M6 refactor.
+
+**Built:** applied the D11 pattern to `scripts/3_5_render_timings.py`:
+
+| File | Written | Size | Contents |
+|---|---|---|---|
+| `Outputs/catalyst_timings.html` | Only when CSS/JS/markup hash changes | 30 KB | Static template — references `<script src="catalyst_timings_data.js">` |
+| `Outputs/catalyst_timings_data.js` | Every pipeline run | ~800 KB | `window.__DATA = {...};` rolling-view payload |
+
+Changes inside the old `_HTML_TEMPLATE` constant:
+- Replaced `<script>const DATA = __DATA_JSON__;</script>` with `<script src="catalyst_timings_data.js"></script>` followed by `const DATA = window.__DATA || {…};`
+- Added `<meta name="template-version" content="__TEMPLATE_VERSION__">` to `<head>`
+- Removed both `__SNAPSHOT__` substitutions (in `<title>` and `<h1 span>`); the JS now sets these dynamically on `DOMContentLoaded` so the template carries no data baked in
+- `<title>` and `<h1 span>` are also rolling-view aware (`"Rolling: 2026-05-27 … 2026-05-28 (2 snapshots)"`)
+
+New helpers (mirroring M6): `_template_version()`, `_existing_template_version(path)`, `_build_template_html()`, `_build_data_js(payload)`. CLI gained `--rebuild-template` and `--out-dir`; legacy `--output` removed in favour of the directory-based output convention.
+
+### Data-flow consequence
+
+Both renderers now share a consistent shape:
+
+1. **Always** write the sidecar `_data.js` (this is the only thing the daily pipeline touches).
+2. **Conditionally** write the HTML template (only when the CSS/JS/markup hash differs from the on-disk meta tag).
+3. Report `template: created | up-to-date | rebuilt | forced` in the CLI summary.
+
+### Memory entry
+
+The user requested this pattern apply to all future HTML renderers. Saved a feedback memory at `feedback_html_template_data_split.md` (referenced from MEMORY.md) so future sessions default to the split.
+
+### Test coverage
+
+Added 16 tests across two new files:
+- `tests/test_render_timings_template.py` (6 tests) — template hash stability, sidecar reference present, no inline data leak, version changes on edit, rolling view unions snapshots correctly with materialization filter, single-snapshot mode preserved.
+- `tests/test_render_scores_rolling.py` (3 tests) — rolling returns latest score per catalyst across snapshots, single-snapshot mode preserved, hard_pass=0 + H4 materialized rows are dropped while hard_pass=0 + non-H4 rows survive in the Excluded tab.
+- Existing `tests/test_render_scores_template.py` (7 tests) carries over from D11 unchanged.
+
+Full repo suite: **236 tests passing** (220 → 227 in D11 → 236 now).
+
+### Live impact
+
+Both renderers now report (one-day delta between the two snapshots):
+
+```
+M5: 572 rolling rows  (discovery 428, execution 371, past/unknown 136)
+M6: 572 rolling rows  (69 hard_pass, 503 excluded, 6 materialized dropped)
+template: ~30 KB stable; data sidecar: 700–800 KB rewritten per run
+```
+
+The `.bat` orchestrator's `Render Outputs\catalyst_scores.html? [Y/n]` and `Render Outputs\catalyst_timings.html? [Y/n]` gates still call the same script names; behaviour change is invisible to the orchestrator.
+
+### Re-litigation policy
+
+- The rolling-view filter is **only** `date_max >= effective_today`. It is NOT a filter on `hard_pass`, `fail_reasons`, or other criteria — those are user-facing UI filters in the "Excluded" tab. Revisit only if the user explicitly says "I want stage-X catalysts hidden too."
+- The effective_today is the database's `MAX(snapshot_date)`, not Python `datetime.now().date()`. This keeps audit replay deterministic (re-running the renderer tomorrow against the same DB produces the same output).
+- The CSS/JS/markup template-version hash is computed at module import time; do NOT bake it into the on-disk template content beyond the meta tag (otherwise hash recursion breaks).
 
 ---
