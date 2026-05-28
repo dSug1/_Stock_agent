@@ -157,6 +157,40 @@ CREATE TABLE IF NOT EXISTS catalyst_timing (
 CREATE INDEX IF NOT EXISTS idx_timing_dates ON catalyst_timing (date_min, date_max);
 CREATE INDEX IF NOT EXISTS idx_timing_tier  ON catalyst_timing (precision_tier);
 
+-- §2.9 catalyst_scores — Module 6 output. One row per catalyst_snapshots
+-- row at the target snapshot_date. Rows that fail any hard filter still
+-- get a row (hard_pass=0, fail_reasons populated, scoring columns NULL)
+-- so the user can audit exclusions. Spec §12.5.
+CREATE TABLE IF NOT EXISTS catalyst_scores (
+    snapshot_date               DATE    NOT NULL,
+    ticker                      TEXT    NOT NULL,
+    drug                        TEXT    NOT NULL,
+    nct_number                  TEXT    NOT NULL,
+    next_catalyst_type          TEXT    NOT NULL,
+    hard_pass                   BOOLEAN NOT NULL,
+    fail_reasons                TEXT,
+    timing_bucket               TEXT,
+    insider_gross_weighted_usd  REAL,
+    insider_score               REAL,
+    return_30d_pct              REAL,
+    momentum_score              REAL,
+    fund_quarter_latest         TEXT,
+    fund_quarter_previous       TEXT,
+    funds_holding_latest        INTEGER,
+    funds_holding_previous      INTEGER,
+    fund_accumulation_usd       REAL,
+    fund_accumulation_score     REAL,
+    composite_score             REAL,
+    computed_at                 TIMESTAMP NOT NULL,
+    rules_version               TEXT    NOT NULL,
+    PRIMARY KEY (snapshot_date, ticker, drug, nct_number, next_catalyst_type),
+    FOREIGN KEY (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+        REFERENCES catalyst_snapshots(snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scores_composite ON catalyst_scores (snapshot_date, composite_score DESC);
+CREATE INDEX IF NOT EXISTS idx_scores_bucket    ON catalyst_scores (timing_bucket, hard_pass);
+
 -- ============================================================
 -- Views (spec §6.7) — created by Module 4's schema bootstrap, but
 -- live in schema.sql so M0's init applies them on every connect.

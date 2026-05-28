@@ -1,0 +1,71 @@
+# Module 6 scoring configuration.
+# All thresholds, weights and curve points live here so tuning never
+# requires a code change. The file's content hash is stamped into
+# catalyst_scores.rules_version, so any edit re-scores on the next run.
+# See spec/biotech_pipeline_spec.md §12 and decisions.md D8 + D9.
+
+rules_version_label: v1.0  # human label; the actual rules_version is label + ":" + content_hash[0:7]
+
+hard_filters:
+  H1:
+    mcap_min_usd: 30_000_000
+    mcap_max_usd: 2_000_000_000
+  H3:
+    window_start_days: 14         # date_min >= snapshot + 14
+  H5:
+    allowed_stages:
+      - phase1
+      - phase2
+      - phase3
+    allowed_catalyst_types:
+      - Interim Data
+      - Initial Data
+      - Topline Data
+      - Full Results
+      - Conference Presentation
+
+timing_buckets:
+  catalyst_date_defined:
+    - specific
+    - conference
+    - month
+    - quarter
+  catalyst_date_undefined:
+    - half
+    - year
+
+insider:
+  lookback_days: 365
+  role_weights:
+    CEO: 2.0
+    CFO: 1.0
+    # any role not listed is treated as weight 0 (excluded)
+  normalisation_cap_weighted_usd: 5_000_000
+
+momentum:
+  # Piecewise-linear curve. Interpolated between adjacent points.
+  # Extrapolation: clamped to nearest endpoint score.
+  curve:
+    - { return_pct: -50, score:   0 }
+    - { return_pct: -10, score:  60 }
+    - { return_pct:   0, score: 100 }
+    - { return_pct:  10, score: 100 }
+    - { return_pct:  30, score:  70 }
+    - { return_pct:  60, score:  20 }
+    - { return_pct: 100, score:   0 }
+  null_score: 50              # used when price_history_30d has <2 parseable prices
+
+funds:
+  db_path_relative_to_repo_root: 2_Funds_parser/2_fundparser.db
+  normalisation_cap_usd: 50_000_000
+  stale_warning_days: 180
+
+composite:
+  weight_insider:  0.35
+  weight_momentum: 0.35
+  weight_funds:    0.30
+  # When --skip-funds is passed, w_funds drops to 0 and the remaining two
+  # weights are renormalised so the composite stays in [0, 100].
+  tiebreaker_chain:
+    - insider_score
+    - fund_accumulation_score

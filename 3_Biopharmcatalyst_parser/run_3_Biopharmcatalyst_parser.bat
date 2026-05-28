@@ -3,7 +3,7 @@ REM ============================================================
 REM Biopharmcatalyst Parser orchestrator.
 REM Lives inside 3_Biopharmcatalyst_parser/. Shared venv at ..\.venv\.
 REM
-REM Build order (per spec §9): M0 -> M1 -> M5 -> M4 -> M2 -> M3.
+REM Build order (per spec §9): M0 -> M1 -> M5 -> M4 -> M2 -> M3 -> M6.
 REM Each module gated by y/N. M0 always runs (idempotent, free).
 REM ============================================================
 
@@ -122,6 +122,31 @@ if /i "%RUN_M3%"=="y" (
     if errorlevel 1 (
         echo [FATAL] Module 3 failed.
         endlocal ^& exit /b 1
+    )
+)
+
+REM ============================================================
+REM Module 6 — Score & rank (filters H1-H5 + insider/momentum/funds composite).
+REM Reads catalyst_snapshots + catalyst_timing + v_executive_open_market_trades
+REM and ATTACH-es 2_Funds_parser/2_fundparser.db for the funds signal.
+REM Free (no API spend); ~1 second per snapshot.
+REM ============================================================
+echo.
+set /p RUN_M6="Proceed to Module 6 (score catalysts; reads 2_Funds_parser DB)? [y/N]: "
+if /i "%RUN_M6%"=="y" (
+    python scripts\3_6_score_catalysts.py
+    if errorlevel 1 (
+        echo [FATAL] Module 6 failed.
+        endlocal ^& exit /b 1
+    )
+    REM --- Render scored shortlist HTML (default Y) ---------------
+    echo.
+    set /p RUN_RENDER6="Render Outputs\catalyst_scores.html? [Y/n]: "
+    if /i not "%RUN_RENDER6%"=="n" (
+        python scripts\3_6_render_scores.py
+        if errorlevel 1 (
+            echo [WARN] HTML render failed, continuing.
+        )
     )
 )
 

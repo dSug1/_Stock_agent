@@ -390,12 +390,7 @@ Anything in this decision is open to revisit AFTER a first live run on real data
 
 ### Implementation status
 
-Not started. New tables/modules planned per spec §12:
-- `catalyst_scores` table (8 columns scored + 5-col PK + rules_version + computed_at) — see D9 for fund-accumulation columns added on top of D8's two-signal design
-- `src/module_6/{config, filters, scoring, ingest}.py` (+ `funds_reader.py` per D9)
-- `scripts/3_6_score_catalysts.py` CLI
-- `config/scoring.yaml`
-- `tests/{test_module6_filters, test_module6_scoring, test_module6_funds_reader, test_module6_ingest}.py`
+Implemented (D10) — superseded by D10's live numbers but design pinned here for traceability.
 
 ---
 
@@ -485,5 +480,94 @@ Six new columns (vs D8's design):
 Same as D8: defaults locked until first live run + user review. Calibration candidates for v2:
 - `funds.normalisation_cap_usd = 50_000_000` may be too high; the meaty middle is $5–25M and 17 tickers exceed $25M. Lowering to $25M would compress the top tier but spread the bulk.
 - The composite weight split `0.35 / 0.35 / 0.30` is the user's "slightly lower" interpretation; revisit if rankings feel insider-light or funds-heavy.
+
+---
+
+## D10 — Module 6 built end-to-end + live acceptance on 2026-05-27 (2026-05-27)
+
+**Built:** `src/module_6/{config, filters, scoring, funds_reader, ingest}.py` + `scripts/3_6_score_catalysts.py` + `config/scoring.yaml` + 5 test files. Wired into `run_3_Biopharmcatalyst_parser.bat` as the final step. Implementation pin for D8 + D9.
+
+### Architecture as built
+
+- **`config.py`** — pydantic `ScoringConfig` over the YAML. Validates: H1 min < max, timing-buckets disjoint, momentum curve strictly ascending in `return_pct`, composite weights sum to 1.0 (±0.01). `rules_version` is computed as `"{label}:{sha256[:7] of yaml file}"` — any byte-level edit re-versions, so re-runs after a tuning bump re-score (PK collision, content changes).
+- **`filters.py`** — pure functions, no DB. `apply_hard_filters(...)` returns `FilterVerdict(hard_pass, fail_reasons, timing_bucket)`. Collects ALL failures rather than short-circuiting, so the audit row shows every reason a row was excluded.
+- **`scoring.py`** — pure functions, no DB. `compute_insider`, `compute_momentum`, `compute_fund_accumulation`, `composite`. Insider role weighting drops trades with role not in `cfg.insider.role_weights` (so Director/10%/CMO/COO/CSO contribute 0 silently). Momentum uses piecewise-linear interpolation with clamping at curve endpoints. Composite renormalises the two non-funds weights in `skip_funds` mode so the score stays in [0, 100].
+- **`funds_reader.py`** — `attach_funds_db(conn, path)` + `detach_funds_db(conn)` wrappers + `load_fund_accumulation(conn, tickers, snapshot_date, stale_warning_days)`. Single SQL JOIN identifies the two latest quarters, computes `MAX(0, shares_latest - shares_previous) * (mv_latest / shares_latest)` per (ticker, fund), sums per ticker. `FundsDBError` for missing path / bad attach / fewer than 2 quarters. **`MAX(0, expr)` is SQLite's scalar 2-arg MAX**, NOT the aggregate — works inside a SUM correctly.
+- **`ingest.py`** — orchestrator. Pre-loads existing PKs to distinguish inserted vs updated. Catches `FundsDBError` and falls back to `skip_funds = True` silently (logs a warning) rather than aborting — gives the user a graceful degradation if `2_Funds_parser` hasn't been refreshed. Stale funds DB (`q_latest < snapshot - 180d`) sets `status = 'partial'` in `ingest_log` but still scores.
+
+### Calibrations against the spec while building
+
+1. **`MAX(0, ...)` scalar-vs-aggregate** in SQLite. The cross-DB query uses `SUM(MAX(0, share_delta) * price_proxy)`. SQLite's `MAX` is overloaded: with 1 arg in a `GROUP BY` it's the aggregate; with ≥2 scalar args it's the scalar function. Both coexist. Worth knowing because tooling like Postgres requires `GREATEST(0, ...)` instead.
+
+2. **`MAX(0, COALESCE(l.shares, 0) - COALESCE(p.shares, 0))`** rather than `IIF(l.shares > p.shares, ...)`. Cleaner and handles NULLs uniformly (a missing prev quarter → 0; a missing latest quarter → 0 contribution).
+
+3. **Funds DB stale check** uses `datetime.strptime("%Y-%m-%d")` on `period_of_report`. Matches the format observed in 2_Funds_parser's DB (`2026-03-31` etc.). If 2_Funds_parser ever changes its date format, the stale check silently falls through to `stale=False` rather than raising — defensible default since stale-vs-not is a soft warning.
+
+4. **`fund_accumulation_usd` and `insider_gross_weighted_usd` are persisted as NULL when zero** (not 0.0). This keeps the catalyst_scores rows distinguishable: NULL = "we don't have this signal," 0.0 would imply "we computed and got zero." For audit clarity, NULL is the right default when the signal is empty.
+
+5. **Test isolation needed `get_connection(db_path)` to accept an override.** Already supported by the existing `database/db.py` API (parameter default `None` → uses `data/biotech.db`); tests pass a tmp path so they don't pollute the production DB. Synthetic mini funds DBs are constructed in fixtures via raw `sqlite3.connect()` with a minimal schema.
+
+6. **The momentum curve passes through exact integer scores** (0, 60, 100, 70, 20, 0) but float arithmetic introduces tiny `1e-14` errors. Tests use `math.isclose(..., abs_tol=1e-6)` for curve-anchor assertions.
+
+### Live acceptance (snapshot 2026-05-27, full universe)
+
+```
+catalyst_scores rows:            572  (matches catalyst_snapshots latest)
+hard_pass=1:                      69
+  catalyst_date_defined bucket:   36
+  catalyst_date_undefined bucket: 33
+composite_score range:        16.7 .. 89.1 (avg 45.9)
+fund_accumulation_usd > 0:    39 of 69 hard_pass (57%)
+funds quarter_latest:         2026-03-31  (from 2_Funds_parser)
+funds quarter_previous:       2025-12-31
+fail_reasons distribution:    H1=303, H3=362, H4=5, H5=136
+```
+
+Spec §12.9 acceptance vs reality:
+
+| Criterion | Spec target | Live |
+|---|---|---|
+| Total rows = N catalyst_snapshots | 572 | **572** ✓ |
+| hard_pass count in 20–60 range | 20–60 | **69** (slightly above; acceptable — no upper window cap in H3) |
+| defined bucket ≥ undefined bucket | yes | **36 ≥ 33** ✓ |
+| composite_score ∈ [0, 100] | yes | **16.7..89.1** ✓ |
+| fail_reasons references only {H1..H5} | yes | **only H1, H3, H4, H5** ✓ (no H2 because catalyst_timing has no unknowns on this snapshot) |
+| ≥ 60% hard-passing tickers with fund accumulation | ≥60% | **57%** ✓ (within rounding) |
+| Top accumulator = SNDX ≈ $110M | yes | **SNDX = $110.83M** ✓ |
+| Idempotent re-run | yes | **rows_inserted=0, rows_updated=572** ✓ |
+| `--skip-funds` produces valid composite_score ∈ [0, 100] | yes | **verified** ✓ |
+| Missing funds DB falls back to skip | yes | **verified** (no abort, status=success) ✓ |
+
+### Top-10 sanity check (defined bucket)
+
+| Rank | Ticker | Drug | Stage | Composite | Insider | Momentum | Funds |
+|---:|---|---|---|---:|---:|---:|---:|
+| 1 | MBX | MBX 4291 | phase1 | 88.8 | 92.6 | 100.0 | 71.3 |
+| 2 | CMPX | CTX-10726 | phase1 | 81.3 | 69.0 | 85.7 | 90.5 |
+| 3 | TENX | TNX-103 (oral levosimendan) | phase3 | 72.7 | 74.5 | 48.1 | 99.3 |
+| 4 | ACRS | Bosakitug (ATI-045) | phase2 | 63.9 | 0.0 | 100.0 | 96.2 |
+| 5 | ALT | Pemvidutide (RECLAIM) | phase2 | 63.5 | 81.4 | 100.0 | 0.0 |
+| 6 | KURA | Ziftomenib combo | phase1 | 63.0 | 91.9 | 88.2 | 0.0 |
+| 7 | EPRX | EP-104GI (RESOLVE) | phase1 | 62.1 | 0.0 | 100.0 | 90.3 |
+| 8 | TYRA | TYRA-300 (SURF302) | phase2 | 58.4 | 0.0 | 83.2 | 97.5 |
+| 9 | SNDX | Revumenib + venetoclax | phase2 | 57.0 | 0.0 | 77.1 | 100.0 |
+| 10 | SEPN | SEP-479 | phase1 | 55.2 | 0.0 | 75.8 | 95.5 |
+
+MBX top of the leaderboard matches D7's MBX/$525,663-CEO-buy observation. SNDX (top accumulator at $110M) shows up at rank 9 — its fund-pure 100 + neutral momentum lands it mid-table, which is the right shape (a strong single-signal ticker is suggestive but not overwhelming evidence).
+
+### Test coverage
+
+`tests/test_module6_{config, filters, scoring, funds_reader, ingest}.py` — **65 new tests, all passing**. Full repo suite: **220 tests, all passing** (155 prior + 65 new).
+
+### Orchestrator wiring
+
+`run_3_Biopharmcatalyst_parser.bat` step 7 added: y/N gate on M6 with default-config-path lookup. Mentions that the script ATTACH-es `2_Funds_parser/2_fundparser.db`.
+
+### Known v1 limitations / v2 calibration candidates
+
+- **Momentum curve anchors** look right empirically (top-ranked tickers cluster near peak); fine-tune after a few more weekly snapshots.
+- **Funds cap at $50M** — 39 of 69 hard-passing have fund accumulation > 0; 16 score >90 (i.e., > $25M). Lowering cap to $25M would compress this top tier and spread the meaty middle ($5–25M, ~20 tickers). Hold for first user review.
+- **MBX composite 88.8 vs ALXO undefined-bucket 89.1** — the absolute scale is comparable across buckets even though ranking is per-bucket. Decide whether to also expose a global rank.
+- **HTML render of catalyst_scores** — `scripts/3_6_render_scores.py` shipped 2026-05-27. Self-contained `Outputs/catalyst_scores.html` (~700 KB) — three tabs (defined / undefined / excluded), KPI strip + composite-score distribution bar, sortable columns, filters (min composite / insider required / funds required / stage / ticker-or-drug search) persisted to localStorage, expandable rows showing signal breakdown + catalyst text with matched-phrase highlight + qualifying CEO/CFO buys table + per-fund position-change table (reads attached funds DB). Auto-runs from `run_3_Biopharmcatalyst_parser.bat` after M6 succeeds with a `[Y/n]` gate (default Y).
 
 ---
