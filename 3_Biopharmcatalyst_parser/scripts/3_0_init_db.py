@@ -29,6 +29,7 @@ EXPECTED_TABLES = [
     "ingest_log",
     "ticker_cik_map",
     "catalyst_timing",
+    "catalyst_scores",      # added by Module 6 (D8)
 ]
 EXPECTED_VIEWS = [
     "v_latest_catalysts",

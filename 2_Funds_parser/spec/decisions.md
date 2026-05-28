@@ -1713,6 +1713,33 @@ final_score   = max_H(score_at_current_H)
 
 ---
 
+### D59 — Consensus-builds report generalised + auto-invoked from 3_Biopharmcatalyst (2026-05-28)
+
+**Context:** The 3_Biopharmcatalyst pipeline gained an auto-refresh hook (see `3_Biopharmcatalyst_parser/spec/decisions.md` D13) that runs `2_Funds_parser` modules M2..M5 inclusive whenever today falls within ±7 days of a quarterly 13F deadline (May 15 / Aug 14 / Nov 14 / Feb 14) OR the funds DB is stale. As part of that auto-run, the biopharm orchestrator regenerates the consensus-builds HTML report. The previous `_q1_consensus_report.py` was a one-off hardcoded for Q1 2026 vs Q4 2025; it had to be generalised.
+
+**Built:** `scripts/_q1_consensus_report.py` (legacy filename kept) now accepts:
+
+- `--quarter YYYY-MM-DD` — ISO date of the LATER quarter (default: most-recent `period_of_report` in `holdings`).
+- `--prev-quarter YYYY-MM-DD` — ISO date of the EARLIER comparison quarter (default: second-most-recent).
+- `--output PATH` — output HTML path (default: `Outputs/<YYYYQn>_consensus_builds.html`).
+
+Other generalisations:
+- Fund count metadata (`21 / 21`) is now computed from `SELECT COUNT(*) FROM funds` and a per-quarter filings-ingested count, instead of hardcoded.
+- Unresolved-ticker percentages (previously the hardcoded "8.3% / 4.8%") are computed per quarter from `holdings`.
+- All labels (`Q1 2026`, `Q4 2025`, etc.) are derived from `period_of_report` via a small `_quarter_label()` helper.
+
+**Filename convention:** the script's filename (`_q1_consensus_report.py`) is kept for backwards-compatibility with external references (it has been in the project for weeks and is invoked by 3_Biopharm's runner). Output filenames now follow the project's canonical `YYYYQn` format used by `ranking_report_2026Q1.html`, `enrichment_report_2026Q1.html`, etc. — so the new files are named `Outputs/2026Q1_consensus_builds.html`, `Outputs/2026Q2_consensus_builds.html`, …
+
+**Backwards compatibility:** the legacy `q1_2026_consensus_builds.html` file (lowercase, year-after-q convention) is NOT deleted. New runs write to the new naming convention; old files stay until the user removes them.
+
+**Cross-project auto-trigger** (the consumer of this generalisation): when triggered, `3_Biopharmcatalyst_parser/scripts/3_auto_refresh_funds.py` runs `_q1_consensus_report.py --quarter <target_q_end> --prev-quarter <prev_q_end>` as the last step of the funds refresh. The runner is fail-open on this step — a failure logs a warning but does not abort the biopharm pipeline.
+
+**Live verification:** running with no args on 2026-05-28 → autodetects `--quarter 2026-03-31 --prev-quarter 2025-12-31`, writes `Outputs/2026Q1_consensus_builds.html` (50 rows, 19 fresh-name entries, $5.70B added gross).
+
+**No spec file added** for the consensus report — it's a derived reporting script, not a primary module. The functionality is documented inline (this entry + a paragraph in `Overall_specification.md` between the Module 7 and Cross-cutting sections).
+
+---
+
 ## Cross-cutting decisions
 
 - **Python module naming carve-out.** Top-level dirs and scripts may start with `2_` (e.g., `2_ingest_13f.py`). Python packages and modules under `src/` cannot (Python rejects leading digits). Import paths: `from layer_1.edgar_13f import …`, `from module_1.config import load_config`.
@@ -1720,3 +1747,4 @@ final_score   = max_H(score_at_current_H)
 - **`.env` at repo root,** shared with 1_not_used. Not duplicated inside `2_Funds_parser/`.
 - **Quarter format `YYYYQn`** is derived from `period_of_report` (quarter-end), never `filing_date` (submission, which lags by ~45 days). This rule is cross-cutting: every module uses it.
 - **Module 2 is retrofit-frozen.** Modules 1 and 3–7 wrap Module 2 via its public helpers (`get_connection`, `edgar_13f.ingest_all_funds`). Module 2's internal path resolution in [src/database/db.py:14-15](../src/database/db.py#L14-L15) is not replaced by Module 1.
+- **Cross-project auto-trigger from 3_Biopharmcatalyst.** The sibling project's orchestrator can subprocess `2_Funds_parser` modules M2..M5 when the 13F filing calendar says fresh data is due. M6 (Anthropic API) is excluded from any auto-run — paid API calls remain user-gated per the standing cost-approval rule. See D59 and `3_Biopharmcatalyst_parser/spec/decisions.md` D13.

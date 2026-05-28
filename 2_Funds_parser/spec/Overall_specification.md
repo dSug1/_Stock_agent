@@ -123,6 +123,10 @@ o	Suggested archetype score adjustments based on realized data
 Key principle: Module 7 is advisory, not auto-updating. It reports what the data says; it does not silently retune archetypes.yaml or Module 6 prompts. User retains editorial control.
 Rationale: Auto-adjusting archetype weights from LLM outputs would compound model opinions rather than anchor to reality. Forward-return tracking is the only honest feedback loop.
 ________________________________________
+Consensus-builds delta report (Module 2 derived)
+A standalone reporting script — `scripts/_q1_consensus_report.py` — produces a quarter-over-quarter biotech consensus-builds HTML showing which tickers attracted the most new funds entering vs. the previous quarter. Originally a one-off Q1-2026 vs Q4-2025 analysis; generalised 2026-05-28 (D59) to accept `--quarter` and `--prev-quarter` ISO-date arguments. Output: `Outputs/<YYYYQn>_consensus_builds.html`. Defaults to the two most-recent `period_of_report` values in `holdings`.
+Auto-invoked by the sibling `3_Biopharmcatalyst_parser` pipeline whenever its orchestrator detects a 13F filing window or a stale funds DB; see `3_Biopharmcatalyst_parser/spec/decisions.md` D13 and `3_Biopharmcatalyst_parser/README texts/Funds_auto_refresh.md`.
+________________________________________
 Cross-cutting conventions
 These apply to all modules and are documented once here rather than repeated per-module:
 •	Config-driven. Every tunable parameter (filter thresholds, archetype ranges, fund list, API keys, cache TTLs) lives in YAML, not code. Users tune without code edits.

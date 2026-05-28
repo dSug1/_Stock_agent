@@ -743,3 +743,110 @@ The `.bat` orchestrator's `Render Outputs\catalyst_scores.html? [Y/n]` and `Rend
 - The CSS/JS/markup template-version hash is computed at module import time; do NOT bake it into the on-disk template content beyond the meta tag (otherwise hash recursion breaks).
 
 ---
+
+## D13 — Auto-refresh 2_Funds_parser from the 3_Biopharmcatalyst pipeline (2026-05-28)
+
+User-requested: the 3_Biopharmcatalyst pipeline should automatically kick off a 2_Funds_parser refresh when the 13F filing calendar says fresh data is due. Two trigger conditions:
+
+1. Today falls within ±7 days of any of the four 13F filing deadlines (Feb 14, May 15, Aug 14, Nov 14 — 45 days after each quarter-end).
+2. Today is past the most recent deadline window AND `2_Funds_parser/2_fundparser.db` does not yet hold the matching quarter (catch-up case).
+
+The auto-refresh runs `2_Funds_parser` modules M2..M5 inclusive (ingest → fund report → universe → hard filters → ranking → fundamentals → context packs) plus the consensus-builds HTML report. Module 6 (Anthropic API, billed) stays user-gated and is intentionally excluded.
+
+### Architecture
+
+```
+3_Biopharmcatalyst_parser/
+├── src/funds_refresh/
+│   ├── __init__.py
+│   ├── decision.py        ← pure logic, fully unit-testable
+│   └── runner.py          ← subprocess wrapper around 2_Funds_parser scripts
+├── scripts/
+│   └── 3_auto_refresh_funds.py    ← CLI entrypoint called by the .bat
+└── tests/
+    └── test_funds_refresh_decision.py   (21 tests)
+```
+
+The `.bat` invokes `3_auto_refresh_funds.py` BEFORE Module 0. If it returns non-zero (a refresh fired and failed), the .bat prints a warning but continues with the biopharm pipeline — funds data is supplemental, not blocking.
+
+### Pure-function decision logic
+
+`funds_refresh.decision.decide(today, latest_period_in_db) -> RefreshDecision` enumerates all quarter-end candidates (year ± 1), computes their 45-day deadlines, finds the most recent candidate whose pre-deadline window has started, and applies the two trigger rules. No I/O, no clock — fully testable.
+
+### Quarter calendar (SEC rule 13f-1, 45 calendar days)
+
+| Quarter end | Deadline | Window |
+|---|---|---|
+| March 31    | May 15      | May 8  – May 22  |
+| June 30     | August 14   | Aug 7  – Aug 21  |
+| September 30| November 14 | Nov 7  – Nov 21  |
+| December 31 | February 14 (next year) | Feb 7 – Feb 21 |
+
+So **8 weeks per year** (2 weeks × 4 quarters) the auto-refresh will fire on calendar alone. The catch-up rule covers the in-between weeks if the user skipped a window.
+
+### Runner
+
+`funds_refresh.runner.run_refresh()` subprocesses 7 scripts in sequence:
+
+| Step | Script | Notes |
+|---|---|---|
+| M2 ingest 13F-HR | `2_ingest_13f.py` | Idempotent; skips re-downloads. |
+| M2 build report  | `2_build_report.py` | HTML report. |
+| M3 build universe | `3_build_universe.py -v` | Per-ticker rollup. |
+| M4a hard filters | `4_run_hard_filters.py -v` | |
+| M4b ranking | `4_rank.py -v` | |
+| M4c fundamentals | `4c_enrich_fundamentals.py -v` | Free SEC EDGAR. |
+| M5 context packs | `5_build_context_packs.py -v` | Final M5 step. |
+| Consensus builds HTML | `_q1_consensus_report.py --quarter <target> --prev-quarter <prev>` | Best-effort (fail-open); writes `2_Funds_parser/Outputs/<YYYYQn>_consensus_builds.html`. |
+
+Each step's stdout/stderr tail is captured and printed if it fails. The first M2..M5 fatal aborts the chain; the consensus report is best-effort.
+
+### Generalised consensus report
+
+The original `_q1_consensus_report.py` was a hardcoded Q1 2026 vs Q4 2025 one-off. It now:
+- Takes `--quarter` / `--prev-quarter` ISO-date args (defaults to the two most-recent `period_of_report` values in `holdings`).
+- Derives labels like `2026Q1` / `2025Q4` from the dates.
+- Computes fund-count metadata + unresolved-ticker percentages from the DB rather than hardcoding "21" funds and "8.3% / 4.8%".
+- Output filename follows the project convention: `Outputs/<YYYYQn>_consensus_builds.html` (matches `ranking_report_2026Q1.html`, `enrichment_report_2026Q1.html`, etc.).
+
+Backwards-compat note: the old `q1_2026_consensus_builds.html` file is left in place (different filename — no clobber). Future runs write to the new naming convention.
+
+### Empirical verification on the current DB
+
+Today is 2026-05-28; 2_Funds_parser holds 2026-03-31 (Q1 2026). Auto-refresh decision: SKIP. Reason: "today 2026-05-28 is past the 2026-03-31 filing window (deadline 2026-05-15); 2_Funds_parser already holds 2026-03-31".
+
+Tested boundary dates via dry-run:
+- 2026-05-15 → TRIGGER ("within the 13F filing window [2026-05-08, 2026-05-22] for quarter ending 2026-03-31")
+- 2026-07-15 with stale DB (2025-12-31) → TRIGGER ("past filing window, latest period=2025-12-31 < target 2026-03-31")
+- 2026-07-15 with current DB (2026-03-31) → SKIP (correct, between windows + up-to-date)
+
+### Test coverage
+
+21 new tests in `tests/test_funds_refresh_decision.py`:
+- 3 calendar-helper tests (deadlines + previous-quarter + label formatting)
+- 10 parametrized "within window" tests (start, deadline day, end — for all 4 quarters)
+- 1 "in window, DB up-to-date" — confirms calendar rule fires regardless of DB freshness
+- 4 catch-up scenarios (past window + stale DB, empty DB, up-to-date DB, DB ahead of target)
+- 2 between-window scenarios (DB up-to-date / DB stale)
+- 1 "previous_quarter_end populated" sanity check
+
+Full repo suite: **257 tests passing** (236 → 257).
+
+### CLI flags on `3_auto_refresh_funds.py`
+
+| Flag | Purpose |
+|---|---|
+| `--today YYYY-MM-DD` | Override the current date (for testing). |
+| `--dry-run` | Print decision + intended steps, do not subprocess anything. |
+| `--force` | Ignore the calendar; run unconditionally (target = most recent completed quarter). |
+| `-v` / `--verbose` | DEBUG-level logging. |
+
+### Re-litigation policy
+
+- The window is fixed at ±7 days per the user's spec. Tightening or widening requires user approval.
+- The runner stops at M5; M6 (paid Anthropic API) must remain user-gated per the standing cost-approval rule.
+- The runner is fail-open on the consensus report only. M2..M5 failures abort with non-zero exit so the user sees the .bat warning. The biopharm pipeline continues regardless (funds data is enrichment, not a hard dependency).
+- "Latest period in DB" is read from `2_Funds_parser/2_fundparser.db::holdings`. If that file is missing, the function returns None and the catch-up rule fires (treats empty DB as needing refresh).
+- `_q1_consensus_report.py` keeps its legacy filename (the script itself, not its output) to avoid breaking any external references. The output filename is now generic.
+
+---

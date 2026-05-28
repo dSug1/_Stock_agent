@@ -921,6 +921,98 @@ For traceability, decisions already made in design discussions:
 - **Module 6 timing-bucket split:** `catalyst_date_defined` (specific|conference|month|quarter) vs `catalyst_date_undefined` (half|year). Ranking happens within each bucket. Locked per D8.
 - **No automatic top-N cap from Module 6 into Module 7.** User picks the slice manually. Locked per D8.
 - **Module 6 reads `2_Funds_parser/2_fundparser.db` via `ATTACH DATABASE` (read-only)** at scoring time. No new tables added to `biotech.db` for fund data; no separate ETL. The `--skip-funds` CLI flag bypasses the cross-DB read and rescales the other two weights. Locked per D9.
+- **Renderers default to ROLLING view + template/data split.** `Outputs/catalyst_timings.html` and `Outputs/catalyst_scores.html` are static templates loading `<name>_data.js` sidecars; only the sidecar is rewritten per pipeline run. Default rendering takes the most recent score per unique catalyst across all snapshots, hiding only those whose `date_max` has passed. Pass `--snapshot-date YYYY-MM-DD` to render a single historical snapshot. Locked per D11 + D12.
+- **2_Funds_parser auto-refresh from the 3_Biopharmcatalyst pipeline.** Before Module 0, the orchestrator calls `scripts/3_auto_refresh_funds.py`. When today is within ±7 days of a 13F filing deadline (Feb 14 / May 15 / Aug 14 / Nov 14, i.e. 45 days after each quarter end) OR today is past that window and `2_Funds_parser/2_fundparser.db` does not yet hold the matching quarter, the script subprocesses `2_Funds_parser` modules M2..M5 and regenerates the consensus_builds HTML. Module 6 (Anthropic API, billed) stays user-gated and is excluded from the auto-run. Locked per D13.
+
+---
+
+## 11.5 Auto-refresh of 2_Funds_parser (cross-project trigger)
+
+The 3_Biopharmcatalyst pipeline depends on `2_Funds_parser` for the fund-accumulation signal in Module 6. Because fund holdings refresh quarterly (13F filings), the orchestrator includes a calendar-aware auto-trigger that runs the funds pipeline through Module 5 inclusive when fresh data is due.
+
+### 11.5.1 Trigger rules
+
+The pure-function decision logic lives in `src/funds_refresh/decision.py::decide(today, latest_period_in_db)`. Two rules:
+
+1. **Window rule** — today falls within ±7 days of any quarterly 13F deadline:
+
+   | Quarter end | Deadline (=q_end+45d) | ±7d window |
+   |---|---|---|
+   | Mar 31 | May 15 | May 8 – May 22 |
+   | Jun 30 | Aug 14 | Aug 7 – Aug 21 |
+   | Sep 30 | Nov 14 | Nov 7 – Nov 21 |
+   | Dec 31 | Feb 14 (next year) | Feb 7 – Feb 21 |
+
+   ⇒ approximately 8 weeks per year — 2 weeks × 4 quarters — the auto-trigger fires on calendar alone.
+
+2. **Catch-up rule** — today is past the most recent window AND `2_Funds_parser/2_fundparser.db::holdings.period_of_report` MAX < target quarter end. Handles the case where the user skipped a window.
+
+Both rules: outside their conditions, the auto-trigger reports `skip` with the reason and the biopharm pipeline proceeds with the existing funds data.
+
+### 11.5.2 Steps invoked
+
+When triggered, `funds_refresh.runner.run_refresh(target_q, prev_q)` subprocesses each of these `2_Funds_parser` scripts in sequence:
+
+| Step | Script | Notes |
+|---|---|---|
+| M2 ingest 13F-HR | `2_ingest_13f.py` | Idempotent; skips re-downloads. |
+| M2 build report | `2_build_report.py` | `Outputs/2_funds_report.html`. |
+| M3 build universe | `3_build_universe.py -v` | Per-ticker rollup. |
+| M4a hard filters | `4_run_hard_filters.py -v` | Snapshot fetch. |
+| M4b ranking | `4_rank.py -v` | Archetype scoring → `Outputs/ranking_report_<q>.html`. |
+| M4c fundamentals | `4c_enrich_fundamentals.py -v` | Free SEC EDGAR. |
+| M5 context packs | `5_build_context_packs.py -v` | → `Outputs/enrichment_report_<q>.html`. |
+| Consensus builds HTML | `_q1_consensus_report.py --quarter <target> --prev-quarter <prev>` | → `Outputs/<YYYYQn>_consensus_builds.html`. |
+
+The first M2..M5 fatal aborts the chain. The consensus report is fail-open (logs failure, continues). The biopharm pipeline itself never aborts on a funds-refresh failure — the orchestrator prints a warning and proceeds.
+
+**Excluded from auto-run:** `6_estimate_cost.py`, `6_score.py`, `6_serve_report.py`, `7_track_outcomes.py`. These remain user-gated in `2_Funds_parser/run_2_Funds_parser.bat` because they call the Anthropic API or require user interaction.
+
+### 11.5.3 CLI
+
+```bash
+# Standard invocation (called from the .bat). Reads today, checks DB, decides.
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_auto_refresh_funds.py
+
+# Dry-run: print the decision but do not subprocess anything.
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_auto_refresh_funds.py --dry-run
+
+# Override today (for testing).
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_auto_refresh_funds.py --today 2026-05-15 --dry-run
+
+# Ignore the calendar window and run unconditionally (target = most recent completed quarter).
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_auto_refresh_funds.py --force
+```
+
+### 11.5.4 Architecture
+
+```
+src/funds_refresh/
+├── __init__.py
+├── decision.py      ← pure logic (decide, filing_deadline, previous_quarter_end, quarter_label)
+└── runner.py        ← subprocess wrapper around 2_Funds_parser/scripts/*.py
+scripts/
+└── 3_auto_refresh_funds.py    ← CLI entrypoint
+tests/
+└── test_funds_refresh_decision.py   ← 21 tests across all 4 quarters + edge cases
+```
+
+**Test coverage** (D13 acceptance):
+- 10 parametrized "within window" tests (start, deadline day, end — for all 4 quarters)
+- 4 catch-up scenarios (past window + stale DB, empty DB, up-to-date DB, DB ahead of target)
+- 2 between-window scenarios (DB up-to-date / DB stale)
+- 3 calendar-helper tests (deadline math, previous-quarter math, label formatting)
+- 2 invariants (in-window fires regardless of DB freshness; previous_quarter_end set on every decision)
+
+### 11.5.5 Verified empirical (today = 2026-05-28)
+
+```
+today=2026-05-28, 2_Funds_parser latest period=2026-03-31
+decision: should_run=False — today 2026-05-28 is past the 2026-03-31 filing window
+          (deadline 2026-05-15); 2_Funds_parser already holds 2026-03-31
+```
+
+Correctly skips: we're 6 days past the May 22 window end, and the funds DB already holds Q1 2026 (target).
 
 ---
 

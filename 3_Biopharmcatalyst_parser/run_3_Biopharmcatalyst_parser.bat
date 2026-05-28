@@ -31,6 +31,23 @@ if not exist "Outputs" mkdir "Outputs"
 if not exist "logs" mkdir "logs"
 
 REM ============================================================
+REM Funds auto-refresh — runs 2_Funds_parser modules 2..5 + the
+REM consensus_builds HTML if today is within ±7 days of a 13F filing
+REM deadline (2/14, 5/15, 8/14, 11/14) OR if today is past the
+REM most recent deadline window but the funds DB is still on a
+REM previous quarter. Exits 0 (skip) when neither condition holds —
+REM downstream pipeline continues either way.
+REM ============================================================
+echo.
+echo === Funds auto-refresh check (13F calendar) ===
+python scripts\3_auto_refresh_funds.py
+if errorlevel 1 (
+    echo [WARN] funds auto-refresh reported a failure; continuing with the
+    echo        biopharmcatalyst pipeline. Re-run 2_Funds_parser manually if
+    echo        the consensus_builds report is critical for this snapshot.
+)
+
+REM ============================================================
 REM Module 0 — initialize schema (always; idempotent)
 REM ============================================================
 echo.

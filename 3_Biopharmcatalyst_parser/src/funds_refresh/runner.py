@@ -166,13 +166,12 @@ def run_refresh(*, target_quarter_end: str, previous_quarter_end: str) -> RunSum
     consensus = _run_consensus_report(funds_root, target_quarter_end, previous_quarter_end)
     summary.steps.append(consensus)
     if not consensus.fatal:
-        # Derive expected output path: quarter label → e.g. q1_2026_consensus_builds.html
+        # The script writes Outputs/<YYYYQn>_consensus_builds.html based on
+        # the later (target) quarter — e.g. 2026Q1_consensus_builds.html.
         from .decision import quarter_label
         from datetime import date as _date
         q = quarter_label(_date.fromisoformat(target_quarter_end))
-        # Existing file convention is "q1_2026_consensus_builds.html"
-        # We'll emit a generic <year>q<n>_consensus_builds.html name.
-        candidate = funds_root / "Outputs" / f"{q.lower()}_consensus_builds.html"
+        candidate = funds_root / "Outputs" / f"{q}_consensus_builds.html"
         if candidate.exists():
             summary.consensus_html_path = candidate
     return summary
