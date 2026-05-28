@@ -15,8 +15,11 @@ falls back to per-ticker on batch failure.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import io
 import logging
+import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Optional
@@ -30,6 +33,30 @@ except ImportError:                                              # pragma: no co
 
 
 _DEFAULT_TTL_S = 60.0     # 60s — same scale 0_Renderer uses for its slowest pollers
+_FAILURE_TTL_S = 1800.0   # D29 — cache a fetch failure for 30 min so delisted
+                          # tickers (e.g., DVAX) don't get retried every poll.
+
+
+class _SilenceYfinance:
+    """Context manager that swallows yfinance's noisy stderr complaints
+    about delisted / 404 tickers so the bat/console output stays readable.
+
+    yfinance prints multi-line failure traces on stderr for every batch
+    that contains a delisted ticker — those are diagnostic only; we already
+    capture the failure in `LivePrice.error`.
+    """
+    def __enter__(self):
+        self._buf = io.StringIO()
+        self._cm = contextlib.redirect_stderr(self._buf)
+        self._cm.__enter__()
+        # yfinance also uses Python logging — turn it off temporarily.
+        self._prev_level = logging.getLogger("yfinance").level
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+        return self
+
+    def __exit__(self, *exc):
+        self._cm.__exit__(*exc)
+        logging.getLogger("yfinance").setLevel(self._prev_level)
 
 
 @dataclass
@@ -61,7 +88,13 @@ def _now_mono() -> float:
 
 
 def _fresh(entry: _CacheEntry, ttl_s: float) -> bool:
-    return (_now_mono() - entry.inserted_monotonic) < ttl_s
+    # D29 — successful fetches expire at ttl_s; failures (no price_usd) get
+    # the longer _FAILURE_TTL_S so delisted tickers (DVAX) aren't retried
+    # every poll cycle.
+    age = _now_mono() - entry.inserted_monotonic
+    if entry.price.price_usd is None:
+        return age < _FAILURE_TTL_S
+    return age < ttl_s
 
 
 def _fetch_one(ticker: str) -> LivePrice:
@@ -70,20 +103,19 @@ def _fetch_one(ticker: str) -> LivePrice:
     if yf is None:
         return LivePrice(ticker, None, _now_iso(), error="yfinance not installed")
     try:
-        tk = yf.Ticker(ticker)
-        try:
-            # fast_info is the cheapest path — pulls only the most recent quote.
-            fast = tk.fast_info
-            px = float(getattr(fast, "last_price", None)
-                       or getattr(fast, "regular_market_price", None)
-                       or fast.get("lastPrice")  # dict-like fallback
-                       or 0.0)
-            if px > 0:
-                return LivePrice(ticker, px, _now_iso())
-        except Exception:                                        # noqa: BLE001
-            pass
-        # Fallback: 1-day history, take the last Close.
-        df = tk.history(period="1d", auto_adjust=True)
+        with _SilenceYfinance():
+            tk = yf.Ticker(ticker)
+            try:
+                fast = tk.fast_info
+                px = float(getattr(fast, "last_price", None)
+                           or getattr(fast, "regular_market_price", None)
+                           or fast.get("lastPrice")
+                           or 0.0)
+                if px > 0:
+                    return LivePrice(ticker, px, _now_iso())
+            except Exception:                                    # noqa: BLE001
+                pass
+            df = tk.history(period="1d", auto_adjust=True)
         if df is None or df.empty or "Close" not in df.columns:
             return LivePrice(ticker, None, _now_iso(), error="empty history")
         closes = df["Close"].dropna()
@@ -105,11 +137,12 @@ def _fetch_batch(tickers: list[str]) -> dict[str, LivePrice]:
     if len(tickers) == 1:
         return {tickers[0]: _fetch_one(tickers[0])}
     try:
-        df = yf.download(
-            tickers=" ".join(tickers),
-            period="1d", auto_adjust=True,
-            group_by="ticker", progress=False, threads=True,
-        )
+        with _SilenceYfinance():
+            df = yf.download(
+                tickers=" ".join(tickers),
+                period="1d", auto_adjust=True,
+                group_by="ticker", progress=False, threads=True,
+            )
     except Exception as e:                                       # noqa: BLE001
         log.warning("batch yfinance failed: %s; falling back per-ticker", e)
         return {t: _fetch_one(t) for t in tickers}

@@ -40,11 +40,56 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 OUTPUTS = PROJECT_ROOT / "Outputs"
+BIOTECH_DB = PROJECT_ROOT / "data" / "biotech.db"
 DEEP_DIVES_DB = PROJECT_ROOT / "data" / "claude_deep_dives.db"
 SELECTION_JSON = OUTPUTS / "catalyst_scores_selection.json"
 
 # D25 — live-price refresh.
 from module_7.live_price import get_live_prices                  # noqa: E402
+
+# D28 — hard-pass ticker allowlist for /api/live_price.
+# Cached for HARD_PASS_TTL_S to avoid hitting biotech.db on every poll.
+import threading                                                  # noqa: E402
+import time as _time                                              # noqa: E402
+
+_HARD_PASS_TTL_S = 300.0       # 5 min — refresh ~once per pipeline run
+_HARD_PASS_LOCK = threading.Lock()
+_hard_pass_cache: dict = {"tickers": frozenset(), "fetched_at": 0.0}
+
+
+def _refresh_hard_pass_tickers() -> frozenset[str]:
+    """Read the current rolling-view hard-pass ticker set from biotech.db."""
+    if not BIOTECH_DB.exists():
+        return frozenset()
+    try:
+        with sqlite3.connect(str(BIOTECH_DB)) as cx:
+            cx.row_factory = sqlite3.Row
+            rows = cx.execute(
+                """
+                WITH latest AS (
+                    SELECT ticker, drug, nct_number, next_catalyst_type,
+                           MAX(snapshot_date) AS max_snap
+                    FROM catalyst_scores
+                    GROUP BY ticker, drug, nct_number, next_catalyst_type
+                )
+                SELECT DISTINCT cs.ticker
+                FROM catalyst_scores cs
+                JOIN latest l USING (ticker, drug, nct_number, next_catalyst_type)
+                WHERE cs.snapshot_date = l.max_snap AND cs.hard_pass = 1
+                """
+            ).fetchall()
+        return frozenset(r["ticker"].upper() for r in rows if r["ticker"])
+    except Exception:
+        return frozenset()
+
+
+def _hard_pass_allowlist() -> frozenset[str]:
+    """Return the cached set, refreshing past TTL."""
+    with _HARD_PASS_LOCK:
+        if (_time.monotonic() - _hard_pass_cache["fetched_at"]) > _HARD_PASS_TTL_S:
+            _hard_pass_cache["tickers"] = _refresh_hard_pass_tickers()
+            _hard_pass_cache["fetched_at"] = _time.monotonic()
+        return _hard_pass_cache["tickers"]
 
 
 def _load_selection() -> dict:
@@ -95,14 +140,21 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(200, _load_selection())
         if parsed.path == "/api/live_price":
             # D25 — yfinance live prices, 60s TTL.
+            # D28 — restricted to the current hard-pass ticker set
+            # (biotech.db). Non-hard-pass tickers are silently dropped
+            # so a misconfigured client can't burn yfinance budget on
+            # the ~500 excluded catalysts.
             qs = parse_qs(parsed.query or "")
             tickers_raw = (qs.get("tickers") or [""])[0]
-            tickers = [t.strip().upper()
-                       for t in tickers_raw.split(",") if t.strip()]
-            if not tickers:
+            requested = [t.strip().upper()
+                         for t in tickers_raw.split(",") if t.strip()]
+            if not requested:
                 return self._json(400, {"error": "missing ?tickers=AAA,BBB"})
+            allowlist = _hard_pass_allowlist()
+            allowed = [t for t in requested if t in allowlist]
+            dropped = [t for t in requested if t not in allowlist]
             force = (qs.get("force") or ["0"])[0] in ("1", "true")
-            results = get_live_prices(tickers, force=force)
+            results = get_live_prices(allowed, force=force) if allowed else {}
             payload = {
                 "prices": {t: {
                     "price_usd":      lp.price_usd,
@@ -110,6 +162,10 @@ class _Handler(BaseHTTPRequestHandler):
                     "source":         lp.source,
                     "error":          lp.error,
                 } for t, lp in results.items()},
+                "n_requested":   len(requested),
+                "n_allowed":     len(allowed),
+                "n_hard_pass_dropped": len(dropped),
+                "dropped_sample": dropped[:5],
             }
             return self._json(200, payload)
         if parsed.path == "/api/raw_text":
@@ -195,13 +251,32 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=7034)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--open-browser", action="store_true",
+                        help="Auto-launch the default browser at the catalyst_scores.html URL "
+                             "~1.5s after the server starts (mirrors 0_Renderer pattern).")
     args = parser.parse_args()
 
     httpd = ThreadingHTTPServer((args.host, args.port), _Handler)
-    print(f"[3_7_serve_selection] http://{args.host}:{args.port}/catalyst_scores.html")
+    url = f"http://{args.host}:{args.port}/catalyst_scores.html"
+    print(f"[3_7_serve_selection] {url}")
     print(f"  selection sidecar: {SELECTION_JSON}")
     print(f"  deep_dives db:     {DEEP_DIVES_DB}")
     print(f"  Ctrl-C to stop.")
+
+    if args.open_browser:
+        # D29 — delayed browser launch via daemon Timer so the server has
+        # time to bind before the browser issues its first GET.
+        import webbrowser as _webbrowser
+        def _open():
+            try:
+                _webbrowser.open(url)
+                print(f"[3_7_serve_selection] launched default browser at {url}")
+            except Exception as e:                               # noqa: BLE001
+                print(f"[3_7_serve_selection] could not auto-launch browser: {e}")
+        timer = threading.Timer(1.5, _open)
+        timer.daemon = True
+        timer.start()
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

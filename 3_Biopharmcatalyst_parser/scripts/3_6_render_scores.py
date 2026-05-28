@@ -345,6 +345,56 @@ h1 { font-size: 18px; margin: 0 0 4px; }
 .score-dist .seg.s20 { background: #c2410c; }
 .score-dist .seg.s00 { background: #7f1d1d; }
 
+/* D27 — legend strip directly under the score-dist bar. */
+.score-dist-legend {
+  display: flex; flex-wrap: wrap; gap: 10px 14px;
+  align-items: center;
+  font-size: 11px; color: var(--text-dim);
+  margin: -8px 0 16px 0;
+}
+.score-dist-legend .chip {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.score-dist-legend .swatch {
+  width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+}
+.score-dist-legend .swatch.s80 { background: #15803d; }
+.score-dist-legend .swatch.s60 { background: #65a30d; }
+.score-dist-legend .swatch.s40 { background: #ca8a04; }
+.score-dist-legend .swatch.s20 { background: #c2410c; }
+.score-dist-legend .swatch.s00 { background: #7f1d1d; }
+.score-dist-legend .label { color: var(--text); }
+.score-dist-legend .note { color: var(--text-dim); font-style: italic; }
+
+/* D27 — H-gate legend strip on the Excluded tab. */
+.hgate-legend {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 0 0 12px 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.hgate-legend .legend-title {
+  font-weight: 600; color: var(--text);
+  margin-bottom: 6px;
+}
+.hgate-legend ul {
+  margin: 0; padding-left: 18px;
+  color: var(--text-dim);
+}
+.hgate-legend li { margin: 2px 0; }
+.hgate-legend li b { color: var(--text); }
+.hgate-legend code {
+  background: rgba(255,255,255,0.05);
+  padding: 0 4px; border-radius: 3px;
+}
+.hgate-legend .legend-note {
+  margin-top: 6px; font-size: 11px; color: var(--text-dim);
+  font-style: italic;
+}
+
 .tabs {
   display: flex; gap: 4px; margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
@@ -498,6 +548,13 @@ tbody td .score {
   margin-left: 3px;
   vertical-align: top;
 }
+/* D30 — blue highlight on values that came from the live yfinance feed
+   (market cap + share price). Plain text color when falling back to
+   the BPC snapshot price so users can tell apart live vs stale data. */
+.live-val {
+  color: var(--accent);
+  font-weight: 500;
+}
 #live-price-stamp {
   color: var(--text-dim);
   font-size: 11px;
@@ -579,9 +636,15 @@ JS = r"""
   async function pollLivePrices() {
     if (!_onLivePricePage()) return;     // file:// — no server, skip
     if (!_isLikelyMarketHoursUS()) return;
+    // D28 — scope to HARD-PASS tickers only. Was `hard_pass && deep_dive`
+    // (10 tickers); now any hard_pass row (~52). Excluded rows are
+    // never fetched — refreshing prices for ~500 rejected catalysts
+    // would burn yfinance budget for no UI value (the Excluded tab
+    // shows fail-reason chips, not price-sensitive numbers). The
+    // server also enforces this filter as defense-in-depth.
     const tickers = Array.from(new Set(
       (window.__DATA && window.__DATA.rows || [])
-        .filter(r => r.hard_pass && r.deep_dive)
+        .filter(r => r.hard_pass)
         .map(r => r.ticker)
     ));
     if (!tickers.length) return;
@@ -591,31 +654,32 @@ JS = r"""
       if (!resp.ok) return;
       const body = await resp.json();
       let n_ok = 0;
+      let n_changed = 0;
       Object.keys(body.prices || {}).forEach(t => {
         const p = body.prices[t];
         if (p && p.price_usd) {
+          const prev = livePrices[t];
+          if (!prev || prev.price_usd !== p.price_usd) n_changed++;
           livePrices[t] = p;
           n_ok++;
         }
       });
-      if (n_ok > 0) {
-        // Re-render the table + any open expand panel.
-        renderTable();
-        const visibleExpand = document.querySelector('.expand-panel');
-        if (visibleExpand && visibleExpand.dataset.ticker) {
-          // No-op: re-rendering the table closes the panel; user re-opens manually.
-        }
-        const stamp = document.getElementById('live-price-stamp');
-        if (stamp) stamp.textContent = 'Live prices: ' +
-          new Date().toLocaleTimeString() + ' (' + n_ok + ' tickers)';
-      }
+      // D31 — only re-render when at least one price ACTUALLY changed.
+      // Skipping the no-op render eliminates flicker on quiet polls.
+      // The expand row stays untouched. Stamp still refreshes so users
+      // can see the poller is alive.
+      if (n_changed > 0) renderTable();
+      const stamp = document.getElementById('live-price-stamp');
+      if (stamp && n_ok > 0) stamp.textContent =
+        'Live prices: ' + new Date().toLocaleTimeString() +
+        ' (' + n_ok + ' tickers' + (n_changed > 0 ? ', ' + n_changed + ' moved' : ', none moved') + ')';
     } catch (e) {
       // Silent — server may be down; user dropped to file:// view.
     }
   }
 
   const state = Object.assign({
-    tab: 'catalyst_date_defined',
+    tab: 'hard_pass',
     minComposite: 0,
     requireInsider: 'any',
     requireFunds: 'any',
@@ -624,6 +688,16 @@ JS = r"""
     sortCol: 'composite_score',
     sortDir: 'desc',
   }, loadFilters());
+  // D31 — which row is currently expanded (window.__DATA.rows index).
+  // Ephemeral: NOT persisted to localStorage; resets on reload. Lives
+  // outside the persisted block so loadFilters() can't override it.
+  state.expandedIdx = null;
+  // D27 — migrate any persisted localStorage state from the pre-merge
+  // tab names so users with old `catalyst_date_defined` / `_undefined`
+  // saved tabs land on the merged 'hard_pass' tab instead of nothing.
+  if (state.tab === 'catalyst_date_defined' || state.tab === 'catalyst_date_undefined') {
+    state.tab = 'hard_pass';
+  }
   state.minComposite = Number(state.minComposite) || 0;
 
   // ============ formatting helpers ============
@@ -729,7 +803,7 @@ JS = r"""
 
   // ============ header / meta / KPIs ============
   function renderMeta(data, kpis) {
-    document.getElementById('title').textContent = 'Catalyst scores — Module 6 output';
+    document.getElementById('title').textContent = 'Catalyst scores';
     const fundsMeta = kpis.funds_q_latest
       ? `funds quarters: ${escapeHtml(kpis.funds_q_latest)} vs ${escapeHtml(kpis.funds_q_prev || '?')}`
       : 'funds DB not attached';
@@ -797,12 +871,15 @@ JS = r"""
       el.classList.toggle('active', t === state.tab);
       const countEl = el.querySelector('.count');
       if (countEl) {
-        const n = t === 'catalyst_date_defined' ? kpis.defined
-                : t === 'catalyst_date_undefined' ? kpis.undefined
+        // D27 — single 'hard_pass' tab covers BOTH timing buckets.
+        const n = t === 'hard_pass' ? kpis.hard_pass
                 : kpis.excluded;
         countEl.textContent = n;
       }
     });
+    // D27 — H-gate legend visible only on the Excluded tab.
+    const legend = document.getElementById('hgate-legend');
+    if (legend) legend.style.display = state.tab === 'excluded' ? '' : 'none';
   }
 
   function populateStageFilter(rows) {
@@ -822,8 +899,9 @@ JS = r"""
     if (state.tab === 'excluded') {
       if (r.hard_pass) return false;
     } else {
+      // D27 — single 'hard_pass' tab: any hard_pass row regardless of
+      // timing_bucket (defined OR undefined).
       if (!r.hard_pass) return false;
-      if (r.timing_bucket !== state.tab) return false;
     }
     if (r.composite_score != null && r.composite_score < state.minComposite) return false;
     if (state.requireInsider === 'yes') {
@@ -868,6 +946,13 @@ JS = r"""
     document.getElementById('visible-count').textContent =
       `${filtered.length} of ${rows.length} rows`;
     const tbody = document.getElementById('rows-body');
+    // D31 — preserve any open expand row across re-renders (the 60s live-
+    // price poll calls renderTable, which previously destroyed the panel
+    // by replacing tbody.innerHTML). We capture the expanded row index
+    // and the window scroll, rebuild the table, then re-insert the
+    // panel + restore scroll so the user sees no flicker / collapse.
+    const expandedIdx = state.expandedIdx;
+    const savedScrollY = window.scrollY;
     if (!sorted.length) {
       tbody.innerHTML = '<tr><td colspan="16" class="no-rows">No rows match the current filters.</td></tr>';
       return;
@@ -895,10 +980,13 @@ JS = r"""
       // For market cap we scale BPC's static mcap by the price ratio (shares
       // are approximately constant intraday; this is more robust than
       // requiring FDSC shares in the payload).
+      // D30 — wrap in blue + green ● when the recompute used live price.
       const livePx     = currentPrice(r.ticker, r.price);
       const liveMcap   = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
                           ? r.market_cap_usd * (livePx / r.price)
                           : r.market_cap_usd;
+      const isLivePx   = livePrices[r.ticker] && livePrices[r.ticker].price_usd != null;
+      const liveTagPx  = isLivePx ? ' <span class="live-tag" title="live yfinance price">●</span>' : '';
       return `
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
@@ -909,7 +997,7 @@ JS = r"""
         <td>${escapeHtml(r.next_catalyst_type || '')}</td>
         <td class="num">${escapeHtml(r.date_min || '—')}</td>
         <td>${tagBucket}</td>
-        <td class="num">${fmtMcap(liveMcap)}</td>
+        <td class="num"><span class="${isLivePx ? 'live-val' : ''}">${fmtMcap(liveMcap)}</span>${liveTagPx}</td>
         <td>${fmtScore(r.composite_score)}</td>
         <td>${fmtScore(r.insider_score)}</td>
         <td>${fmtScore(r.momentum_score)}</td>
@@ -919,6 +1007,25 @@ JS = r"""
         <td class="num">${ddExpWeek}</td>
       </tr>`;
     }).join('');
+
+    // D31 — re-insert the previously open expand row (if any) at the same
+    // ticker. If the row was filtered out, clear the expansion state so
+    // it doesn't try to re-open on the next render. Then restore scroll.
+    if (expandedIdx != null) {
+      const tr = tbody.querySelector(`tr[data-idx="${expandedIdx}"]`);
+      if (tr) {
+        const r = window.__DATA.rows[expandedIdx];
+        const tr2 = document.createElement('tr');
+        tr2.className = 'expand-row';
+        tr2.innerHTML = `<td colspan="16">${buildExpandPanel(r)}</td>`;
+        tr.classList.add('expanded');
+        tr.parentNode.insertBefore(tr2, tr.nextSibling);
+      } else {
+        // Row no longer visible under current filters/tab; drop the state.
+        state.expandedIdx = null;
+      }
+    }
+    if (savedScrollY) window.scrollTo({top: savedScrollY, behavior: 'instant'});
   }
 
   function renderSortIndicators() {
@@ -955,15 +1062,24 @@ JS = r"""
     html += `<div class="k">Indication</div><div>${escapeHtml(r.indication || '—')}</div>`;
     html += `<div class="k">Date window</div><div>${escapeHtml(r.date_min || '?')} → ${escapeHtml(r.date_max || '?')} (${escapeHtml(r.precision_tier || '?')}, lane=${escapeHtml(r.source_lane || '?')})</div>`;
     // D25 — show live price (yfinance) when available; otherwise BPC's docx-time price.
+    // D30 — wrap both values in the blue live-val class + green ● indicator
+    // when sourced from the live yfinance feed (not BPC snapshot).
     (function() {
       const livePx = currentPrice(r.ticker, r.price);
       const liveMcap = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
                         ? r.market_cap_usd * (livePx / r.price)
                         : r.market_cap_usd;
-      const lpStamp = livePrices[r.ticker] && livePrices[r.ticker].fetched_at_utc
+      const isLive  = livePrices[r.ticker] && livePrices[r.ticker].price_usd != null;
+      const tag     = isLive ? ' <span class="live-tag" title="live yfinance">●</span>' : '';
+      const cls     = isLive ? 'live-val' : '';
+      const lpStamp = isLive
                       ? ' (live ' + livePrices[r.ticker].fetched_at_utc + ')'
                       : (r.price != null ? ' (BPC snapshot)' : '');
-      html += `<div class="k">Market cap / price</div><div>${fmtMcap(liveMcap)} / $${livePx != null ? livePx.toFixed(2) : '—'}<span style="color:var(--text-dim);font-size:11px">${lpStamp}</span></div>`;
+      html += `<div class="k">Market cap / price</div><div>`
+           +  `<span class="${cls}">${fmtMcap(liveMcap)}</span> / `
+           +  `<span class="${cls}">$${livePx != null ? livePx.toFixed(2) : '—'}</span>`
+           +  `${tag}`
+           +  `<span style="color:var(--text-dim);font-size:11px">${lpStamp}</span></div>`;
     })();
     html += `<div class="k">NCT</div><div>${escapeHtml(r.nct_number || '—')}</div>`;
     html += '</div>';
@@ -1044,11 +1160,14 @@ JS = r"""
       html += `<div class="k">Live price (now)</div><div>${livePx2 != null ? '$' + livePx2.toFixed(2) : '—'}${liveTag2}</div>`;
       html += `<div class="k">Target on hit (\$)</div><div style="color:var(--green)">${refTgtH != null ? '$' + refTgtH.toFixed(2) : '—'} (= ref × (1 + ${signed(dd.expected_move_on_hit_pct)}))</div>`;
       html += `<div class="k">Target on miss (\$)</div><div style="color:var(--red)">${refTgtM != null ? '$' + refTgtM.toFixed(2) : '—'} (= ref × (1 + ${signed(dd.expected_move_on_miss_pct)}))</div>`;
-      // Live-recomputed move % from current_price vs target $.
+      // D29 — move-on-hit/miss are recomputed from current price each
+      // poll cycle (livePx2 = yfinance live → BPC fallback). Show the
+      // green ● indicator when the recompute used a fresh live price,
+      // matching the E[move] / expectancy-per-week cells below.
       const liveHitPct  = (livePx2 && refTgtH) ? (refTgtH - livePx2) / livePx2 * 100 : null;
       const liveMissPct = (livePx2 && refTgtM) ? (refTgtM - livePx2) / livePx2 * 100 : null;
-      html += `<div class="k">Move on hit % (vs live)</div><div style="color:var(--green)">${signed(liveHitPct)}</div>`;
-      html += `<div class="k">Move on miss % (vs live)</div><div style="color:var(--red)">${signed(liveMissPct)}</div>`;
+      html += `<div class="k">Move on hit % (vs live)</div><div style="color:var(--green)">${signed(liveHitPct)}${liveTag2}</div>`;
+      html += `<div class="k">Move on miss % (vs live)</div><div style="color:var(--red)">${signed(liveMissPct)}${liveTag2}</div>`;
       html += `<div class="k">E[move] = p_final·hit + (1-p_final)·miss</div><div><b>${signed(recompDD.e_move_pct)}</b>${liveTag2}</div>`;
       html += `<div class="k">weeks_to_catalyst</div><div>${dd.weeks_to_catalyst_mid ?? '—'}</div>`;
       html += `<div class="k">expectancy / week = E[move] / weeks</div><div><b>${signed(recompDD.expectancy_per_week_pct)}/wk</b>${liveTag2}</div>`;
@@ -1158,7 +1277,11 @@ JS = r"""
     const r = window.__DATA.rows[idx];
     const next = tr.nextElementSibling;
     if (next && next.classList.contains('expand-row')) {
-      next.remove(); tr.classList.remove('expanded'); return;
+      next.remove(); tr.classList.remove('expanded');
+      // D31 — user explicitly closed; persist that so the next 60s
+      // poll's re-render doesn't reopen the panel.
+      state.expandedIdx = null;
+      return;
     }
     document.querySelectorAll('tr.expand-row').forEach(el => el.remove());
     document.querySelectorAll('tr.expanded').forEach(el => el.classList.remove('expanded'));
@@ -1167,6 +1290,9 @@ JS = r"""
     tr2.innerHTML = `<td colspan="16">${buildExpandPanel(r)}</td>`;
     tr.classList.add('expanded');
     tr.parentNode.insertBefore(tr2, tr.nextSibling);
+    // D31 — record the open row so renderTable() can re-insert the
+    // panel after the 60s live-price refresh rebuilds tbody.
+    state.expandedIdx = idx;
   }
 
   // ============ wiring ============
@@ -1276,13 +1402,35 @@ HTML_SKELETON = """<!doctype html>
 </div>
 
 <div class="kpi-strip" id="kpi-strip"></div>
-<div class="score-dist" id="score-dist"></div>
+<div class="score-dist" id="score-dist" title="Composite-score histogram across hard-pass rows. Bar widths are proportional to row counts in each bucket."></div>
+<!-- D27 — score-distribution legend strip. -->
+<div class="score-dist-legend">
+  <span class="note">Composite score buckets (hard-pass rows):</span>
+  <span class="chip"><span class="swatch s80"></span><span class="label">80-100</span> &mdash; strong conviction</span>
+  <span class="chip"><span class="swatch s60"></span><span class="label">60-80</span> &mdash; good</span>
+  <span class="chip"><span class="swatch s40"></span><span class="label">40-60</span> &mdash; mixed</span>
+  <span class="chip"><span class="swatch s20"></span><span class="label">20-40</span> &mdash; weak</span>
+  <span class="chip"><span class="swatch s00"></span><span class="label">0-20</span> &mdash; poor</span>
+  <span class="note">composite = 0.35&times;insider + 0.35&times;momentum + 0.30&times;funds</span>
+</div>
 <div class="meta" id="fail-meta" style="margin-top:-8px;margin-bottom:14px"></div>
 
 <div class="tabs">
-  <button class="tab" data-tab="catalyst_date_defined">Defined timing <span class="count">0</span></button>
-  <button class="tab" data-tab="catalyst_date_undefined">Undefined timing <span class="count">0</span></button>
-  <button class="tab" data-tab="excluded">Excluded <span class="count">0</span></button>
+  <button class="tab" data-tab="hard_pass" title="Hard-pass catalysts (H1-H5 all satisfied)">Hard pass <span class="count">0</span></button>
+  <button class="tab" data-tab="excluded" title="Catalysts excluded by one or more H1-H5 hard filters">Excluded <span class="count">0</span></button>
+</div>
+
+<!-- D27 — H-gate legend, shown only on the Excluded tab -->
+<div id="hgate-legend" class="hgate-legend" style="display:none">
+  <div class="legend-title">Hard-filter legend (rows in this tab failed one or more of these):</div>
+  <ul>
+    <li><b>H1</b> — Market cap band: $30M ≤ market cap < $2B (per <code>config/scoring.yaml::H1</code>).</li>
+    <li><b>H2</b> — Timing resolvable: M5 produced a non-<code>unknown</code> <code>precision_tier</code> (specific / month / quarter / half / year / conference).</li>
+    <li><b>H3</b> — Forward-looking: <code>date_min ≥ snapshot_date + 14 days</code> (catalyst is at least 2 weeks out — per <code>H3.window_start_days</code>).</li>
+    <li><b>H4</b> — Window not entirely past: <code>date_max ≥ snapshot_date</code> (catalyst hasn't already materialised).</li>
+    <li><b>H5</b> — Clinical-readout event: <code>stage ∈ {phase1, phase2, phase3}</code> AND <code>next_catalyst_type ∈ {Interim Data, Initial Data, Topline Data, Full Results, Conference Presentation}</code>.</li>
+  </ul>
+  <div class="legend-note">A row can fail multiple gates — the chips on each row show all failures, not just the first.</div>
 </div>
 
 <div class="filters">
