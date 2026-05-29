@@ -387,3 +387,12 @@ CING is the standout: sub-$5 stock, 66% p_final, 1-week catalyst — exactly the
 ### Competitor audit (one-off, retained as audit pattern)
 
 A separate audit script (`_tmp_audit_competitor.py` + `_tmp_audit_reverse.py`, deleted after use) compared the BPC + M8 stack against a competitor 14-day catalyst list. Result: our DB covers **~4× more small-cap catalysts** in any given 14-day window. The competitor's apparent depth was concentrated in big-pharma assets that the H1 mcap < $2B gate rejects by design. **Conclusion: stay with BPC + M8 for the small-cap tier.** Audit scripts can be recreated for any future competitor evaluation.
+
+### Retention interaction with M8 data (D37)
+
+Per [decisions.md § D37](decisions.md), `scripts/3_prune_old_data.py` applies quarterly:
+- **`deep_dives`** is on the **never-prune** list. Every M8-dispatched analysis (including run #5/6/7) is durable. No reduction in audit value over time.
+- **`deep_dive_runs`** is on the **never-prune** list. Cost ledger + batch_id + gate_config_json stay forever.
+- **`deep_dive_errors`** has a **90-day TTL**. The 14 HARD-RULE-#8 `catalyst_already_passed` rows from run #6 age out after Aug 27 2026. If you want them kept longer for post-hoc analysis of BPC-stale-catalyst rates, raise `--error-ttl-days` on the prune CLI.
+- **`web_search_cache`** has a **90-day TTL**. The 957 URLs from run #6 age out after Aug 27 2026. Re-dispatches don't reuse these (each new prompt_version stores fresh), so the TTL has zero functional impact — purely a disk-space saver.
+- **`catalyst_snapshots` / `_timing` / `_scores`** keep the **top-3 snapshots per PK**. A rescued catalyst that drops out of the rolling-view (e.g., its date_max passes, or BPC stops publishing it) won't appear in the renderer regardless — but the most recent 3 of its catalyst_scores rows stay queryable for audit even after it leaves the live UI.

@@ -1797,3 +1797,78 @@ CING — sub-$5 stock with 66% p_final and a 1-week window — is exactly the ki
 **Validation:** 468 tests still passing (one M6 test updated to assert `composite_score IS NOT NULL` after bug fix #1).
 
 ---
+
+## D37 — Quarterly DB pruning to bound growth (2026-05-29)
+
+**Trigger:** the user asked whether passed catalysts get cleaned out. Audit confirmed: the HTML output self-limits (the renderer's `date_max >= effective_today` filter drops past catalysts before they reach the JS sidecar — that part is fine) but the **DBs accumulate forever**. At weekly BPC + EDGAR ingest cadence, projecting 52 weeks ahead:
+
+| Table | Today | After 1 yr | Notes |
+|---|---:|---:|---|
+| `catalyst_snapshots` (+ timing + scores, same PK) | 844 | ~25-30k | 4-5× growth per snapshot per catalyst PK |
+| `bpc_insider_supplement` | 3,112 | ~10-15k | same per-snapshot accumulation pattern |
+| `edgar_form4_transactions` | 14,300 | ~80-150k | small per row, useful for backtesting |
+| `web_search_cache` | 6,998 | ~50-100k | **worst offender** — Claude content blobs (~10s of KB each) |
+| `deep_dives` | 283 | ~2-10k | small per row, durable audit value |
+
+Without action: ~500 MB-1 GB SQLite by EoY, dominated by `web_search_cache`.
+
+**Decision:** add a tiered prune strategy. Per-table retention rules:
+
+| Table | Strategy | Default | Why |
+|---|---|---|---|
+| `catalyst_snapshots`, `catalyst_timing`, `catalyst_scores` (cascade) | Keep top-N snapshots per PK | `keep_n=3` | Rolling-view only reads MAX(snapshot_date); keeping 3 gives ~3 weeks of audit ("how did this catalyst's date / stage drift?") |
+| `bpc_insider_supplement` | Keep top-N snapshots per PK | `keep_n=3` | Same accumulation pattern as catalyst_snapshots |
+| `web_search_cache` | TTL drop on `cached_at` | 90 days | Pure cost-saver cache; Claude can re-fetch any URL on demand |
+| `deep_dive_errors` | TTL drop on `created_at` | 90 days | Low value beyond ~3 months |
+| `deep_dives`, `deep_dive_runs` | **NEVER prune** | — | Historical Claude analyses + audit trail |
+| `edgar_form4_*`, `edgar_ownership_filings` | **NEVER prune** | — | Small, useful for cross-quarter trend analysis |
+| `ticker_cik_map` | **NEVER prune** | — | One-time bootstrap |
+| `fundamentals.*` | not applicable | — | M6.5 re-fetches; doesn't accumulate |
+
+**FK ordering:** `catalyst_scores` and `catalyst_timing` have non-CASCADE FKs to `catalyst_snapshots`. With `PRAGMA foreign_keys = ON` (default in `db.py`), the children must be deleted before the parent. The CLI wraps all three deletes in a single transaction (and `ROLLBACK`s on any failure) so the FK chain can't end up inconsistent.
+
+**Quarterly schedule (`--auto` mode):** the user picked "~1.5 months after each 13F deadline" so the funds DB has stabilised before we reshape biotech.db. 13F deadlines are Feb 14 / May 15 / Aug 14 / Nov 14; trigger dates land at **Jan 1 / Apr 1 / Jul 1 / Oct 1**. `is_prune_due(today, last_prune)` returns True when (a) we've never pruned, or (b) the most-recent quarterly trigger has passed AND `last_prune < that trigger`. Tracking lives in `ingest_log` with `module='prune'`.
+
+**Architecture:**
+
+```
+src/database/
+  prune.py            — pure-compute planners + executors
+                        + most_recent_trigger_on_or_before()
+                        + is_prune_due()
+                        + get_last_prune_date()
+
+scripts/
+  3_prune_old_data.py — CLI driver
+                        dry-run by default; --write to commit
+                        --auto: bat-driven, honors quarterly schedule
+                        --force: bypass --auto check
+                        --keep-snapshots N (default 3)
+                        --web-search-ttl-days D (default 90)
+                        --error-ttl-days D (default 90)
+                        writes ingest_log row per run; VACUUMs both DBs after a write
+```
+
+`run_3_Biopharmcatalyst_parser.bat` calls `python scripts\3_prune_old_data.py --auto --write` after the M8 dispatch step. Silent no-op when the schedule says we're not due.
+
+**Tests:** 18 new in `tests/test_database_prune.py` (schedule logic + per-PK retention + TTL + FK-ordering validation). Full suite **486 passing**, 4 skipped (no regressions).
+
+**Current-DB impact (dry-run today, 2026-05-29, only 2 snapshots ingested so far):**
+
+| Table | kept | would_delete |
+|---|---:|---:|
+| catalyst_scores | 844 | 0 |
+| catalyst_timing | 844 | 0 |
+| catalyst_snapshots | 844 | 0 |
+| **bpc_insider_supplement** | 2,319 | **793** |
+| web_search_cache | 6,998 | 0 |
+| deep_dive_errors | 17 | 0 |
+
+`bpc_insider_supplement` is the only table with prune-able rows today (793 — the BPC insider CSV must have been ingested across multiple historical snapshots before the brief started tracking). All other tables are below the keep_n=3 / 90-day thresholds. Real impact will compound over time.
+
+**Future-work signals:**
+
+- A `--report-only` flag that also reports estimated DB size reduction post-prune (currently you just see row counts). Useful when DB hits multi-GB.
+- The bat could `SELECT MAX(finished_at) FROM ingest_log WHERE module='prune'` and print "Last DB prune was X days ago" at the top of every run as a visibility nudge, even when --auto is no-op.
+
+---

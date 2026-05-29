@@ -268,6 +268,24 @@ if /i "%RUN_M8%"=="y" (
     )
 )
 
+REM ============================================================
+REM Module pruner (D37) — quarterly DB cleanup.
+REM --auto: no-op unless we're past the next quarterly trigger date
+REM         AND haven't pruned since. Triggers anchored ~1.5 months
+REM         after each 13F filing deadline so the 2_Funds_parser DB
+REM         is settled before we reshape biotech.db.
+REM         Trigger dates: Jan 1 / Apr 1 / Jul 1 / Oct 1.
+REM --write: actually delete (without it, dry-run reports only).
+REM Manual override: drop --auto and run from a shell with --write
+REM                  to prune immediately regardless of schedule.
+REM ============================================================
+echo.
+echo === Quarterly DB prune check ===
+python scripts\3_prune_old_data.py --auto --write
+if errorlevel 1 (
+    echo [WARN] prune script failed; continuing.
+)
+
 echo.
 echo === run_3_Biopharmcatalyst_parser complete ===
 endlocal

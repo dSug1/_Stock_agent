@@ -56,6 +56,14 @@ Downstream (NOT in this spec):
   Module 7 (Claude API deep-dive)     — user-selected subset of Module 6 output
   Module 8 (Rescue + re-dispatch)     — re-admits H1/H3/H5-excluded catalysts (D35)
   Module 9 (Dashboard)                — renders M6+M7+M8 output (formerly numbered M8)
+
+Utility:
+  scripts/3_prune_old_data.py         — quarterly DB retention (D37): keep top-3
+                                        snapshots per catalyst PK + 90-day TTL on
+                                        web_search_cache + deep_dive_errors.
+                                        Runs as the final step of the orchestrator
+                                        bat (--auto --write); silent no-op when
+                                        not due.
 ```
 
 Each module is independently runnable and idempotent: re-running the same input produces the same database state.
@@ -1429,6 +1437,7 @@ For architectural context — these are NOT specified yet:
 - **Module 7 — Claude API deep-dive:** user-selected subset of `catalyst_scores` rows (where `hard_pass = 1`) → `claude-opus-4-7` with `web_search` enabled. Returns structured JSON per ticker (POS estimate vs base rate, expected move on positive/negative, dilution risk, key risks, sizing rec). Mandatory `[y/N]` cost-approval gate per memory `claude-api`. Heavy reuse from `2_Funds_parser/src/module_6/` (prompt caching + batch API + JSON validation). **User does NOT want an automatic top-N cap** — they pick the slice manually after reviewing Module 6 output.
 - **Module 8 — Catalyst rescue + re-dispatch (D35):** re-admits catalysts that failed H1 (small-cap), H3 (imminent/undated), or H5 (non-standard stage/type) into the Claude deep-dive feed, with a separate prompt-version label (`m8-rescue-v1`) so cache isolation works. B/C rescues prepend a date-retrieval instruction so Claude first resolves the catalyst date from primary sources, then scores normally. Adds a "Rescued" tab to the renderer alongside Hard pass / Excluded.
 - **Module 9 — Dashboard:** dark-themed iOS-optimized HTML, expandable cards per ticker, sortable by composite score + Claude-deep-dive findings. Static file output. (Renumbered from M8 in D35.)
+- **DB retention utility (D37):** `scripts/3_prune_old_data.py` bounds long-term growth. Per (snapshot_date, ticker, drug, nct, type) keep top-3 snapshots in `catalyst_snapshots / catalyst_timing / catalyst_scores` (cascade FK-ordered deletes inside a single transaction); per PK keep top-3 in `bpc_insider_supplement`. TTL-drop `web_search_cache` and `deep_dive_errors` rows older than 90 days. Never prune `deep_dives` (durable Claude-analysis audit), `deep_dive_runs`, EDGAR tables (small + useful for backtests), `ticker_cik_map` (bootstrap), or `fundamentals.*` (M6.5 refetches, doesn't accumulate). HTML output already self-limits via the renderer's `date_max >= effective_today` filter — D37 is the matching DB-side bound. Quarterly schedule anchored at Jan 1 / Apr 1 / Jul 1 / Oct 1 (~1.5 months after each 13F filing deadline so the funds DB has settled before reshaping biotech.db).
 
 ---
 
