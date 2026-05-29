@@ -124,6 +124,17 @@ def fetch_latest_deep_dive_map(
             "price_at_api_time_usd":    r["price_at_api_time_usd"],
             "target_price_on_hit_usd":  r["target_price_on_hit_usd"],
             "target_price_on_miss_usd": r["target_price_on_miss_usd"],
+            # D35 — M8 rescue artifacts. claude_resolved_catalyst_date
+            # drives the renderer's 📅 marker; catalyst_date_source
+            # populates the hover tooltip + the expand-panel kv line.
+            # rescue_class is also on catalyst_scores but having it on
+            # the deep_dive payload keeps the Rescued tab JS simple.
+            "claude_resolved_catalyst_date": r["claude_resolved_catalyst_date"]
+                                              if "claude_resolved_catalyst_date" in r.keys() else None,
+            "catalyst_date_source":           r["catalyst_date_source"]
+                                              if "catalyst_date_source" in r.keys() else None,
+            "rescue_class_dispatch":          r["rescue_class"]
+                                              if "rescue_class" in r.keys() else None,
             # Audit
             "usd_cost":         r["usd_cost"],
             "tokens": {

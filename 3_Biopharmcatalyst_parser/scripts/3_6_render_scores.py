@@ -451,14 +451,22 @@ h1 { font-size: 18px; margin: 0 0 4px; }
 .filters .reset:hover { color: var(--text); }
 .filters .visible-count { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 
-table { width: 100%; border-collapse: collapse; }
+/* D35c — table-layout:fixed makes the per-column widths declared below
+   actually stick (auto layout treats them as hints; long content can
+   still expand a column past its declared width). The table is pinned
+   to 100% of its container so it never overflows the viewport. */
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 thead th {
-  text-align: left; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--text-dim);
+  /* D35c — header font dropped from 11px to 9.5px + line-height tightened
+     so multi-word headers (Share price appreciation, Expectancy / week,
+     Catalyst type) wrap inside narrow columns instead of expanding them. */
+  text-align: left; font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.03em; color: var(--text-dim);
   border-bottom: 1px solid var(--border);
-  padding: 8px 8px; position: sticky; top: 0;
+  padding: 6px 5px; position: sticky; top: 0;
   background: var(--bg); z-index: 1;
   cursor: pointer; user-select: none;
+  white-space: normal; line-height: 1.2; vertical-align: bottom;
 }
 thead th:hover { color: var(--text); }
 thead th.sorted-asc::after  { content: " \\25B2"; color: var(--accent); }
@@ -469,7 +477,53 @@ tbody tr {
 }
 tbody tr:hover { background: var(--bg-row); }
 tbody tr.expanded { background: var(--bg-row); }
-tbody td { padding: 7px 8px; vertical-align: top; }
+/* D35b — pale-green highlight for "new" catalysts (not yet acknowledged
+   by the user). Tinted on hover and when expanded so the cue persists
+   when the user opens the row to review. */
+tbody tr.unack { background: rgba(52, 211, 153, 0.07); }
+tbody tr.unack:hover,
+tbody tr.unack.expanded { background: rgba(52, 211, 153, 0.13); }
+tr.expand-row.unack > td { background: rgba(52, 211, 153, 0.06); }
+tbody td { padding: 7px 5px; vertical-align: top;
+           overflow-wrap: anywhere; word-break: break-word; }
+
+/* D35c — per-column widths. Sum = 100% so the table fits the container
+   precisely; table-layout:fixed enforces these even when content is
+   long. Increased: Name (3), Drug (4), Date (7). Decreased: Precision/
+   fail (8), Probability (14), Share-price-appreciation (15). */
+thead th:nth-child(1),  tbody td:nth-child(1)  { width: 2.5%; }   /* # */
+thead th:nth-child(2),  tbody td:nth-child(2)  { width: 4.5%; }   /* Ticker */
+thead th:nth-child(3),  tbody td:nth-child(3)  { width: 10%;  }   /* Name */
+thead th:nth-child(4),  tbody td:nth-child(4)  { width: 12%;  }   /* Drug */
+thead th:nth-child(5),  tbody td:nth-child(5)  { width: 5%;   }   /* Stage */
+thead th:nth-child(6),  tbody td:nth-child(6)  { width: 8%;   }   /* Catalyst type */
+thead th:nth-child(7),  tbody td:nth-child(7)  { width: 7%;   }   /* Date */
+thead th:nth-child(8),  tbody td:nth-child(8)  { width: 5%;   }   /* Precision / fail */
+thead th:nth-child(9),  tbody td:nth-child(9)  { width: 6.5%; }   /* Market cap */
+thead th:nth-child(10), tbody td:nth-child(10) { width: 5%;   }   /* Composite */
+thead th:nth-child(11), tbody td:nth-child(11) { width: 5%;   }   /* Insider */
+thead th:nth-child(12), tbody td:nth-child(12) { width: 5%;   }   /* Momentum */
+thead th:nth-child(13), tbody td:nth-child(13) { width: 5%;   }   /* Funds */
+thead th:nth-child(14), tbody td:nth-child(14) { width: 4.5%; }   /* Probability */
+thead th:nth-child(15), tbody td:nth-child(15) { width: 6%;   }   /* Share price appreciation */
+thead th:nth-child(16), tbody td:nth-child(16) { width: 9%;   }   /* Expectancy / week */
+/* D35b — "click to acknowledge" toggle pinned at the top-left of the
+   expand panel. When ticked, the row loses its pale-green highlight. */
+.ack-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; margin: 0 0 10px 0;
+  font-size: 12px; color: var(--text-dim);
+  cursor: pointer; user-select: none;
+  border-radius: 4px;
+  background: rgba(52, 211, 153, 0.10);
+}
+.ack-toggle:hover { background: rgba(52, 211, 153, 0.18); }
+.ack-toggle input { cursor: pointer; margin: 0; }
+.ack-toggle.acked {
+  background: transparent;
+  color: var(--text-dim);
+  opacity: 0.65;
+}
 tbody td .ticker {
   font-weight: 600; color: var(--accent);
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -717,6 +771,39 @@ JS = r"""
     }
   }
 
+  // ============ acknowledged-catalysts set (D35b) ============
+  // Persists across sessions in localStorage so the user's "I've already
+  // reviewed this" decisions survive page refreshes + browser restarts.
+  // PK is (ticker, drug, nct, type) — stable across snapshots, so the
+  // same catalyst stays acknowledged even when a new BPC snapshot lands.
+  const _ACK_LS_KEY = 'catalyst_acknowledged_v1';
+  const acknowledged = new Set();
+  try {
+    const raw = localStorage.getItem(_ACK_LS_KEY);
+    if (raw) JSON.parse(raw).forEach(k => acknowledged.add(k));
+  } catch (_) { /* corrupt JSON — start fresh */ }
+  function catalystPk(r) {
+    return [r.ticker || '', r.drug || '', r.nct_number || '', r.next_catalyst_type || ''].join('|');
+  }
+  function saveAcknowledged() {
+    try { localStorage.setItem(_ACK_LS_KEY, JSON.stringify(Array.from(acknowledged))); }
+    catch (_) { /* quota full or storage disabled */ }
+  }
+  function isUnacknowledged(r) { return !acknowledged.has(catalystPk(r)); }
+  function bootstrapAcknowledged() {
+    // First-ever load (no localStorage key exists): the M8-rescued
+    // rows are the 'new' batch the user is supposed to review. The
+    // pre-existing hard-pass rows should NOT be highlighted as new.
+    // We seed the acknowledged set with all current hard_pass PKs so
+    // only the rescued rows light up green. From the second load on,
+    // 'new' means "PK we've never seen acknowledged before" — covers
+    // future BPC drops that add hard_pass OR rescued catalysts.
+    if (localStorage.getItem(_ACK_LS_KEY) !== null) return;
+    const rows = (window.__DATA && window.__DATA.rows) || [];
+    rows.forEach(r => { if (r.hard_pass) acknowledged.add(catalystPk(r)); });
+    saveAcknowledged();
+  }
+
   const state = Object.assign({
     tab: 'hard_pass',
     minComposite: 0,
@@ -724,6 +811,10 @@ JS = r"""
     requireFunds: 'any',
     stage: 'any',
     tickerFilter: '',
+    // D35d — "review status" filter: 'any' | 'new' (pale-green only) |
+    // 'ack' (already-reviewed only). Lets the user zero in on what they
+    // haven't checked yet without having to hunt the table for green tints.
+    reviewStatus: 'any',
     sortCol: 'composite_score',
     sortDir: 'desc',
   }, loadFilters());
@@ -734,12 +825,15 @@ JS = r"""
   // D27 — migrate any persisted localStorage state from the pre-merge
   // tab names so users with old `catalyst_date_defined` / `_undefined`
   // saved tabs land on the merged 'hard_pass' tab instead of nothing.
-  if (state.tab === 'catalyst_date_defined' || state.tab === 'catalyst_date_undefined') {
-    state.tab = 'hard_pass';
+  // D35a — merged the old 'hard_pass' + 'rescued' tabs into a single
+  // 'catalyst' tab so the user sees both kinds together. Anyone with
+  // a persisted state.tab on the old values gets remapped here.
+  if (['catalyst_date_defined', 'catalyst_date_undefined',
+       'hard_pass', 'rescued'].includes(state.tab)) {
+    state.tab = 'catalyst';
   }
-  // D35 — accept the new 'rescued' tab. Anything else falls back to hard_pass.
-  if (!['hard_pass', 'rescued', 'excluded'].includes(state.tab)) {
-    state.tab = 'hard_pass';
+  if (!['catalyst', 'excluded'].includes(state.tab)) {
+    state.tab = 'catalyst';
   }
   state.minComposite = Number(state.minComposite) || 0;
 
@@ -895,7 +989,7 @@ JS = r"""
   function renderKpiStrip(kpis) {
     document.getElementById('kpi-strip').innerHTML =
       kpiCard('Catalysts', kpis.total, 'snapshot total') +
-      kpiCard('Hard pass', kpis.hard_pass, `${kpis.rescued} rescued · ${kpis.excluded} excluded`, 'green') +
+      kpiCard('Catalysts', kpis.hard_pass + kpis.rescued, `${kpis.hard_pass} hard-pass · ${kpis.rescued} rescued · ${kpis.excluded} excluded`, 'green') +
       kpiCard('Defined timing', kpis.defined, 'specific/conference/month/quarter', 'indigo') +
       kpiCard('Undefined timing', kpis.undefined, 'half/year', 'amber') +
       kpiCard('With CEO/CFO buy', kpis.n_with_insider, 'of hard-pass rows', 'purple') +
@@ -912,7 +1006,7 @@ JS = r"""
       segs.push(`<div class="seg ${klass}" style="flex:${pct} 0 0" title="composite ${key}: ${n}">${n}</div>`);
     }
     document.getElementById('score-dist').innerHTML =
-      segs.length ? segs.join('') : '<div class="seg" style="flex:1">no hard_pass rows</div>';
+      segs.length ? segs.join('') : '<div class="seg" style="flex:1">no catalyst rows</div>';
   }
 
   function renderFailMeta(fail_counts) {
@@ -928,10 +1022,9 @@ JS = r"""
       el.classList.toggle('active', t === state.tab);
       const countEl = el.querySelector('.count');
       if (countEl) {
-        // D35 — three tabs now: hard_pass / rescued / excluded.
+        // D35a — merged tabs: 'catalyst' = hard_pass + rescued.
         let n;
-        if (t === 'hard_pass') n = kpis.hard_pass;
-        else if (t === 'rescued') n = kpis.rescued;
+        if (t === 'catalyst') n = kpis.hard_pass + kpis.rescued;
         else n = kpis.excluded;
         countEl.textContent = n;
       }
@@ -939,9 +1032,10 @@ JS = r"""
     // D27 — H-gate legend visible only on the Excluded tab.
     const legend = document.getElementById('hgate-legend');
     if (legend) legend.style.display = state.tab === 'excluded' ? '' : 'none';
-    // D35 — rescue legend visible only on the Rescued tab.
+    // D35a — rescue legend visible on the merged Catalyst tab (the
+    // only place where rescue chips appear).
     const rescueLegend = document.getElementById('rescue-legend');
-    if (rescueLegend) rescueLegend.style.display = state.tab === 'rescued' ? '' : 'none';
+    if (rescueLegend) rescueLegend.style.display = state.tab === 'catalyst' ? '' : 'none';
   }
 
   function populateStageFilter(rows) {
@@ -958,16 +1052,12 @@ JS = r"""
 
   // ============ row filtering / sorting / table render ============
   function rowMatchesFilters(r) {
-    // D35 — three tabs: hard_pass / rescued / excluded.
+    // D35a — two tabs: catalyst (hard_pass + rescued) / excluded.
     if (state.tab === 'excluded') {
-      // Excluded = hard_pass=0 AND rescued=0 (rescued rows have moved out).
       if (r.hard_pass || r.rescued) return false;
-    } else if (state.tab === 'rescued') {
-      // Rescued = hard_pass=0 AND rescued=1.
-      if (r.hard_pass || !r.rescued) return false;
     } else {
-      // D27 — single 'hard_pass' tab: any hard_pass row.
-      if (!r.hard_pass) return false;
+      // 'catalyst' tab: any hard_pass OR rescued row.
+      if (!r.hard_pass && !r.rescued) return false;
     }
     if (r.composite_score != null && r.composite_score < state.minComposite) return false;
     if (state.requireInsider === 'yes') {
@@ -989,6 +1079,9 @@ JS = r"""
           !String(r.name || '').toLowerCase().includes(t) &&
           !String(r.drug || '').toLowerCase().includes(t)) return false;
     }
+    // D35d — review status: show only new (unack) or only acknowledged.
+    if (state.reviewStatus === 'new' && !isUnacknowledged(r)) return false;
+    if (state.reviewStatus === 'ack' &&  isUnacknowledged(r)) return false;
     return true;
   }
 
@@ -1044,17 +1137,16 @@ JS = r"""
       return;
     }
     const isExcluded = state.tab === 'excluded';
-    const isRescued = state.tab === 'rescued';
     tbody.innerHTML = sorted.map((r, i) => {
-      // D35 — Rescued tab: ONLY the rescue_class chip in this column,
-      // so column widths match the Hard pass tab. The original fail
-      // reasons are surfaced inside the expand panel's "Rescue context"
-      // section, not jammed into this cell.
+      // D35a — Catalyst tab merges hard_pass + rescued rows. The
+      // bucket-column chip is picked per-row: precision_tier for
+      // hard_pass, rescue_class for rescued. Both chips have similar
+      // visual weight so column widths stay aligned.
       let tagBucket;
       if (isExcluded) {
         tagBucket = (r.fail_reasons || '').split(',').filter(Boolean)
           .map(c => `<span class="tag fail">${c}</span>`).join(' ');
-      } else if (isRescued) {
+      } else if (r.rescued) {
         const cls = r.rescue_class || '?';
         tagBucket = `<span class="tag rescue" title="Rescued by Class ${cls} — open the row for fail-reason detail">${cls}</span>`;
       } else {
@@ -1090,8 +1182,12 @@ JS = r"""
       // M7 dispatch-time, are all yfinance-sourced and worth the dot.
       const isFreshPx  = pxInfo.source !== 'bpc' && pxInfo.source !== 'none';
       const liveTagPx  = isFreshPx ? ' <span class="live-tag" title="yfinance-sourced price">●</span>' : '';
+      // D35b — pale-green highlight when the catalyst hasn't been
+      // acknowledged yet. Cleared when the user ticks the checkbox in
+      // the row's expand panel.
+      const unackCls = isUnacknowledged(r) ? ' unack' : '';
       return `
-      <tr data-idx="${r.__idx}">
+      <tr data-idx="${r.__idx}" class="${unackCls.trim()}">
         <td class="num">${i+1}</td>
         <td><span class="ticker">${escapeHtml(r.ticker)}</span></td>
         <td>${escapeHtml(r.name || '')}</td>
@@ -1131,7 +1227,9 @@ JS = r"""
       if (tr) {
         const r = window.__DATA.rows[expandedIdx];
         const tr2 = document.createElement('tr');
-        tr2.className = 'expand-row';
+        // D35b — propagate the .unack class so the expand panel also
+        // carries the pale-green tint while the row is open.
+        tr2.className = 'expand-row' + (tr.classList.contains('unack') ? ' unack' : '');
         tr2.innerHTML = `<td colspan="16">${buildExpandPanel(r)}</td>`;
         tr.classList.add('expanded');
         tr.parentNode.insertBefore(tr2, tr.nextSibling);
@@ -1157,6 +1255,16 @@ JS = r"""
     const trades = (window.__DATA.insider_trades[r.ticker] || []);
     const fundBreakdown = (window.__DATA.funds_breakdown[r.ticker] || []);
     let html = '<div class="expand-panel">';
+    // D35b — top-left "click to acknowledge" toggle. Lit pale-green when
+    // the catalyst is still 'new'; when ticked, the pale-green highlight
+    // on the parent TR disappears (renderTable() re-runs from the change
+    // handler). Persists across sessions via localStorage.
+    const isNew = isUnacknowledged(r);
+    html += `<label class="ack-toggle ${isNew ? '' : 'acked'}" `
+         +  `title="Tick to acknowledge as reviewed; the pale-green highlight will disappear">`
+         +  `<input type="checkbox" data-ack-idx="${r.__idx}" ${isNew ? '' : 'checked'}>`
+         +  `<span>${isNew ? 'NEW catalyst — click to acknowledge as reviewed' : 'Acknowledged as reviewed'}</span>`
+         +  `</label>`;
     if (r.catalyst_text) {
       html += '<h4>Catalyst text (BPC)</h4>';
       html += `<div class="catalyst-text">${highlightPhrase(r.catalyst_text, r.matched_phrase)}</div>`;
@@ -1427,7 +1535,8 @@ JS = r"""
     document.querySelectorAll('tr.expand-row').forEach(el => el.remove());
     document.querySelectorAll('tr.expanded').forEach(el => el.classList.remove('expanded'));
     const tr2 = document.createElement('tr');
-    tr2.className = 'expand-row';
+    // D35b — mirror the .unack class onto the expand row.
+    tr2.className = 'expand-row' + (tr.classList.contains('unack') ? ' unack' : '');
     tr2.innerHTML = `<td colspan="16">${buildExpandPanel(r)}</td>`;
     tr.classList.add('expanded');
     tr.parentNode.insertBefore(tr2, tr.nextSibling);
@@ -1459,9 +1568,14 @@ JS = r"""
     document.getElementById('ticker-filter').addEventListener('input', e => {
       state.tickerFilter = e.target.value; saveFilters(state); renderTable();
     });
+    // D35d — wire the review-status select.
+    document.getElementById('review-status').addEventListener('change', e => {
+      state.reviewStatus = e.target.value; saveFilters(state); renderTable();
+    });
     document.getElementById('reset-filters').addEventListener('click', () => {
       state.minComposite = 0; state.requireInsider = 'any';
       state.requireFunds = 'any'; state.stage = 'any'; state.tickerFilter = '';
+      state.reviewStatus = 'any';
       saveFilters(state); restoreFormFromState(); renderTable();
     });
     document.querySelectorAll('thead th').forEach(th => {
@@ -1476,8 +1590,27 @@ JS = r"""
       });
     });
     document.getElementById('rows-body').addEventListener('click', e => {
+      // D35b — ignore clicks that landed on the ack-toggle (its own
+      // change handler manages state). Without this guard the user's
+      // tick would propagate up + collapse the expand row.
+      if (e.target.closest('.ack-toggle')) return;
       const tr = e.target.closest('tr[data-idx]');
       if (tr) toggleRow(tr);
+    });
+    // D35b — ack-toggle change handler. Updates the acknowledged Set,
+    // persists to localStorage, and re-renders the table so the .unack
+    // class on the parent TR (and the expand row) is refreshed.
+    document.getElementById('rows-body').addEventListener('change', e => {
+      const box = e.target.closest('.ack-toggle input[type="checkbox"]');
+      if (!box) return;
+      const idx = Number(box.dataset.ackIdx);
+      const r = window.__DATA.rows[idx];
+      if (!r) return;
+      const pk = catalystPk(r);
+      if (box.checked) acknowledged.add(pk);
+      else acknowledged.delete(pk);
+      saveAcknowledged();
+      renderTable();
     });
   }
 
@@ -1487,6 +1620,8 @@ JS = r"""
     document.getElementById('require-funds').value = state.requireFunds;
     document.getElementById('stage-filter').value = state.stage;
     document.getElementById('ticker-filter').value = state.tickerFilter || '';
+    // D35d
+    document.getElementById('review-status').value = state.reviewStatus || 'any';
   }
 
   function init() {
@@ -1496,6 +1631,11 @@ JS = r"""
     }
     document.getElementById('no-data').style.display = 'none';
     window.__DATA.rows.forEach((r, i) => { r.__idx = i; });
+    // D35b — seed the acknowledged set on first ever load: existing
+    // hard-pass catalysts are considered already-reviewed; the M8
+    // rescue rows (and any future new BPC entries) light up green
+    // until the user ticks the box in their expand panel.
+    bootstrapAcknowledged();
     const kpis = aggregate(window.__DATA.rows);
     renderMeta(window.__DATA, kpis);
     renderKpiStrip(kpis);
@@ -1557,9 +1697,8 @@ HTML_SKELETON = """<!doctype html>
 <div class="meta" id="fail-meta" style="margin-top:-8px;margin-bottom:14px"></div>
 
 <div class="tabs">
-  <button class="tab" data-tab="hard_pass" title="Hard-pass catalysts (H1-H6 all satisfied)">Hard pass <span class="count">0</span></button>
-  <button class="tab" data-tab="rescued" title="Rescued catalysts (M8 — H1 small-cap / H3 imminent-or-undated / H5 non-standard, re-admitted via the rescue gate)">Rescued <span class="count">0</span></button>
-  <button class="tab" data-tab="excluded" title="Catalysts excluded by one or more H1-H6 hard filters">Excluded <span class="count">0</span></button>
+  <button class="tab" data-tab="catalyst" title="Hard-pass catalysts (H1-H6 all satisfied) + M8-rescued catalysts (H1 small-cap / H3 imminent-or-undated / H5 PDUFA)">Catalyst <span class="count">0</span></button>
+  <button class="tab" data-tab="excluded" title="Catalysts excluded by one or more H1-H6 hard filters and not eligible for M8 rescue">Excluded <span class="count">0</span></button>
 </div>
 
 <!-- D35 — rescue-class legend, shown only on the Rescued tab -->
@@ -1610,6 +1749,15 @@ HTML_SKELETON = """<!doctype html>
     </select>
   </label>
   <label>search <input type="text" id="ticker-filter" placeholder="ticker, name, or drug"></label>
+  <!-- D35d — review-status filter pinned just left of the reset button.
+       'new' = pale-green unacknowledged rows; 'ack' = already-reviewed. -->
+  <label>review
+    <select id="review-status">
+      <option value="any">any</option>
+      <option value="new">new only</option>
+      <option value="ack">acknowledged only</option>
+    </select>
+  </label>
   <button class="reset" id="reset-filters">reset</button>
   <span class="visible-count" id="visible-count">…</span>
 </div>
@@ -1683,31 +1831,118 @@ def _existing_template_version(path: Path) -> str | None:
 # Render
 # =====================================================================
 
-def _fetch_render_time_prices(rows: list[dict]) -> dict[str, dict]:
+_PRICE_CACHE_PATH = PROJECT_ROOT / "data" / "render_price_cache.json"
+_PRICE_CACHE_TTL_S = 30 * 60       # 30 min for successful fetches
+_PRICE_FAILURE_TTL_S = 4 * 3600    # 4 hours for failures — delisted /
+                                   # illiquid tickers shouldn't trigger
+                                   # a per-ticker yfinance probe (each
+                                   # ~5-15s on timeout) every render.
+
+
+def _load_price_cache() -> dict[str, dict]:
+    if not _PRICE_CACHE_PATH.exists():
+        return {}
+    try:
+        raw = _PRICE_CACHE_PATH.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_price_cache(cache: dict[str, dict]) -> None:
+    try:
+        _PRICE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PRICE_CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
+    except OSError as e:
+        print(f"[3_6_render_scores] WARN: couldn't write price cache: {e}")
+
+
+def _fetch_render_time_prices(rows: list[dict], *, force_refresh: bool = False) -> dict[str, dict]:
     """D35 — one-shot yfinance fetch for all hard_pass + rescued tickers
     at render time. Result is baked into each row's payload as
     `yfinance_render_price_usd` + `yfinance_render_fetched_at_utc` so
     the JS can paint blue + green ● even outside market hours (when the
     intraday poller is dormant) and for rescued rows that have no M7
-    dispatch yet. Reuses `module_7.live_price.get_live_prices` which is
-    batched and TTL-cached (60s success, 30 min failures).
+    dispatch yet.
+
+    D35e — disk-persistent TTL cache at data/render_price_cache.json.
+    Without this, every `run_3_Biopharm_render.bat` invocation paid
+    ~22s for the full yfinance batch even when prices hadn't moved.
+    Cache TTL is 30 min; entries past TTL get refetched, the rest are
+    returned instantly. The JS poller still handles intraday refresh
+    during market hours so 30-min staleness in the static paint is fine.
     """
+    import time
     tickers = sorted({
         r["ticker"] for r in rows
         if (r.get("hard_pass") or r.get("rescued")) and r.get("ticker")
     })
     if not tickers:
         return {}
-    # force=True so cache misses go straight to yfinance — render is
-    # rare enough that the freshness wins over the 60s TTL hit.
-    prices = get_live_prices(tickers, force=True)
+
+    cache = _load_price_cache() if not force_refresh else {}
+    now_epoch = time.time()
     out: dict[str, dict] = {}
-    for t, lp in prices.items():
-        if lp.price_usd:
-            out[t] = {
-                "price_usd":        lp.price_usd,
-                "fetched_at_utc":   lp.fetched_at_utc,
+    stale: list[str] = []
+    n_failure_skipped = 0
+    for t in tickers:
+        entry = cache.get(t)
+        if not entry:
+            stale.append(t)
+            continue
+        age = now_epoch - entry.get("cached_at_epoch", 0)
+        if entry.get("price_usd"):
+            # Cached success
+            if age < _PRICE_CACHE_TTL_S:
+                out[t] = {
+                    "price_usd":      entry["price_usd"],
+                    "fetched_at_utc": entry["fetched_at_utc"],
+                }
+            else:
+                stale.append(t)
+        else:
+            # Cached failure — only retry after the longer failure TTL.
+            if age < _PRICE_FAILURE_TTL_S:
+                n_failure_skipped += 1
+            else:
+                stale.append(t)
+
+    if stale:
+        prices = get_live_prices(stale, force=True)
+        for t, lp in prices.items():
+            if lp.price_usd:
+                out[t] = {
+                    "price_usd":      lp.price_usd,
+                    "fetched_at_utc": lp.fetched_at_utc,
+                }
+
+    # Persist back. We save BOTH successes and failures so the next
+    # render skips per-ticker yfinance retries on already-failed
+    # tickers (each retry costs ~5-15s on timeout).
+    new_cache = dict(cache)
+    for t in stale:
+        if t in out:
+            new_cache[t] = {
+                "price_usd":       out[t]["price_usd"],
+                "fetched_at_utc":  out[t]["fetched_at_utc"],
+                "cached_at_epoch": now_epoch,
             }
+        else:
+            # Persist the failure so we don't refetch every render.
+            new_cache[t] = {
+                "price_usd":       None,
+                "fetched_at_utc":  None,
+                "cached_at_epoch": now_epoch,
+            }
+    _save_price_cache(new_cache)
+
+    n_hit = len(tickers) - len(stale) - n_failure_skipped
+    n_refetched = len(stale)
+    print(f"[3_6_render_scores] price cache: {n_hit} hit "
+          f"(<{int(_PRICE_CACHE_TTL_S/60)}min old), "
+          f"{n_failure_skipped} failure-skipped "
+          f"(<{int(_PRICE_FAILURE_TTL_S/3600)}h old), "
+          f"{n_refetched} refetched, {len(out)} priced overall")
     return out
 
 
@@ -1716,6 +1951,7 @@ def render(
     out_dir: Path = OUTPUT_DIR,
     force_template: bool = False,
     fetch_prices_at_render_time: bool = True,
+    refresh_price_cache: bool = False,
 ) -> tuple[Path, Path, str]:
     """Write the sidecar data file (always) and the HTML template
     (only when needed). Returns (html_path, data_path, template_action)
@@ -1788,7 +2024,7 @@ def render(
         # market hours).
         render_time_prices: dict[str, dict] = {}
         if fetch_prices_at_render_time:
-            render_time_prices = _fetch_render_time_prices(rows)
+            render_time_prices = _fetch_render_time_prices(rows, force_refresh=refresh_price_cache)
             n_priced = 0
             for r in rows:
                 p = render_time_prices.get(r["ticker"])
@@ -1857,8 +2093,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--no-fetch-prices", action="store_true",
-        help="D35 — skip the render-time yfinance fetch for hard_pass+rescued tickers "
-             "(faster iteration; blue/green markers may be absent outside market hours)",
+        help="D35 — skip the render-time yfinance fetch entirely. Fastest "
+             "(~4s) but blue/green markers may be absent on rows without "
+             "deep-dive data outside market hours.",
+    )
+    parser.add_argument(
+        "--refresh-prices", action="store_true",
+        help="D35e — bypass the disk price cache and refetch every "
+             "hard_pass+rescued ticker from yfinance. Use after a long "
+             "session when 30-min cached prices feel stale.",
     )
     args = parser.parse_args()
 
@@ -1867,6 +2110,7 @@ def main() -> int:
         out_dir=args.out_dir,
         force_template=args.rebuild_template,
         fetch_prices_at_render_time=not args.no_fetch_prices,
+        refresh_price_cache=args.refresh_prices,
     )
     data_kb = data_path.stat().st_size / 1024
     html_kb = html_path.stat().st_size / 1024
