@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="template-version" content="3e4f79f">
+<meta name="template-version" content="26c2f49">
 <title>Catalyst scores</title>
 <style>
 :root {
@@ -425,22 +425,43 @@ tbody td .score {
     const lp = livePrices[ticker];
     return (lp && lp.price_usd) ? lp.price_usd : (fallback != null ? fallback : null);
   }
+  // Returns {px, source} for a row's best-available price.
+  //   source = 'live'     → from intraday yfinance poll  (most recent)
+  //          = 'dispatch' → from deep_dives.price_at_api_time_usd  (hours-old)
+  //          = 'bpc'      → from BPC docx snapshot  (stalest)
+  //          = 'none'     → no price at all
+  // Used so the blue 'live-val' class can highlight ANY post-BPC price
+  // (not only live), and the green ● dot stays reserved for true live.
+  function bestPriceInfo(r) {
+    const lp = livePrices[r.ticker];
+    if (lp && lp.price_usd != null) return {px: lp.price_usd, source: 'live'};
+    const dd = r.deep_dive;
+    if (dd && dd.price_at_api_time_usd != null) return {px: dd.price_at_api_time_usd, source: 'dispatch'};
+    if (r.price != null) return {px: r.price, source: 'bpc'};
+    return {px: null, source: 'none'};
+  }
   // D25 — live-recompute share-price-appreciation + expectancy/week from
   // the D25 stored targets ($) + the current live price.
   // D26 — m_momentum dropped. expectancy/week = E[move] / max(weeks,1) directly.
   // Returns {e_move_pct, expectancy_per_week_pct} or null when unavailable.
   function recomputeFromLivePrice(dd, ticker, fallbackPrice) {
     if (!dd) return null;
-    const px = currentPrice(ticker, fallbackPrice);
+    // Resolve price source explicitly so `live` means "yfinance was used
+    // (intraday OR M7 dispatch-time)" and NOT "the formula ran with any
+    // non-null price including BPC fallback". This keeps the green ●
+    // indicator's meaning consistent across mcap/price and move/exp cells.
+    const pxInfo = (typeof bestPriceInfo === 'function') ? bestPriceInfo({ticker, price: fallbackPrice, deep_dive: dd}) : null;
+    const px = pxInfo ? pxInfo.px : currentPrice(ticker, fallbackPrice);
+    const isFresh = pxInfo ? (pxInfo.source === 'live' || pxInfo.source === 'dispatch') : false;
     if (px == null || px <= 0
         || dd.target_price_on_hit_usd == null
         || dd.target_price_on_miss_usd == null
         || dd.p_final == null) {
-      // No live recompute possible — fall back to the static stored values.
       return {
         e_move_pct:              dd.e_move_pct,
         expectancy_per_week_pct: dd.expectancy_per_week_pct,
         live:                    false,
+        source:                  pxInfo ? pxInfo.source : 'none',
       };
     }
     const moveHit  = (dd.target_price_on_hit_usd  - px) / px * 100.0;
@@ -450,7 +471,8 @@ tbody td .score {
     return {
       e_move_pct:              eMove,
       expectancy_per_week_pct: eMove / weeks,
-      live:                    true,
+      live:                    isFresh,
+      source:                  pxInfo ? pxInfo.source : 'bpc',
     };
   }
   async function pollLivePrices() {
@@ -807,7 +829,7 @@ tbody td .score {
       // the latest yfinance price + the static target prices stored at API time.
       const dd = r.deep_dive;
       const recomp = recomputeFromLivePrice(dd, r.ticker, r.price);
-      const liveTag = (recomp && recomp.live) ? ' <span class="live-tag" title="recomputed from live price">●</span>' : '';
+      const liveTag = (recomp && recomp.live) ? ' <span class="live-tag" title="recomputed from yfinance price (intraday or M7 dispatch-time)">●</span>' : '';
       const ddProb     = dd && dd.p_final != null ? (dd.p_final * 100).toFixed(0) + '%' : '<span style="color:var(--text-dim)">—</span>';
       const ddMoveVal  = recomp ? recomp.e_move_pct : null;
       const ddMove     = ddMoveVal == null ? '<span style="color:var(--text-dim)">—</span>'
@@ -820,13 +842,16 @@ tbody td .score {
       // For market cap we scale BPC's static mcap by the price ratio (shares
       // are approximately constant intraday; this is more robust than
       // requiring FDSC shares in the payload).
-      // D30 — wrap in blue + green ● when the recompute used live price.
-      const livePx     = currentPrice(r.ticker, r.price);
+      // D30 — wrap in blue when the displayed value is fresher than the BPC
+      // snapshot (live OR dispatch-time price). Green ● stays live-only so
+      // users can still tell true-live from hours-old dispatch-time data.
+      const pxInfo     = bestPriceInfo(r);
+      const livePx     = pxInfo.px;
       const liveMcap   = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
                           ? r.market_cap_usd * (livePx / r.price)
                           : r.market_cap_usd;
-      const isLivePx   = livePrices[r.ticker] && livePrices[r.ticker].price_usd != null;
-      const liveTagPx  = isLivePx ? ' <span class="live-tag" title="live yfinance price">●</span>' : '';
+      const isFreshPx  = pxInfo.source === 'live' || pxInfo.source === 'dispatch';
+      const liveTagPx  = isFreshPx ? ' <span class="live-tag" title="yfinance-sourced price (intraday or M7 dispatch-time)">●</span>' : '';
       return `
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
@@ -837,7 +862,7 @@ tbody td .score {
         <td>${escapeHtml(r.next_catalyst_type || '')}</td>
         <td class="num">${escapeHtml(r.date_min || '—')}</td>
         <td>${tagBucket}</td>
-        <td class="num"><span class="${isLivePx ? 'live-val' : ''}">${fmtMcap(liveMcap)}</span>${liveTagPx}</td>
+        <td class="num"><span class="${isFreshPx ? 'live-val' : ''}">${fmtMcap(liveMcap)}</span>${liveTagPx}</td>
         <td>${fmtScore(r.composite_score)}</td>
         <td>${fmtScore(r.insider_score)}</td>
         <td>${fmtScore(r.momentum_score)}</td>
@@ -901,20 +926,30 @@ tbody td .score {
     html += `<div class="k">Stage / next type</div><div>${escapeHtml(r.stage || '?')} → ${escapeHtml(r.next_catalyst_type || '?')}</div>`;
     html += `<div class="k">Indication</div><div>${escapeHtml(r.indication || '—')}</div>`;
     html += `<div class="k">Date window</div><div>${escapeHtml(r.date_min || '?')} → ${escapeHtml(r.date_max || '?')} (${escapeHtml(r.precision_tier || '?')}, lane=${escapeHtml(r.source_lane || '?')})</div>`;
-    // D25 — show live price (yfinance) when available; otherwise BPC's docx-time price.
-    // D30 — wrap both values in the blue live-val class + green ● indicator
-    // when sourced from the live yfinance feed (not BPC snapshot).
+    // D25 — show live price (yfinance) when available; otherwise dispatch-time
+    // yfinance price (deep_dives.price_at_api_time_usd, captured at M7 run);
+    // otherwise BPC's docx-time price.
+    // D30 — blue 'live-val' class fires for ANY post-BPC price (live OR
+    // dispatch-time). Green ● stays live-only. Stamp suffix tells the user
+    // which tier of freshness they're looking at.
     (function() {
-      const livePx = currentPrice(r.ticker, r.price);
+      const pxInfo = bestPriceInfo(r);
+      const livePx = pxInfo.px;
       const liveMcap = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
                         ? r.market_cap_usd * (livePx / r.price)
                         : r.market_cap_usd;
-      const isLive  = livePrices[r.ticker] && livePrices[r.ticker].price_usd != null;
-      const tag     = isLive ? ' <span class="live-tag" title="live yfinance">●</span>' : '';
-      const cls     = isLive ? 'live-val' : '';
-      const lpStamp = isLive
-                      ? ' (live ' + livePrices[r.ticker].fetched_at_utc + ')'
-                      : (r.price != null ? ' (BPC snapshot)' : '');
+      const isLive  = pxInfo.source === 'live';
+      const isFresh = pxInfo.source === 'live' || pxInfo.source === 'dispatch';
+      const tag     = isFresh ? ' <span class="live-tag" title="yfinance-sourced price (intraday or M7 dispatch-time)">●</span>' : '';
+      const cls     = isFresh ? 'live-val' : '';
+      let lpStamp = '';
+      if (isLive) {
+        lpStamp = ' (live ' + livePrices[r.ticker].fetched_at_utc + ')';
+      } else if (pxInfo.source === 'dispatch') {
+        lpStamp = ' (M7 dispatch-time yfinance)';
+      } else if (pxInfo.source === 'bpc') {
+        lpStamp = ' (BPC snapshot)';
+      }
       html += `<div class="k">Market cap / price</div><div>`
            +  `<span class="${cls}">${fmtMcap(liveMcap)}</span> / `
            +  `<span class="${cls}">$${livePx != null ? livePx.toFixed(2) : '—'}</span>`
@@ -982,8 +1017,8 @@ tbody td .score {
       // m_* modifiers, and rNPV are all anchored to the API-time analysis
       // and don't change intraday.
       const recompDD = recomputeFromLivePrice(dd, r.ticker, r.price) || {};
-      const livePx2  = currentPrice(r.ticker, r.price);
-      const liveTag2 = recompDD.live ? ' <span class="live-tag" title="live recompute">●</span>' : '';
+      const livePx2  = bestPriceInfo(r).px;
+      const liveTag2 = recompDD.live ? ' <span class="live-tag" title="recomputed from yfinance price (intraday or M7 dispatch-time)">●</span>' : '';
       const refPx    = dd.price_at_api_time_usd;
       const refTgtH  = dd.target_price_on_hit_usd;
       const refTgtM  = dd.target_price_on_miss_usd;
@@ -997,7 +1032,7 @@ tbody td .score {
       // D25 — show the share price Claude was given AND the live price now.
       html += `<div class="k" title="price the Claude pack carried at API time">Reference price (Claude analyzed at)</div>`
            +  `<div>${refPx != null ? '$' + refPx.toFixed(2) : '—'}<span style="color:var(--text-dim);font-size:11px"> ← Claude's anchor</span></div>`;
-      html += `<div class="k">Live price (now)</div><div>${livePx2 != null ? '$' + livePx2.toFixed(2) : '—'}${liveTag2}</div>`;
+      html += `<div class="k">Current price (yfinance)</div><div>${livePx2 != null ? '$' + livePx2.toFixed(2) : '—'}${liveTag2}</div>`;
       html += `<div class="k">Target on hit (\$)</div><div style="color:var(--green)">${refTgtH != null ? '$' + refTgtH.toFixed(2) : '—'} (= ref × (1 + ${signed(dd.expected_move_on_hit_pct)}))</div>`;
       html += `<div class="k">Target on miss (\$)</div><div style="color:var(--red)">${refTgtM != null ? '$' + refTgtM.toFixed(2) : '—'} (= ref × (1 + ${signed(dd.expected_move_on_miss_pct)}))</div>`;
       // D29 — move-on-hit/miss are recomputed from current price each
