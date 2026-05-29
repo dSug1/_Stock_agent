@@ -1570,3 +1570,79 @@ This avoids needing a full M6 re-run after flagging a single ticker. The next M6
 - The HTML could surface the flag (e.g., a "delisted" badge on row hover) — currently only visible via the H6 fail-reason chip. Acceptable as-is.
 
 ---
+
+## D35 — Module 8: catalyst rescue + re-dispatch + renumber dashboard to M9 (2026-05-29)
+
+**Trigger:** ~83% of BPC catalysts fail M6's H1-H6 gates and never reach Claude. Some failures are false negatives in the user's investing thesis — small-cap H1 fails, H3 fails (imminent or BPC date missing), and PDUFA-style H5 fails are all worth a deep-dive when context is added (in particular: independent date resolution from primary sources). The user spec'd a rescue gate as new "Module 8", pushing the previously-planned iOS dashboard out to "Module 9".
+
+**Decision:** add an additive rescue path. Rescue does NOT modify M6's hard_pass logic — it adds a separate `rescued/rescue_class` column pair on `catalyst_scores` plus an M8-specific Claude dispatch that uses a distinct `prompt_version_label` so the Anthropic prompt cache stays isolated from M7. For B/C rescues, the M8 system prompt prepends a date-retrieval instruction so Claude resolves the catalyst date from primary sources (per M7's EVIDENCE HIERARCHY) before scoring.
+
+**Three rescue classes:**
+
+| Class | Filter | Trim (user decision) | Count (2026-05-29) |
+|---|---|---|---:|
+| A | `H1 in fail_reasons AND mcap ∈ [$0, $2B]` | NULL mcap included | 43 |
+| B | `H3 in fail_reasons AND H1 NOT in fail_reasons` | full (H4 overlap kept) | 171 + 5 BC |
+| C | `H5 in fail_reasons AND H1 NOT in fail_reasons` | `Regulatory Decision` + NULL type only | 12 + 5 BC |
+| **Total unique** | | | **231 catalysts / 177 tickers** |
+
+H2 (timing precision unknown) and H6 (delisted) are NOT rescued — those rows stay hard-excluded. H4 overlap (`date_max < snapshot`) IS allowed in; Claude's HARD RULE #8 catches the resulting `catalyst_already_passed` cases as `deep_dive_errors` (~6 wasted calls expected, ~$0.25 of waste). User accepted this trade for the audit signal.
+
+**C scope trim rationale:** the full H5-fail set (60 catalysts) includes 13 `Submission`, 5 `End of Phase Meeting`, 4 phase0 `Conference Presentation` etc. — these are rarely binary near-term catalysts and Claude has no good scoring framework for them. The user-approved scope (Regulatory Decision + NULL type) drops noise without losing material PDUFA-style binary events.
+
+**Schema (additive only — no rebuilds, no FK changes):**
+
+```sql
+-- biotech.db.catalyst_scores
+ALTER TABLE catalyst_scores ADD COLUMN rescued INTEGER DEFAULT 0;
+ALTER TABLE catalyst_scores ADD COLUMN rescue_class TEXT;        -- 'A' / 'B' / 'BC' / 'ABC' / ...
+CREATE INDEX idx_scores_rescued ON catalyst_scores (snapshot_date, rescued);
+
+-- claude_deep_dives.db.deep_dives
+ALTER TABLE deep_dives ADD COLUMN claude_resolved_catalyst_date TEXT;   -- ISO YYYY-MM-DD (B/C only)
+ALTER TABLE deep_dives ADD COLUMN catalyst_date_source TEXT;            -- citation string
+ALTER TABLE deep_dives ADD COLUMN rescue_class TEXT;                    -- copy of catalyst_scores.rescue_class
+```
+
+The biotech.db migrations live in `database/db.py::_apply_additive_migrations` (mirrors `deep_dives_db._apply_additive_migrations`). The `idx_scores_rescued` index is created BY the migration helper, not by `schema.sql`, so existing-DB `executescript` doesn't fail on the rescued column not existing yet (subtle gotcha: SQLite's `CREATE INDEX IF NOT EXISTS` checks for the index, not the column; if the column is missing on an existing DB the statement errors out).
+
+**Date storage:** user spec said "overwrite the BPC date in the SQL DB". Pushed back during design phase: additive column on `deep_dives` is preserves the audit trail, survives next BPC re-ingest (which would overwrite `catalyst_snapshots.catalyst_date` anyway), and lets the renderer prefer Claude's resolution without losing the original. The user agreed.
+
+**No-date case:** user chose "always score, even with best-guess month/quarter" over "refuse to score". The M8 prompt prefix's date-retrieval section walks tiers 1-4 of the EVIDENCE HIERARCHY and falls back to month/quarter best-guess or snapshot+12mo placeholder; `catalyst_date_source` is tagged with `"best-guess: …"` or `"unable to resolve — placeholder +12 months from snapshot"` so the human reviewer can triage.
+
+**Cost model (2026-05-29 first run):**
+
+| Scenario | USD |
+|---|---:|
+| no-optim | $33.43 |
+| cache-only | $29.41 |
+| **cache+batch (prod)** | **$15.84** |
+| cost ceiling (`module_8.yaml`) | $50.00 |
+
+Calibration factor 0.10 mirrors M7 (D22).
+
+**Reused M7 machinery (design rule: M8 ⊂ M7):** dispatch, cache, cost_estimate, parsing, scoring, deep_dives_db, live_price all reused unchanged. `parsing.py` gets two new OPTIONAL fields (`claude_resolved_catalyst_date`, `catalyst_date_source`) — both default to None, so standard M7 responses pass validation unchanged. The only pure-M8 logic is `rescue_filter.classify_catalyst()`, the prompt prefix, and the wiring scripts.
+
+**Renderer changes (`scripts/3_6_render_scores.py`):**
+- New "Rescued" tab between "Hard pass" and "Excluded" + class chip (purple) + faded original fail chips + rescue legend strip
+- Date column prefers `claude_resolved_catalyst_date` with a 📅 marker; hover shows the source
+- Excluded tab filter changes from `!hard_pass` to `!hard_pass AND !rescued` so rescued rows leave Excluded automatically
+- Live-price polling widened from `hard_pass=1` to `hard_pass=1 OR rescued=1` (both JS filter + server allowlist in `3_7_serve_selection.py::_refresh_hard_pass_tickers`)
+- KPI strip "Hard pass" sub-label now shows `N rescued · M excluded`
+- Sort default extended: `hard_pass DESC, rescued DESC, composite_score DESC` (hard-pass stays on top)
+
+**Renumber: M8 (was dashboard) → M9.** The previously-planned iOS-optimized dashboard moves to Module 9. Updated: `spec/biotech_pipeline_spec.md` (§1 pipeline diagram + §12.4 module list), `spec/module_8_spec.md` (new), this entry. M9 hasn't been built yet; this is doc-only.
+
+**Validation:**
+- 468 tests passing (was 445; +18 rescue_filter classification tests + 5 parsing extension tests). 4 skipped (unrelated).
+- `3_8_compute_rescue.py` populated 231 rescued rows on first run; per-class breakdown matches expected (A=43, B=171, BC=5, C=12).
+- `3_8_estimate_cost.py` produced $15.84 estimate, written to `Outputs/m8_cost_estimate.html`.
+- Renderer rebuilt template (63.6 KB) with the new tab + rescue chip CSS + date marker; live UI shows rescued rows under the new tab.
+
+**Future-work signals:**
+
+- A `dispatch_kind`-aware cost-per-class breakdown query on `deep_dive_runs.gate_config_json` would let us retune the C scope trim against real Claude responses (was 1L NSCLC EGFR exon 20 worth the call? was that ITP PDUFA?). Not blocking; data is captured for the post-hoc.
+- `config/module_7.yaml::modifiers.momentum` is still present as inert config (D33 left this as a future cleanup). Could be dropped in a future config-only edit.
+- M9 dashboard remains unbuilt.
+
+---

@@ -58,26 +58,48 @@ _hard_pass_cache: dict = {"tickers": frozenset(), "fetched_at": 0.0}
 
 
 def _refresh_hard_pass_tickers() -> frozenset[str]:
-    """Read the current rolling-view hard-pass ticker set from biotech.db."""
+    """Read the current rolling-view hard-pass + M8-rescued ticker set
+    from biotech.db. D35 — extended to include `rescued = 1` so the
+    Rescued tab's live-price polling reaches yfinance (matches the JS
+    filter `r.hard_pass || r.rescued` in 3_6_render_scores.py)."""
     if not BIOTECH_DB.exists():
         return frozenset()
     try:
         with sqlite3.connect(str(BIOTECH_DB)) as cx:
             cx.row_factory = sqlite3.Row
-            rows = cx.execute(
-                """
-                WITH latest AS (
-                    SELECT ticker, drug, nct_number, next_catalyst_type,
-                           MAX(snapshot_date) AS max_snap
-                    FROM catalyst_scores
-                    GROUP BY ticker, drug, nct_number, next_catalyst_type
-                )
-                SELECT DISTINCT cs.ticker
-                FROM catalyst_scores cs
-                JOIN latest l USING (ticker, drug, nct_number, next_catalyst_type)
-                WHERE cs.snapshot_date = l.max_snap AND cs.hard_pass = 1
-                """
-            ).fetchall()
+            # Tolerate older biotech.db files that pre-date D35 (no
+            # `rescued` column). Try the new form first, fall back.
+            try:
+                rows = cx.execute(
+                    """
+                    WITH latest AS (
+                        SELECT ticker, drug, nct_number, next_catalyst_type,
+                               MAX(snapshot_date) AS max_snap
+                        FROM catalyst_scores
+                        GROUP BY ticker, drug, nct_number, next_catalyst_type
+                    )
+                    SELECT DISTINCT cs.ticker
+                    FROM catalyst_scores cs
+                    JOIN latest l USING (ticker, drug, nct_number, next_catalyst_type)
+                    WHERE cs.snapshot_date = l.max_snap
+                      AND (cs.hard_pass = 1 OR cs.rescued = 1)
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = cx.execute(
+                    """
+                    WITH latest AS (
+                        SELECT ticker, drug, nct_number, next_catalyst_type,
+                               MAX(snapshot_date) AS max_snap
+                        FROM catalyst_scores
+                        GROUP BY ticker, drug, nct_number, next_catalyst_type
+                    )
+                    SELECT DISTINCT cs.ticker
+                    FROM catalyst_scores cs
+                    JOIN latest l USING (ticker, drug, nct_number, next_catalyst_type)
+                    WHERE cs.snapshot_date = l.max_snap AND cs.hard_pass = 1
+                    """
+                ).fetchall()
         return frozenset(r["ticker"].upper() for r in rows if r["ticker"])
     except Exception:
         return frozenset()

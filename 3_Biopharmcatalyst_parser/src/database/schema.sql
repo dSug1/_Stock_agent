@@ -183,6 +183,11 @@ CREATE TABLE IF NOT EXISTS catalyst_scores (
     composite_score             REAL,
     computed_at                 TIMESTAMP NOT NULL,
     rules_version               TEXT    NOT NULL,
+    -- D35 (M8 rescue) — non-NULL when this catalyst was rescued from
+    -- hard-exclusion. `rescue_class` is a sorted concat of class letters
+    -- (e.g., 'A', 'B', 'BC', 'ABC'). `rescued` is the convenience boolean.
+    rescued                     INTEGER DEFAULT 0,
+    rescue_class                TEXT,
     PRIMARY KEY (snapshot_date, ticker, drug, nct_number, next_catalyst_type),
     FOREIGN KEY (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
         REFERENCES catalyst_snapshots(snapshot_date, ticker, drug, nct_number, next_catalyst_type)
@@ -190,6 +195,9 @@ CREATE TABLE IF NOT EXISTS catalyst_scores (
 
 CREATE INDEX IF NOT EXISTS idx_scores_composite ON catalyst_scores (snapshot_date, composite_score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_bucket    ON catalyst_scores (timing_bucket, hard_pass);
+-- idx_scores_rescued created in db.py::_apply_additive_migrations after
+-- the `rescued` column exists (so executescript doesn't fail on existing
+-- DBs that pre-date D35).
 
 -- §2.10 delisted_tickers (D34) — manually-maintained allowlist of tickers
 -- that are no longer tradable (delisted, halted, bankrupt, acquired). M6's

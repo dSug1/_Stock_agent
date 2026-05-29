@@ -155,6 +155,10 @@ class ParsedDeepDive:
     thesis_summary: str
     key_risks: list[str]
     catalyst_date_sanity_check: dict
+    # D35 — present ONLY for M8 rescue dispatches. Standard M7 responses
+    # leave these fields absent in the JSON; the parser tolerates that.
+    claude_resolved_catalyst_date: Optional[str] = None    # ISO YYYY-MM-DD
+    catalyst_date_source: Optional[str] = None             # short citation
 
 
 # ─────────────── per-block validators (HARD RULES) ─────────────
@@ -370,6 +374,21 @@ def parse_deep_dive(raw_text: str) -> ParsedDeepDive:
     sanity = _require(obj, "catalyst_date_sanity_check", "root")
     _validate_catalyst_sanity(sanity)             # may raise catalyst_already_passed
 
+    # D35 — optional M8 rescue fields. Standard M7 responses omit these.
+    # We accept either string or None / missing; light validation only.
+    resolved_date = obj.get("claude_resolved_catalyst_date")
+    date_source = obj.get("catalyst_date_source")
+    if resolved_date is not None and not isinstance(resolved_date, str):
+        raise ParseError(
+            "schema_violation",
+            f"claude_resolved_catalyst_date must be a string, got {type(resolved_date).__name__}",
+        )
+    if date_source is not None and not isinstance(date_source, str):
+        raise ParseError(
+            "schema_violation",
+            f"catalyst_date_source must be a string, got {type(date_source).__name__}",
+        )
+
     return ParsedDeepDive(
         ticker=ticker.strip(),
         reasoning_trace=str(reasoning),
@@ -386,4 +405,6 @@ def parse_deep_dive(raw_text: str) -> ParsedDeepDive:
         thesis_summary=str(thesis),
         key_risks=[str(x) for x in key_risks],
         catalyst_date_sanity_check=sanity,
+        claude_resolved_catalyst_date=resolved_date,
+        catalyst_date_source=date_source,
     )

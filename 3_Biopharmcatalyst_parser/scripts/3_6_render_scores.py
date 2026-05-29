@@ -36,6 +36,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from database.db import get_connection  # noqa: E402
+from module_7.live_price import get_live_prices  # noqa: E402
 from module_7.render_join import (  # noqa: E402
     attach_deep_dive_payload, fetch_latest_deep_dive_map,
 )
@@ -82,6 +83,7 @@ def _fetch_score_rows(
                 cs.snapshot_date,
                 cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type,
                 cs.hard_pass, cs.fail_reasons, cs.timing_bucket,
+                cs.rescued, cs.rescue_class,
                 cs.insider_gross_weighted_usd, cs.insider_score,
                 cs.return_30d_pct, cs.momentum_score,
                 cs.fund_quarter_latest, cs.fund_quarter_previous,
@@ -100,6 +102,7 @@ def _fetch_score_rows(
             WHERE cs.snapshot_date = ?
             ORDER BY
                 cs.hard_pass DESC,
+                cs.rescued DESC,
                 cs.composite_score DESC NULLS LAST,
                 cs.insider_score DESC NULLS LAST
             """,
@@ -136,6 +139,7 @@ def _fetch_score_rows(
             cs.snapshot_date,
             cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type,
             cs.hard_pass, cs.fail_reasons, cs.timing_bucket,
+            cs.rescued, cs.rescue_class,
             cs.insider_gross_weighted_usd, cs.insider_score,
             cs.return_30d_pct, cs.momentum_score,
             cs.fund_quarter_latest, cs.fund_quarter_previous,
@@ -171,6 +175,7 @@ def _fetch_score_rows(
           AND (t.date_max IS NULL OR t.date_max >= ?)
         ORDER BY
             cs.hard_pass DESC,
+            cs.rescued DESC,
             cs.composite_score DESC NULLS LAST,
             cs.insider_score DESC NULLS LAST
         """,
@@ -490,6 +495,8 @@ tbody td .score {
 .tag.bucket-undefined { background: rgba(251, 191, 36, 0.16); color: var(--amber); }
 .tag.fail { background: rgba(248, 113, 113, 0.16); color: var(--red); font-family: ui-monospace, monospace; }
 .tag.stage { background: rgba(124, 156, 255, 0.16); color: var(--accent); }
+/* D35 — rescue-class chip on the Rescued tab */
+.tag.rescue { background: rgba(192, 132, 252, 0.18); color: #c084fc; font-weight: 600; font-family: ui-monospace, monospace; }
 .tag.tier { background: rgba(148, 163, 184, 0.16); color: var(--slate); font-size: 10.5px; }
 
 .expand-panel {
@@ -615,6 +622,13 @@ JS = r"""
   function bestPriceInfo(r) {
     const lp = livePrices[r.ticker];
     if (lp && lp.price_usd != null) return {px: lp.price_usd, source: 'live'};
+    // D35 — render-time yfinance pre-fetch (baked into the data sidecar
+    // by _fetch_render_time_prices in 3_6_render_scores.py). Lets blue/
+    // green markers appear for hard_pass + rescued tickers even outside
+    // US market hours (when the intraday poller is dormant).
+    if (r.yfinance_render_price_usd != null) {
+      return {px: r.yfinance_render_price_usd, source: 'render_yfinance'};
+    }
     const dd = r.deep_dive;
     if (dd && dd.price_at_api_time_usd != null) return {px: dd.price_at_api_time_usd, source: 'dispatch'};
     if (r.price != null) return {px: r.price, source: 'bpc'};
@@ -632,7 +646,9 @@ JS = r"""
     // indicator's meaning consistent across mcap/price and move/exp cells.
     const pxInfo = (typeof bestPriceInfo === 'function') ? bestPriceInfo({ticker, price: fallbackPrice, deep_dive: dd}) : null;
     const px = pxInfo ? pxInfo.px : currentPrice(ticker, fallbackPrice);
-    const isFresh = pxInfo ? (pxInfo.source === 'live' || pxInfo.source === 'dispatch') : false;
+    // D35 — 'render_yfinance' counts as fresh too. Any non-BPC source
+    // gets the green ● + the blue 'live-val' treatment.
+    const isFresh = pxInfo ? (pxInfo.source !== 'bpc' && pxInfo.source !== 'none') : false;
     if (px == null || px <= 0
         || dd.target_price_on_hit_usd == null
         || dd.target_price_on_miss_usd == null
@@ -666,7 +682,8 @@ JS = r"""
     // server also enforces this filter as defense-in-depth.
     const tickers = Array.from(new Set(
       (window.__DATA && window.__DATA.rows || [])
-        .filter(r => r.hard_pass)
+        // D28 + D35 — include hard-pass AND rescued tickers.
+        .filter(r => r.hard_pass || r.rescued)
         .map(r => r.ticker)
     ));
     if (!tickers.length) return;
@@ -718,6 +735,10 @@ JS = r"""
   // tab names so users with old `catalyst_date_defined` / `_undefined`
   // saved tabs land on the merged 'hard_pass' tab instead of nothing.
   if (state.tab === 'catalyst_date_defined' || state.tab === 'catalyst_date_undefined') {
+    state.tab = 'hard_pass';
+  }
+  // D35 — accept the new 'rescued' tab. Anything else falls back to hard_pass.
+  if (!['hard_pass', 'rescued', 'excluded'].includes(state.tab)) {
     state.tab = 'hard_pass';
   }
   state.minComposite = Number(state.minComposite) || 0;
@@ -778,6 +799,9 @@ JS = r"""
     const score_dist = {'80-100': 0, '60-80': 0, '40-60': 0, '20-40': 0, '0-20': 0};
     let hard_pass = 0, defined = 0, undef = 0;
     let n_with_insider = 0, n_with_funds = 0;
+    // D35 — M8 rescue tab counts.
+    let rescued = 0;
+    const rescue_classes = {'A': 0, 'B': 0, 'C': 0, 'AB': 0, 'AC': 0, 'BC': 0, 'ABC': 0};
     rows.forEach(r => {
       if (r.hard_pass) {
         hard_pass++;
@@ -785,6 +809,13 @@ JS = r"""
         else if (r.timing_bucket === 'catalyst_date_undefined') undef++;
         if (r.insider_gross_weighted_usd && r.insider_gross_weighted_usd > 0) n_with_insider++;
         if (r.fund_accumulation_usd && r.fund_accumulation_usd > 0) n_with_funds++;
+      } else if (r.rescued) {
+        // D35 — only count rescued among non-hard-pass rows; an UPDATE
+        // bug ever flipping a hard_pass row's rescued flag would still
+        // be counted correctly here.
+        rescued++;
+        const cls = r.rescue_class || '';
+        if (rescue_classes[cls] != null) rescue_classes[cls]++;
       }
       if (r.fail_reasons) {
         r.fail_reasons.split(',').forEach(c => {
@@ -808,10 +839,14 @@ JS = r"""
         break;
       }
     }
+    // D35 — "excluded" tab now means hard_pass=0 AND rescued=0.
+    const excluded = rows.length - hard_pass - rescued;
     return {
       total: rows.length,
       hard_pass,
-      excluded: rows.length - hard_pass,
+      rescued,
+      rescue_classes,
+      excluded,
       defined,
       undefined: undef,
       fail_counts,
@@ -860,7 +895,7 @@ JS = r"""
   function renderKpiStrip(kpis) {
     document.getElementById('kpi-strip').innerHTML =
       kpiCard('Catalysts', kpis.total, 'snapshot total') +
-      kpiCard('Hard pass', kpis.hard_pass, `${kpis.excluded} excluded`, 'green') +
+      kpiCard('Hard pass', kpis.hard_pass, `${kpis.rescued} rescued · ${kpis.excluded} excluded`, 'green') +
       kpiCard('Defined timing', kpis.defined, 'specific/conference/month/quarter', 'indigo') +
       kpiCard('Undefined timing', kpis.undefined, 'half/year', 'amber') +
       kpiCard('With CEO/CFO buy', kpis.n_with_insider, 'of hard-pass rows', 'purple') +
@@ -893,15 +928,20 @@ JS = r"""
       el.classList.toggle('active', t === state.tab);
       const countEl = el.querySelector('.count');
       if (countEl) {
-        // D27 — single 'hard_pass' tab covers BOTH timing buckets.
-        const n = t === 'hard_pass' ? kpis.hard_pass
-                : kpis.excluded;
+        // D35 — three tabs now: hard_pass / rescued / excluded.
+        let n;
+        if (t === 'hard_pass') n = kpis.hard_pass;
+        else if (t === 'rescued') n = kpis.rescued;
+        else n = kpis.excluded;
         countEl.textContent = n;
       }
     });
     // D27 — H-gate legend visible only on the Excluded tab.
     const legend = document.getElementById('hgate-legend');
     if (legend) legend.style.display = state.tab === 'excluded' ? '' : 'none';
+    // D35 — rescue legend visible only on the Rescued tab.
+    const rescueLegend = document.getElementById('rescue-legend');
+    if (rescueLegend) rescueLegend.style.display = state.tab === 'rescued' ? '' : 'none';
   }
 
   function populateStageFilter(rows) {
@@ -918,11 +958,15 @@ JS = r"""
 
   // ============ row filtering / sorting / table render ============
   function rowMatchesFilters(r) {
+    // D35 — three tabs: hard_pass / rescued / excluded.
     if (state.tab === 'excluded') {
-      if (r.hard_pass) return false;
+      // Excluded = hard_pass=0 AND rescued=0 (rescued rows have moved out).
+      if (r.hard_pass || r.rescued) return false;
+    } else if (state.tab === 'rescued') {
+      // Rescued = hard_pass=0 AND rescued=1.
+      if (r.hard_pass || !r.rescued) return false;
     } else {
-      // D27 — single 'hard_pass' tab: any hard_pass row regardless of
-      // timing_bucket (defined OR undefined).
+      // D27 — single 'hard_pass' tab: any hard_pass row.
       if (!r.hard_pass) return false;
     }
     if (r.composite_score != null && r.composite_score < state.minComposite) return false;
@@ -1000,10 +1044,22 @@ JS = r"""
       return;
     }
     const isExcluded = state.tab === 'excluded';
+    const isRescued = state.tab === 'rescued';
     tbody.innerHTML = sorted.map((r, i) => {
-      const tagBucket = isExcluded
-        ? (r.fail_reasons || '').split(',').filter(Boolean).map(c => `<span class="tag fail">${c}</span>`).join(' ')
-        : `<span class="tag bucket-${r.timing_bucket === 'catalyst_date_defined' ? 'defined' : 'undefined'}">${(r.precision_tier || '').slice(0,8)}</span>`;
+      // D35 — Rescued tab: ONLY the rescue_class chip in this column,
+      // so column widths match the Hard pass tab. The original fail
+      // reasons are surfaced inside the expand panel's "Rescue context"
+      // section, not jammed into this cell.
+      let tagBucket;
+      if (isExcluded) {
+        tagBucket = (r.fail_reasons || '').split(',').filter(Boolean)
+          .map(c => `<span class="tag fail">${c}</span>`).join(' ');
+      } else if (isRescued) {
+        const cls = r.rescue_class || '?';
+        tagBucket = `<span class="tag rescue" title="Rescued by Class ${cls} — open the row for fail-reason detail">${cls}</span>`;
+      } else {
+        tagBucket = `<span class="tag bucket-${r.timing_bucket === 'catalyst_date_defined' ? 'defined' : 'undefined'}">${(r.precision_tier || '').slice(0,8)}</span>`;
+      }
       // M7 (D16) — three new cells. Em-dash when this row has no deep_dive yet.
       // D25 — live-recompute share-price-appreciation + expectancy/time from
       // the latest yfinance price + the static target prices stored at API time.
@@ -1030,8 +1086,10 @@ JS = r"""
       const liveMcap   = (livePx != null && r.price && r.price > 0 && r.market_cap_usd)
                           ? r.market_cap_usd * (livePx / r.price)
                           : r.market_cap_usd;
-      const isFreshPx  = pxInfo.source === 'live' || pxInfo.source === 'dispatch';
-      const liveTagPx  = isFreshPx ? ' <span class="live-tag" title="yfinance-sourced price (intraday or M7 dispatch-time)">●</span>' : '';
+      // D35 — any non-BPC source counts: live poll, render-time fetch,
+      // M7 dispatch-time, are all yfinance-sourced and worth the dot.
+      const isFreshPx  = pxInfo.source !== 'bpc' && pxInfo.source !== 'none';
+      const liveTagPx  = isFreshPx ? ' <span class="live-tag" title="yfinance-sourced price">●</span>' : '';
       return `
       <tr data-idx="${r.__idx}">
         <td class="num">${i+1}</td>
@@ -1040,7 +1098,19 @@ JS = r"""
         <td>${escapeHtml(r.drug || '')}</td>
         <td><span class="tag stage">${escapeHtml(r.stage || '')}</span></td>
         <td>${escapeHtml(r.next_catalyst_type || '')}</td>
-        <td class="num">${escapeHtml(r.date_min || '—')}</td>
+        <td class="num">${(function(){
+          // D35 — prefer Claude-resolved date when M8 has populated it.
+          // Renders the resolved date with a small 📅 marker; hover shows
+          // the source. Falls back to BPC's date_min for non-rescued rows.
+          const dd = r.deep_dive || {};
+          const resolved = dd.claude_resolved_catalyst_date;
+          const src = dd.catalyst_date_source;
+          if (resolved) {
+            const title = src ? escapeHtml(src).replace(/"/g, '&quot;') : 'Claude-resolved';
+            return `<span title="${title}">${escapeHtml(resolved)} <span style="color:var(--accent);font-size:11px" title="${title}">📅</span></span>`;
+          }
+          return escapeHtml(r.date_min || '—');
+        })()}</td>
         <td>${tagBucket}</td>
         <td class="num"><span class="${isFreshPx ? 'live-val' : ''}">${fmtMcap(liveMcap)}</span>${liveTagPx}</td>
         <td>${fmtScore(r.composite_score)}</td>
@@ -1101,7 +1171,17 @@ JS = r"""
       html += `<div class="k">Funds quarters</div><div>${escapeHtml(r.fund_quarter_latest)} vs ${escapeHtml(r.fund_quarter_previous || '?')}</div>`;
     }
     if (r.fail_reasons) {
-      html += `<div class="k">Fail reasons</div><div>${r.fail_reasons}</div>`;
+      // D35 — when a row was rescued, surface the rescue class + the
+      // original gate failures (which the inline tag was deliberately
+      // trimmed of, to keep column widths aligned with the Hard pass tab).
+      if (r.rescued && r.rescue_class) {
+        html += `<div class="k">Rescue class</div>`
+             +  `<div><span class="tag rescue">${escapeHtml(r.rescue_class)}</span>`
+             +  ` <span style="color:var(--text-dim);font-size:11px">(M8 re-admitted despite the gate failures below)</span></div>`;
+      }
+      const failChips = r.fail_reasons.split(',').filter(Boolean)
+        .map(c => `<span class="tag fail" style="opacity:${r.rescued ? '0.7' : '1'}">${c}</span>`).join(' ');
+      html += `<div class="k">${r.rescued ? 'Original gate failures' : 'Fail reasons'}</div><div>${failChips}</div>`;
     }
     html += `<div class="k">Stage / next type</div><div>${escapeHtml(r.stage || '?')} → ${escapeHtml(r.next_catalyst_type || '?')}</div>`;
     html += `<div class="k">Indication</div><div>${escapeHtml(r.indication || '—')}</div>`;
@@ -1119,12 +1199,16 @@ JS = r"""
                         ? r.market_cap_usd * (livePx / r.price)
                         : r.market_cap_usd;
       const isLive  = pxInfo.source === 'live';
-      const isFresh = pxInfo.source === 'live' || pxInfo.source === 'dispatch';
-      const tag     = isFresh ? ' <span class="live-tag" title="yfinance-sourced price (intraday or M7 dispatch-time)">●</span>' : '';
+      // D35 — render-time yfinance and M7 dispatch-time both count as
+      // fresh yfinance data; only BPC is excluded.
+      const isFresh = pxInfo.source !== 'bpc' && pxInfo.source !== 'none';
+      const tag     = isFresh ? ' <span class="live-tag" title="yfinance-sourced price">●</span>' : '';
       const cls     = isFresh ? 'live-val' : '';
       let lpStamp = '';
       if (isLive) {
         lpStamp = ' (live ' + livePrices[r.ticker].fetched_at_utc + ')';
+      } else if (pxInfo.source === 'render_yfinance') {
+        lpStamp = ' (yfinance @ render ' + (r.yfinance_render_fetched_at_utc || '?') + ')';
       } else if (pxInfo.source === 'dispatch') {
         lpStamp = ' (M7 dispatch-time yfinance)';
       } else if (pxInfo.source === 'bpc') {
@@ -1155,7 +1239,9 @@ JS = r"""
         </tr>`;
       });
       html += '</tbody></table>';
-    } else if (r.hard_pass) {
+    } else if (r.hard_pass || r.rescued) {
+      // D35 — also show the "None." placeholder on rescued rows so the
+      // expand panel doesn't look truncated on rescued tickers.
       html += '<h4>Qualifying insider buys (CEO/CFO, last 365d)</h4><div style="color:var(--text-dim);font-size:12px">None.</div>';
     }
     if (fundBreakdown.length) {
@@ -1471,8 +1557,21 @@ HTML_SKELETON = """<!doctype html>
 <div class="meta" id="fail-meta" style="margin-top:-8px;margin-bottom:14px"></div>
 
 <div class="tabs">
-  <button class="tab" data-tab="hard_pass" title="Hard-pass catalysts (H1-H5 all satisfied)">Hard pass <span class="count">0</span></button>
-  <button class="tab" data-tab="excluded" title="Catalysts excluded by one or more H1-H5 hard filters">Excluded <span class="count">0</span></button>
+  <button class="tab" data-tab="hard_pass" title="Hard-pass catalysts (H1-H6 all satisfied)">Hard pass <span class="count">0</span></button>
+  <button class="tab" data-tab="rescued" title="Rescued catalysts (M8 — H1 small-cap / H3 imminent-or-undated / H5 non-standard, re-admitted via the rescue gate)">Rescued <span class="count">0</span></button>
+  <button class="tab" data-tab="excluded" title="Catalysts excluded by one or more H1-H6 hard filters">Excluded <span class="count">0</span></button>
+</div>
+
+<!-- D35 — rescue-class legend, shown only on the Rescued tab -->
+<div id="rescue-legend" class="hgate-legend" style="display:none">
+  <div class="legend-title">Rescue legend (M8 re-admitted these catalysts despite an H-gate fail):</div>
+  <ul>
+    <li><b>A</b> — H1 fail: market cap is in [$0, $2B]. Widens H1's lower bound from $30M to $0 so micro-caps can be scored.</li>
+    <li><b>B</b> — H3 fail (catalyst imminent or BPC date missing) AND H1 pass. Claude re-resolves the date from primary sources (SEC filings / fda.gov / clinicaltrials.gov / conference proceedings).</li>
+    <li><b>C</b> — H5 fail (non-standard stage/type) AND H1 pass. Scope: <code>Regulatory Decision</code> (PDUFA) + NULL catalyst_type only.</li>
+    <li>A row can match multiple classes (e.g. <code>BC</code> = both H3 and H5 fail). H2/H4/H6 are NOT rescued: those rows stay in Excluded.</li>
+    <li>Date column shows the Claude-resolved date with a 📅 marker when M8 has run; hover for the source citation.</li>
+  </ul>
 </div>
 
 <!-- D27 + D34 — H-gate legend, shown only on the Excluded tab -->
@@ -1584,14 +1683,47 @@ def _existing_template_version(path: Path) -> str | None:
 # Render
 # =====================================================================
 
+def _fetch_render_time_prices(rows: list[dict]) -> dict[str, dict]:
+    """D35 — one-shot yfinance fetch for all hard_pass + rescued tickers
+    at render time. Result is baked into each row's payload as
+    `yfinance_render_price_usd` + `yfinance_render_fetched_at_utc` so
+    the JS can paint blue + green ● even outside market hours (when the
+    intraday poller is dormant) and for rescued rows that have no M7
+    dispatch yet. Reuses `module_7.live_price.get_live_prices` which is
+    batched and TTL-cached (60s success, 30 min failures).
+    """
+    tickers = sorted({
+        r["ticker"] for r in rows
+        if (r.get("hard_pass") or r.get("rescued")) and r.get("ticker")
+    })
+    if not tickers:
+        return {}
+    # force=True so cache misses go straight to yfinance — render is
+    # rare enough that the freshness wins over the 60s TTL hit.
+    prices = get_live_prices(tickers, force=True)
+    out: dict[str, dict] = {}
+    for t, lp in prices.items():
+        if lp.price_usd:
+            out[t] = {
+                "price_usd":        lp.price_usd,
+                "fetched_at_utc":   lp.fetched_at_utc,
+            }
+    return out
+
+
 def render(
     snapshot_date: date | None = None,
     out_dir: Path = OUTPUT_DIR,
     force_template: bool = False,
+    fetch_prices_at_render_time: bool = True,
 ) -> tuple[Path, Path, str]:
     """Write the sidecar data file (always) and the HTML template
     (only when needed). Returns (html_path, data_path, template_action)
     where template_action is one of 'rebuilt' / 'up-to-date' / 'forced'.
+
+    `fetch_prices_at_render_time` toggles D35's one-shot yfinance fetch
+    for hard-pass + rescued tickers. Defaults to True; set False
+    (`--no-fetch-prices` on the CLI) for fast iteration during dev.
 
     When ``snapshot_date`` is None, renders the ROLLING view: latest
     score per unique catalyst across all snapshots, with materialization
@@ -1620,15 +1752,22 @@ def render(
             snapshot_date.isoformat() if snapshot_date else None
         )
         anchor_date = date.fromisoformat(anchor_iso) if anchor_iso else None
-        hard_pass_tickers = sorted({r["ticker"] for r in rows if r["hard_pass"]})
+        # D35 — include rescued tickers in the insider + funds detail
+        # fetches; the expand panel renders those sections for any row
+        # that's either hard_pass OR rescued.
+        visible_tickers = sorted({
+            r["ticker"] for r in rows
+            if r["hard_pass"] or r.get("rescued")
+        })
         insider_trades = (
-            _fetch_insider_trades(conn, anchor_date, hard_pass_tickers)
+            _fetch_insider_trades(conn, anchor_date, visible_tickers)
             if anchor_date else {}
         )
 
         funds_tickers = sorted({
             r["ticker"] for r in rows
-            if r["hard_pass"] and (r.get("fund_accumulation_usd") or 0) > 0
+            if (r["hard_pass"] or r.get("rescued"))
+               and (r.get("fund_accumulation_usd") or 0) > 0
         })
         q_latest = next((r["fund_quarter_latest"] for r in rows
                          if r.get("fund_quarter_latest")), None)
@@ -1642,6 +1781,25 @@ def render(
         dd_map = fetch_latest_deep_dive_map()
         attach_deep_dive_payload(rows, dd_map)
         n_with_dd = sum(1 for r in rows if r.get("deep_dive"))
+
+        # D35 — one-shot yfinance fetch for hard_pass + rescued tickers.
+        # Result is attached per-row so the JS can paint blue/green
+        # immediately on page load (intraday polling overrides during
+        # market hours).
+        render_time_prices: dict[str, dict] = {}
+        if fetch_prices_at_render_time:
+            render_time_prices = _fetch_render_time_prices(rows)
+            n_priced = 0
+            for r in rows:
+                p = render_time_prices.get(r["ticker"])
+                if p:
+                    r["yfinance_render_price_usd"]      = p["price_usd"]
+                    r["yfinance_render_fetched_at_utc"] = p["fetched_at_utc"]
+                    n_priced += 1
+                else:
+                    r["yfinance_render_price_usd"]      = None
+                    r["yfinance_render_fetched_at_utc"] = None
+            print(f"[3_6_render_scores] yfinance render-time fetch: {n_priced}/{len([r for r in rows if r.get('hard_pass') or r.get('rescued')])} hard_pass+rescued tickers priced")
 
         rules_version = next((r["rules_version"] for r in rows if r.get("rules_version")), "")
         payload = {
@@ -1697,12 +1855,18 @@ def main() -> int:
         "--rebuild-template", action="store_true",
         help="force the HTML template to be rewritten even if the version hash matches",
     )
+    parser.add_argument(
+        "--no-fetch-prices", action="store_true",
+        help="D35 — skip the render-time yfinance fetch for hard_pass+rescued tickers "
+             "(faster iteration; blue/green markers may be absent outside market hours)",
+    )
     args = parser.parse_args()
 
     html_path, data_path, action = render(
         snapshot_date=args.snapshot_date,
         out_dir=args.out_dir,
         force_template=args.rebuild_template,
+        fetch_prices_at_render_time=not args.no_fetch_prices,
     )
     data_kb = data_path.stat().st_size / 1024
     html_kb = html_path.stat().st_size / 1024

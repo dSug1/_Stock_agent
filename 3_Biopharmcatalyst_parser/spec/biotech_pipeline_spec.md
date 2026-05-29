@@ -54,7 +54,8 @@ Module 6  (Scoring & ranking) — joins catalyst_snapshots + catalyst_timing
 
 Downstream (NOT in this spec):
   Module 7 (Claude API deep-dive)     — user-selected subset of Module 6 output
-  Module 8 (Dashboard)                — renders Module 7 output
+  Module 8 (Rescue + re-dispatch)     — re-admits H1/H3/H5-excluded catalysts (D35)
+  Module 9 (Dashboard)                — renders M6+M7+M8 output (formerly numbered M8)
 ```
 
 Each module is independently runnable and idempotent: re-running the same input produces the same database state.
@@ -1426,7 +1427,8 @@ On the live 2026-05-27 snapshot (572 catalyst rows), an initial-run with the YAM
 For architectural context — these are NOT specified yet:
 
 - **Module 7 — Claude API deep-dive:** user-selected subset of `catalyst_scores` rows (where `hard_pass = 1`) → `claude-opus-4-7` with `web_search` enabled. Returns structured JSON per ticker (POS estimate vs base rate, expected move on positive/negative, dilution risk, key risks, sizing rec). Mandatory `[y/N]` cost-approval gate per memory `claude-api`. Heavy reuse from `2_Funds_parser/src/module_6/` (prompt caching + batch API + JSON validation). **User does NOT want an automatic top-N cap** — they pick the slice manually after reviewing Module 6 output.
-- **Module 8 — Dashboard:** dark-themed iOS-optimized HTML, expandable cards per ticker, sortable by composite score + Claude-deep-dive findings. Static file output.
+- **Module 8 — Catalyst rescue + re-dispatch (D35):** re-admits catalysts that failed H1 (small-cap), H3 (imminent/undated), or H5 (non-standard stage/type) into the Claude deep-dive feed, with a separate prompt-version label (`m8-rescue-v1`) so cache isolation works. B/C rescues prepend a date-retrieval instruction so Claude first resolves the catalyst date from primary sources, then scores normally. Adds a "Rescued" tab to the renderer alongside Hard pass / Excluded.
+- **Module 9 — Dashboard:** dark-themed iOS-optimized HTML, expandable cards per ticker, sortable by composite score + Claude-deep-dive findings. Static file output. (Renumbered from M8 in D35.)
 
 ---
 

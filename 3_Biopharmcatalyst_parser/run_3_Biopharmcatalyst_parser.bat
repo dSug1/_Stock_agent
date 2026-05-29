@@ -225,6 +225,49 @@ if /i "%RUN_M7%"=="y" (
     )
 )
 
+REM ============================================================
+REM Module 8 — Catalyst rescue + re-dispatch (D35).
+REM Two-step:
+REM   (a) 3_8_compute_rescue.py — free; populates catalyst_scores.rescued
+REM       + rescue_class for H1-small-cap, H3-imminent/undated, H5-non-
+REM       standard catalysts. Always safe to run; idempotent.
+REM   (b) 3_8_rescue_dispatch.py — Anthropic-billed; same gating as M7.
+REM       Skip cleanly if you only want the rescue flags populated.
+REM ============================================================
+echo.
+echo === Module 8a: compute rescue eligibility (free) ===
+python scripts\3_8_compute_rescue.py
+if errorlevel 1 (
+    echo [WARN] 3_8_compute_rescue.py failed; rescue tab will be empty.
+)
+
+echo.
+echo === Module 8b — Claude API rescue dispatch (Anthropic-billed) ===
+echo Run scripts\3_8_estimate_cost.py first to preview cost ^(no API call^).
+set /p RUN_M8="Proceed to Module 8 rescue dispatch (THIS WILL SPEND MONEY)? [y/N]: "
+if /i "%RUN_M8%"=="y" (
+    python scripts\3_8_rescue_dispatch.py
+    if errorlevel 1 (
+        echo [WARN] Module 8 reported a failure or was aborted at the gate.
+    )
+    REM --- Re-render the HTML so M8 outputs land in the Rescued tab -
+    echo.
+    set /p RUN_RENDER8="Re-render catalyst_scores.html with M8 rescue deep-dives? [Y/n]: "
+    if /i not "%RUN_RENDER8%"=="n" (
+        python scripts\3_6_render_scores.py
+        if errorlevel 1 (
+            echo [WARN] HTML render failed, continuing.
+        )
+    )
+) else (
+    REM Even without dispatch, re-render so the new Rescued tab counts
+    REM reflect the compute_rescue step above.
+    python scripts\3_6_render_scores.py
+    if errorlevel 1 (
+        echo [WARN] HTML re-render after compute_rescue failed.
+    )
+)
+
 echo.
 echo === run_3_Biopharmcatalyst_parser complete ===
 endlocal

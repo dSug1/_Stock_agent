@@ -181,6 +181,17 @@ _ADDITIVE_MIGRATIONS: list[tuple[str, str, str]] = [
     ("deep_dives", "price_at_api_time_usd",      "REAL"),
     ("deep_dives", "target_price_on_hit_usd",    "REAL"),
     ("deep_dives", "target_price_on_miss_usd",   "REAL"),
+    # D35 — M8 rescue. When a B/C rescue dispatch runs, Claude resolves
+    # the catalyst date first (per EVIDENCE HIERARCHY in m8 prompt
+    # prefix) and returns both the ISO date and the citation string. We
+    # store both so the renderer can show "<date> 📅 (per <source>)"
+    # without round-tripping through raw_text.
+    ("deep_dives", "claude_resolved_catalyst_date", "TEXT"),
+    ("deep_dives", "catalyst_date_source",          "TEXT"),
+    # D35 — rescue_class on the deep-dives row, copied at write time from
+    # catalyst_scores.rescue_class. Lets the renderer paint the right
+    # chip without a JOIN back to biotech.db.
+    ("deep_dives", "rescue_class",                  "TEXT"),
 ]
 
 
@@ -361,6 +372,9 @@ _DEEP_DIVE_COLS = (
     "price_at_api_time_usd",                    # D25 — price Claude saw
     "target_price_on_hit_usd",                  # D25 — implied $ target on hit
     "target_price_on_miss_usd",                 # D25 — implied $ target on miss
+    "claude_resolved_catalyst_date",            # D35 — ISO date from M8 rescue (B/C)
+    "catalyst_date_source",                     # D35 — citation string for the date
+    "rescue_class",                             # D35 — A/B/C/BC/etc., copied from catalyst_scores
     "created_at",
 )
 

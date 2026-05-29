@@ -400,3 +400,76 @@ def fetch_hard_pass_candidates(
     finally:
         conn.close()
     return [dict(r) for r in rows]
+
+
+def fetch_rescue_candidates(
+    biotech_db_path: Path,
+    *,
+    explicit_tickers: Optional[list[str]] = None,
+    classes: Optional[list[str]] = None,
+) -> list[dict]:
+    """D35 — rolling-view rescue feed for M8.
+
+    Returns one dict per catalyst whose `catalyst_scores.rescued = 1`,
+    same columns as `fetch_hard_pass_candidates` plus a `rescue_class`
+    string ('A'/'B'/'C'/'AB'/...). Caller (3_8_rescue_dispatch.py)
+    builds packs and dispatches via the M7 machinery unchanged.
+
+    When ``classes`` is given (e.g. ['A','B']), filters to catalysts
+    whose rescue_class CONTAINS any of those letters. None = all.
+    """
+    from database.db import get_connection  # type: ignore
+    conn = get_connection(biotech_db_path)
+    try:
+        sql = """
+        WITH latest_per_catalyst AS (
+            SELECT ticker, drug, nct_number, next_catalyst_type,
+                   MAX(snapshot_date) AS max_snap
+            FROM catalyst_scores
+            GROUP BY ticker, drug, nct_number, next_catalyst_type
+        )
+        SELECT
+            cs.snapshot_date, cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type,
+            cs.rescue_class, cs.fail_reasons,
+            s.stage,
+            COALESCE(t.date_min, t.date_max, s.catalyst_date) AS catalyst_date_iso,
+            cs.insider_score, cs.momentum_score, cs.fund_accumulation_score
+        FROM catalyst_scores cs
+        JOIN latest_per_catalyst l USING (ticker, drug, nct_number, next_catalyst_type)
+        LEFT JOIN catalyst_timing t USING
+            (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+        LEFT JOIN catalyst_snapshots s USING
+            (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+        WHERE cs.snapshot_date = l.max_snap
+          AND cs.rescued = 1
+        """
+        params: list = []
+        if explicit_tickers:
+            placeholders = ",".join("?" * len(explicit_tickers))
+            sql += f" AND cs.ticker IN ({placeholders})"
+            params.extend(explicit_tickers)
+        if classes:
+            # rescue_class is a sorted concat like 'A','BC','ABC'. Use
+            # LIKE '%X%' for each requested class and combine with OR.
+            class_clauses = " OR ".join("cs.rescue_class LIKE ?" for _ in classes)
+            sql += f" AND ({class_clauses})"
+            params.extend(f"%{c}%" for c in classes)
+        sql += " ORDER BY cs.ticker, cs.drug, cs.nct_number, cs.next_catalyst_type"
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def augment_pack_for_rescue(pack: dict, rescue_class: str) -> dict:
+    """D35 — add `catalyst.rescue_class` to the pack so the M8 system
+    prompt prefix can read it and adjust scoring guidance.
+
+    Returns a shallow copy of the pack with the rescue context attached.
+    Does NOT mutate the original.
+    """
+    new_pack = dict(pack)
+    new_pack["catalyst"] = dict(pack["catalyst"])
+    new_pack["catalyst"]["rescue_class"] = rescue_class
+    new_pack["catalyst"]["rescue_mode"] = True
+    return new_pack

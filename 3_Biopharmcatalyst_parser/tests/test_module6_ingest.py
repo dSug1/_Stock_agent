@@ -182,7 +182,12 @@ def test_score_snapshot_end_to_end(tmp_path: Path):
     bbb = rows["BBB"]
     assert bbb["hard_pass"] == 0
     assert "H5" in bbb["fail_reasons"]
-    assert bbb["composite_score"] is None
+    # D35 — composite_score is now computed for ALL rows (not just
+    # hard_pass) so the Rescued tab can sort + display by composite.
+    # Signal scores (insider/momentum/funds) were always populated;
+    # we just stopped gating the composite math on hard_pass.
+    assert bbb["composite_score"] is not None
+    assert 0 <= bbb["composite_score"] <= 100
 
     ccc = rows["CCC"]
     assert ccc["hard_pass"] == 0

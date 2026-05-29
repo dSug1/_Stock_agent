@@ -57,8 +57,12 @@ class ScoreStats:
     error_message: str | None = None
 
 
+# D35 — switched from INSERT OR REPLACE to ON CONFLICT DO UPDATE so the
+# `rescued` + `rescue_class` columns (managed by scripts/3_8_compute_rescue.py)
+# survive M6 re-runs. INSERT OR REPLACE would reset them to defaults
+# (0 / NULL), forcing a compute_rescue re-run after every M6 ingest.
 _INSERT_SQL = """
-INSERT OR REPLACE INTO catalyst_scores (
+INSERT INTO catalyst_scores (
     snapshot_date, ticker, drug, nct_number, next_catalyst_type,
     hard_pass, fail_reasons, timing_bucket,
     insider_gross_weighted_usd, insider_score,
@@ -68,6 +72,25 @@ INSERT OR REPLACE INTO catalyst_scores (
     fund_accumulation_usd, fund_accumulation_score,
     composite_score, computed_at, rules_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (snapshot_date, ticker, drug, nct_number, next_catalyst_type)
+DO UPDATE SET
+    hard_pass                  = excluded.hard_pass,
+    fail_reasons               = excluded.fail_reasons,
+    timing_bucket              = excluded.timing_bucket,
+    insider_gross_weighted_usd = excluded.insider_gross_weighted_usd,
+    insider_score              = excluded.insider_score,
+    return_30d_pct             = excluded.return_30d_pct,
+    momentum_score             = excluded.momentum_score,
+    fund_quarter_latest        = excluded.fund_quarter_latest,
+    fund_quarter_previous      = excluded.fund_quarter_previous,
+    funds_holding_latest       = excluded.funds_holding_latest,
+    funds_holding_previous     = excluded.funds_holding_previous,
+    fund_accumulation_usd      = excluded.fund_accumulation_usd,
+    fund_accumulation_score    = excluded.fund_accumulation_score,
+    composite_score            = excluded.composite_score,
+    computed_at                = excluded.computed_at,
+    rules_version              = excluded.rules_version
+    -- INTENTIONALLY NOT updated: rescued, rescue_class
 """
 
 
@@ -284,19 +307,22 @@ def score_snapshot(
                             fund_row.fund_accumulation_usd, cfg
                         )
 
+                # D35 — compute composite for ALL rows (not just hard_pass)
+                # so the Rescued tab can sort/display by composite. The signal
+                # scores themselves (insider/momentum/funds) are already
+                # computed above unconditionally, so composite has all its
+                # inputs available regardless of hard_pass.
+                comp = composite(
+                    insider_score=insider.insider_score,
+                    momentum_score=momentum.momentum_score,
+                    fund_accumulation_score=fund_accum.fund_accumulation_score,
+                    cfg=cfg,
+                    skip_funds=skip_funds,
+                )
+                composite_score: float | None = comp.composite_score
                 if verdict.hard_pass:
-                    comp = composite(
-                        insider_score=insider.insider_score,
-                        momentum_score=momentum.momentum_score,
-                        fund_accumulation_score=fund_accum.fund_accumulation_score,
-                        cfg=cfg,
-                        skip_funds=skip_funds,
-                    )
-                    composite_score: float | None = comp.composite_score
                     stats.hard_pass_count += 1
                     bucket_counts[verdict.timing_bucket or "?"] += 1
-                else:
-                    composite_score = None
 
                 pk = (r["ticker"], r["drug"], r["nct_number"], r["next_catalyst_type"])
                 is_update = pk in existing_pks

@@ -1,0 +1,76 @@
+# Module 8 — Catalyst rescue + re-dispatch config.
+# Spec: spec/module_8_spec.md.
+# Decisions: spec/decisions.md § D35.
+#
+# Pricing / modifiers / clamps / dispatch defaults are intentionally
+# IDENTICAL to module_7.yaml (D21-D22 production tuning). The only thing
+# that distinguishes M8 from M7 is the prompt_version_label + the
+# system_prompt_path pointing at the rescue preamble. This isolates the
+# Anthropic prompt cache so M7 hits don't get reused for M8 dispatches
+# (and vice versa) — the rescue task is materially different (Claude
+# resolves the date BEFORE scoring).
+
+# ---------------- Prompt / model ----------------
+model: claude-opus-4-7
+prompt_version_label: m8-rescue-v1
+max_output_tokens: 12500
+system_prompt_path: config/module_8_system_prompt_prefix.md
+few_shot_examples_path: config/module_7_few_shots.md
+
+# ---------------- Web search (same as M7) ----------------
+web_search:
+  enabled: true
+  max_uses: 10
+  domains_path: config/module_7_web_search_domains.yaml
+
+# ---------------- Selection (unused by M8 dispatcher) ----------------
+selection:
+  source_html: Outputs/catalyst_scores.html
+  sidecar_json: Outputs/catalyst_scores_selection.json
+  hard_pass_only: false
+
+# ---------------- Dispatch ----------------
+dispatch:
+  mode: batch
+  sync_concurrency: 1
+  poll_interval_s: 30
+  timeout_s: 86400
+
+# ---------------- Modifiers (same as M7) ----------------
+modifiers:
+  insider:
+    min_multiplier: 0.85
+    max_multiplier: 1.15
+  funds:
+    min_multiplier: 0.85
+    max_multiplier: 1.15
+  momentum:
+    min_multiplier: 0.95
+    max_multiplier: 1.05
+
+# ---------------- Clamps (same as M7) ----------------
+clamps:
+  p_final_min: 0.05
+  p_final_max: 0.95
+  move_on_hit_pct_max: 400.0
+  move_on_miss_pct_min: -90.0
+
+# ---------------- Pricing (same as M7) ----------------
+pricing:
+  model: claude-opus-4-7
+  input_per_mtok: 15.00
+  output_per_mtok: 75.00
+  cache_read_multiplier: 0.10
+  cache_creation_multiplier: 0.10
+  batch_discount: 0.50
+  web_search_per_1k: 10.00
+  search_result_avg_tokens: 1500
+  cost_calibration_factor: 0.10        # mirrors M7 (D22)
+
+# Aborts dispatch when scenario_cache_batch.total_usd exceeds this.
+# M8 feeds are bigger (~220 catalysts vs M7's ~68) — raise ceiling to
+# accommodate without disabling the safety entirely.
+cost_ceiling_usd: 50.0
+
+failures:
+  abort_threshold_pct: 10.0            # rescue is more speculative; tolerate higher failure
