@@ -1646,3 +1646,154 @@ Calibration factor 0.10 mirrors M7 (D22).
 - M9 dashboard remains unbuilt.
 
 ---
+
+## D36 — M8 UI refinement + plumbing bug fixes + operational learnings (2026-05-29)
+
+After the initial D35 build dispatched ZBIO + BHVN as a 4-call verification (run #5), then the full 224-call rescue feed (run #6) + a CRBU retry (run #7), six follow-up changes consolidated under D36 plus three bug fixes that surfaced during the live UI test pass.
+
+### D36a — Merge "Hard pass" + "Rescued" tabs into a single "Catalyst" tab
+
+**Trigger:** the user wanted both kinds of catalyst rows in one view rather than tab-switching.
+
+**Change** (renderer-only):
+- HTML: 3 tabs → 2 tabs (`Catalyst`, `Excluded`). The data-tab attribute moves from `hard_pass`/`rescued` to a unified `catalyst`.
+- State migration: any persisted `state.tab` in localStorage (old `hard_pass`/`rescued`/`catalyst_date_defined`/`catalyst_date_undefined`) maps to `catalyst` on next page load.
+- KPI strip: "Catalysts" card now shows `N hard-pass · M rescued · K excluded` in the sub-label.
+- Filter logic: `rowMatchesFilters` collapses to `if (excluded) drop hard_pass||rescued; else keep hard_pass||rescued`.
+- Per-row tag chip: `r.rescued` ? rescue-class chip (purple) : timing-bucket chip (green/amber). Both fit the same column width.
+- Sort order extended: `hard_pass DESC, rescued DESC, composite_score DESC` so hard-pass still leads.
+
+### D36b — Pale-green "new catalyst" highlight + acknowledgement checkbox
+
+**Trigger:** with 231 newly-admitted rescue rows landing in one go, the user needs a way to track which rows they've already reviewed without re-reading the whole table.
+
+**Mechanism:**
+- localStorage `catalyst_acknowledged_v1` = JSON array of PK strings. PK is `ticker|drug|nct|type` — stable across snapshots, so an acknowledged catalyst stays acknowledged when a new BPC docx lands.
+- Bootstrap rule: on FIRST EVER load (no key exists), seed the set with all current `hard_pass=1` PKs. Result: only the rescued rows light up pale-green on first visit. Future BPC drops adding hard_pass or rescued rows show up as new automatically.
+- Per-row TR gets `class="unack"` when isUnacknowledged. CSS: `rgba(52,211,153,0.07)` background, tinted on hover/expanded so the cue persists while reading.
+- Expand-panel top-left: an `.ack-toggle` label+checkbox. Tick → PK added to set + saved + renderTable() → highlight disappears. Untick → highlight returns.
+- D31's expand-row reinsertion mirrors the `unack` class onto the inserted `tr.expand-row` so the panel also carries the tint.
+- The click handler in `bind()` ignores clicks landing on `.ack-toggle` so ticking the box doesn't collapse the panel.
+
+### D36c — Per-column widths + `table-layout: fixed` + smaller header font
+
+**Trigger:** with verbose rescue drug names (e.g., "Resecabtagene autoleucel (rese-cel, formerly referred to as CABA-201) - (RESET-PV)") the table was overflowing the viewport horizontally.
+
+**Change:**
+- `table-layout: fixed` makes column widths enforced (auto-layout treats `width` as a hint that long content can override). Total width sums to 100% so the table never exceeds its container.
+- 16 columns assigned explicit %-widths: Name 10, Drug 12, Date 7 (forces date to wrap inside column), Precision/fail 5 (down), Probability 4.5 (down), Share-price-appreciation 6 (down), other narrow numerics 5.
+- Header font dropped from 11 px → 9.5 px with `line-height: 1.2` and `white-space: normal` so multi-word headers like "Share price appreciation" and "Expectancy / week" wrap inside their narrow columns.
+- Cell horizontal padding 8 px → 5 px to recover horizontal real-estate.
+
+### D36d — Review-status filter (new / acknowledged / any) just left of "reset"
+
+**Trigger:** the pale-green highlight (D36b) tells the user "this is new" but with 231 rows the user still has to scroll. A filter that hides everything they've already acknowledged lets them work the list down to zero.
+
+**Change:**
+- New `<select id="review-status">` between the ticker-search input and the reset button. Three values: `any` / `new only` / `acknowledged only`.
+- `state.reviewStatus` (default `any`) persists to the existing `catalyst_filters_v1` localStorage key alongside the other filters.
+- `rowMatchesFilters` adds two lines applying the filter.
+- `reset` button clears it back to `any`.
+
+**Workflow:** set `new only` → review highest-composite rows top to bottom → tick acknowledge in each expand panel → row drops out of the filtered view → loop until empty.
+
+### D36e — Disk-persistent yfinance render-time cache (`data/render_price_cache.json`)
+
+**Trigger:** the D35b render-time yfinance batch fetch (~290 tickers) cost ~22s wall on every render. Re-running `run_3_Biopharm_render.bat` repeatedly during a session was painful even though prices hadn't moved.
+
+**Measured impact:**
+- Cold render (empty cache): 27 s (writes cache)
+- Warm render (≤30 min): **3.8 s** — matches the `--no-fetch-prices` baseline
+- 7× speed-up on steady-state
+
+**Cache shape** (`data/render_price_cache.json`):
+```json
+{ "TICKER": { "price_usd": 18.56, "fetched_at_utc": "2026-05-29T06:23:18+00:00", "cached_at_epoch": 1748497398.45 } }
+```
+
+Two TTLs:
+- `_PRICE_CACHE_TTL_S = 1800` (30 min) for successful fetches
+- `_PRICE_FAILURE_TTL_S = 14400` (4 hours) for failures — delisted/illiquid tickers would otherwise trigger a `yf.Ticker(t).history(...)` per-ticker probe (~5-15s timeout each) on every render
+
+New CLI flag: `--refresh-prices` bypasses the disk cache (when the user wants truly current prices). `--no-fetch-prices` continues to skip the fetch entirely (fastest, blue/green markers may be absent for rescued rows outside market hours).
+
+The intraday JS poller (D25) is untouched and still keeps cells live during market hours; the disk cache only seeds the initial paint. Aligns with memory `feedback_swr_pattern`.
+
+### Bug fix #1 (M6) — composite_score was NULL for hard-fail rows
+
+**Discovered when:** building the Rescued tab — composite_score column was blank for all 231 rescued rows.
+
+**Root cause:** [`src/module_6/ingest.py:287-299`](../src/module_6/ingest.py) gated the `composite(...)` call on `verdict.hard_pass`, leaving non-pass rows with `composite_score = NULL` in the DB.
+
+**Fix:** compute composite for ALL rows. The signal scores (`insider_score`, `momentum_score`, `fund_accumulation_score`) were already computed unconditionally; only the final weighted sum was being skipped. Re-ran M6 with `--all-snapshots` to backfill.
+
+### Bug fix #2 (M6) — `INSERT OR REPLACE` clobbered rescued/rescue_class
+
+**Discovered when:** the M6 re-run for fix #1 reset all the D35-populated `rescued` and `rescue_class` columns back to defaults (0 / NULL). The compute_rescue script had to be re-run after every M6 ingest.
+
+**Fix:** changed `_INSERT_SQL` in `module_6/ingest.py` from `INSERT OR REPLACE` to `INSERT ... ON CONFLICT (pk) DO UPDATE SET …` that explicitly does NOT update `rescued` or `rescue_class`. M6 re-runs now leave the rescue state intact; the M8.0 compute step still runs after M6 in the orchestrator bat as belt-and-braces.
+
+### Bug fix #3 (renderer) — `render_join.py` wasn't passing D35 fields into the data payload
+
+**Discovered when:** the 2-ticker M8 verification (run #5) wrote `claude_resolved_catalyst_date` + `catalyst_date_source` to the DB correctly, but the rendered HTML showed no 📅 marker. The data sidecar had `dd.claude_resolved_catalyst_date = null` for the 4 rows the dispatch had just populated.
+
+**Root cause:** [`src/module_7/render_join.py::fetch_latest_deep_dive_map`](../src/module_7/render_join.py) builds the per-row `deep_dive` dict by manually copying named columns. The three D35 columns hadn't been added to that copy list.
+
+**Fix:** added `claude_resolved_catalyst_date`, `catalyst_date_source`, `rescue_class_dispatch` to the payload — guarded by `"col" in r.keys()` so the renderer tolerates an older `claude_deep_dives.db` that pre-dates the D35 schema migration.
+
+**Lesson:** the 2-ticker verification (run #5, $0.16) caught a bug that would have wasted the full 224-call rescue dispatch. Worth the cost of explicitly testing one or two end-to-end before scaling.
+
+### Renderer follow-on (`bestPriceInfo` + expand panel)
+
+- `bestPriceInfo` gained a `'render_yfinance'` tier (between `'live'` and `'dispatch'`) reading from `r.yfinance_render_price_usd`. `isFresh` was loosened from `live || dispatch` to `source !== 'bpc'` so blue + green ● fire for ANY yfinance-sourced price. Resolves the inconsistency the user spotted (Move/E[move] cells lit when mcap/price didn't).
+- Expand panel: insider trades + funds breakdown sections widened from `r.hard_pass` to `r.hard_pass || r.rescued`. Server-side SQL feed widened same way so the sidecar carries the rows for rescued tickers.
+- The "Rescued tab" tagBucket originally inlined fail-reason chips next to the rescue-class chip. After D36a's merge, that's a single rescue chip only — fail reasons moved to the expand panel as a "Original gate failures" kv line (faded when the row is rescued).
+
+### Dispatch operational history (post-D35)
+
+| Run | Mode | Feed | Wall | Cost (calibrated) | Outcome |
+|---|---|---|---:|---:|---|
+| 5 | batch (M8) | ZBIO + BHVN (4 calls) | 341 s | $0.16 | 4/4 parsed; surfaced bug-fix #3 above; 4/4 rows have Claude-resolved date |
+| 6 | batch (M8) | Full rescue feed: 224 calls populating 212 rows; 4 cache-hits from run #5 | 466 s | $9.08 | 209/224 parsed (93%); 14 HARD-RULE-#8 `catalyst_already_passed` (real signal — BPC was tracking stale catalysts), 1 transient json_parse_fail (CRBU). 100% date-resolution rate. |
+| 7 | batch (M8) | CRBU retry (run #6 transient parse fail) | 218 s | $0.04 | 1/1 parsed. Wall-time floor at ~3.6 min for single-call batches (Anthropic batch infrastructure overhead). |
+
+**Cumulative across runs 1–7:** 282 deep_dives rows, 7 runs, $13.71 script-calibrated cost.
+
+**Calibration tracker:** the 0.10 factor over-estimates real spend by ~1.5–1.7×. Run #6 estimated $15.57, actual $9.08 (0.58×). Run #5 estimated $0.28, actual $0.16 (0.57×). Safe direction (estimate > actual) — leave the factor at 0.10 until invoices land for runs 3–7.
+
+**Run #6's 14 stale catalysts** — the M8 prompt's HARD RULE #8 freshness check found that these tickers' "future" BPC catalysts had already happened (or been canceled). This is real signal, not noise: it identifies BPC tracking gaps the user would otherwise have chased. The errors land in `deep_dive_errors` with `error_kind='catalyst_already_passed'` and human-readable notes citing the press release / 8-K / NCT update that contradicts the BPC date.
+
+| Ticker | What Claude found |
+|---|---|
+| TSVT | Asset divested to Regeneron (APA closed 2024-04-01) |
+| LIXT | OCCC data already presented at SGC Puerto Rico 2026-04-13 |
+| LTRN | Type C meeting outcome already announced via BusinessWire |
+| ALGS ×2 | EASL 2026 oral already presented 2026-05-27 |
+| PBYI | Ph2 ALISCA-Breast already presented |
+| LPCN | ASCP presentation occurred May 26-27, 2026 (before snapshot 2026-05-28) |
+| BCDA | CardiAMP CMI data at EuroPCR 2026-05-21 |
+| GLPG | Program CANCELED per 6-K dated 2026-01-05 |
+| AQST | AQST-108 Ph1 topline released 2026-05-13 |
+| QURE | EPISOD1 prelim data discontinued |
+| IRWD | LINZESS PDUFA approved 2026-05-28 |
+| SDGR | SGR-3515 data already at AACR 2026 (April) |
+| DTIL | EASL late-breaker poster 2026-05-27 (= snapshot date) |
+
+**Net effect on the dataset:** 224 dispatched, 209 scored, 14 confirmed-stale (de-prioritised in the UI), 1 transient retried clean. Real success rate post-retry: 100% of valid catalysts scored.
+
+### High-conviction picks surfaced by run #6 (top 6 by exp/wk)
+
+| Ticker | Indication | p_final | E[move] | exp/wk | Weeks | Resolved date |
+|---|---|---:|---:|---:|---:|---|
+| **CING** | ADHD (peds + adult, 505(b)(2)) | **0.66** | **+26.9%** | **+26.89%/wk** | 1 | 2026-05-31 |
+| APRE | PPP2R1A-mutated uterine serous | 0.50 | +9.7% | +9.73%/wk | 1 | 2026-05-30 |
+| IMRX | 1L metastatic pancreatic cancer | 0.57 | +7.1% | +7.14%/wk | 1 | 2026-06-01 |
+| CNTX | Platinum-resistant ovarian | 0.59 | +21.0% | +7.01%/wk | 3 | 2026-06-15 |
+| REPL | RP2 + nivo metastatic uveal melanoma | 0.53 | +7.0% | +6.97%/wk | 1 | 2026-05-31 |
+| CGEM | Rheumatoid Arthritis | 0.58 | +6.7% | +6.74%/wk | 1 | 2026-06-06 |
+
+CING — sub-$5 stock with 66% p_final and a 1-week window — is exactly the kind of high-conviction near-term catalyst the M8 rescue path was built to surface. It was a B-class rescue (BPC date was within 14d so H3 failed); Claude resolved the actual readout date to 2026-05-31.
+
+**Validation:** 468 tests still passing (one M6 test updated to assert `composite_score IS NOT NULL` after bug fix #1).
+
+---
