@@ -209,6 +209,11 @@ def main() -> int:
                         help="D51 — recover a half-completed batch run")
     parser.add_argument("--yes", action="store_true",
                         help="Single-shot bypass of the mandatory [y/N] gate")
+    parser.add_argument("--override-ack-gate", action="store_true",
+                        help="D38 — bypass the pre-dispatch acknowledged-ticker "
+                             "gate. By default any ticker the user has ticked "
+                             "off in the HTML (`data/acknowledged_tickers.json`) "
+                             "is dropped from the candidate set without spending.")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -299,6 +304,29 @@ def main() -> int:
     if not candidates:
         print("[3_7_deep_dive] no hard-pass candidates; exiting.")
         return 0
+
+    # D38 — pre-dispatch acknowledged-ticker gate. Any ticker the user
+    # has ticked off in the HTML is dropped from the candidate set; the
+    # rationale is "one Claude call per company is enough — different
+    # drugs of the same ticker don't re-trigger." Bypass with
+    # `--override-ack-gate` when the user actively wants to re-dispatch.
+    if args.override_ack_gate:
+        print("[3_7_deep_dive] --override-ack-gate: skipping the acknowledged-ticker gate.")
+    else:
+        from module_7.gate import apply_ticker_gate, load_acknowledged_tickers
+        ack = load_acknowledged_tickers()
+        if ack:
+            kept, dropped = apply_ticker_gate(candidates, ack)
+            if dropped:
+                dropped_tickers = sorted({d["ticker"] for d in dropped})
+                print(f"[3_7_deep_dive] ack-gate: dropped {len(dropped)} catalysts "
+                      f"across {len(dropped_tickers)} reviewed ticker(s) — "
+                      f"{', '.join(dropped_tickers[:10])}"
+                      + (f", ... +{len(dropped_tickers)-10} more" if len(dropped_tickers) > 10 else ""))
+            candidates = kept
+            if not candidates:
+                print("[3_7_deep_dive] all candidates gated out by ack-set; exiting.")
+                return 0
 
     # D25 — refresh live yfinance prices for every candidate ticker so the
     # pack Claude sees carries the LATEST share price (not the M6.5

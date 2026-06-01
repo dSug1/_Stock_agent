@@ -226,6 +226,31 @@ class _Handler(BaseHTTPRequestHandler):
             current["version"] = current.get("version") or 1
             _save_selection(current)
             return self._json(200, {"ok": True, "saved": current})
+        # D38 — receive the user's acknowledged-ticker set from the
+        # browser's localStorage and persist it to disk so the M7/M8
+        # dispatchers can apply the pre-dispatch gate.
+        if parsed.path == "/api/save_acknowledged_tickers":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            try:
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "body must be valid JSON"})
+            tickers = body.get("tickers") if isinstance(body, dict) else None
+            if not isinstance(tickers, list):
+                return self._json(400, {"error": "body.tickers must be a list of strings"})
+            # Import here so the module-import-time path doesn't blow up
+            # in test envs without the M7 package on sys.path.
+            try:
+                from module_7.gate import save_acknowledged_tickers
+                save_acknowledged_tickers(tickers)
+                normalised = sorted({
+                    str(t).strip().upper()
+                    for t in tickers
+                    if isinstance(t, str) and t.strip()
+                })
+                return self._json(200, {"ok": True, "count": len(normalised)})
+            except Exception as e:                                  # noqa: BLE001
+                return self._json(500, {"error": f"save failed: {e}"})
         return self._json(404, {"error": "not found"})
 
     # ── helpers ─────────────────────────────────────────────

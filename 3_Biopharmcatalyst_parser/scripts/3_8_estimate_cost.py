@@ -59,6 +59,9 @@ def main() -> int:
     parser.add_argument("--out", type=Path,
                         default=PROJECT_ROOT / "Outputs" / "m8_cost_estimate.html",
                         help="HTML output path")
+    parser.add_argument("--override-ack-gate", action="store_true",
+                        help="D38 — bypass the acknowledged-ticker gate when "
+                             "estimating; useful to see the un-gated cost.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(
@@ -83,6 +86,23 @@ def main() -> int:
         print("  → run scripts/3_8_compute_rescue.py first to populate rescued/rescue_class.")
         return 0
     print(f"[3_8_estimate_cost] rescue candidates: {len(candidates)}")
+
+    # D38 — apply the same pre-dispatch ack-gate so the estimate
+    # reflects what would actually dispatch.
+    if not args.override_ack_gate:
+        from module_7.gate import apply_ticker_gate, load_acknowledged_tickers
+        ack = load_acknowledged_tickers()
+        if ack:
+            kept, dropped = apply_ticker_gate(candidates, ack)
+            if dropped:
+                dropped_tickers = sorted({d["ticker"] for d in dropped})
+                print(f"[3_8_estimate_cost] ack-gate: {len(dropped)} catalyst(s) "
+                      f"across {len(dropped_tickers)} ticker(s) would be skipped "
+                      f"(use --override-ack-gate to ignore)")
+            candidates = kept
+            if not candidates:
+                print("[3_8_estimate_cost] all candidates gated out; nothing to estimate.")
+                return 0
     by_class: dict[str, int] = {}
     for c in candidates:
         k = c.get("rescue_class") or "?"

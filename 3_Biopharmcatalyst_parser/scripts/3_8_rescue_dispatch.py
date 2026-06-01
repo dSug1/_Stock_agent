@@ -175,6 +175,11 @@ def main() -> int:
                         help="Recover a half-completed batch run")
     parser.add_argument("--yes", action="store_true",
                         help="Single-shot bypass of the mandatory [y/N] gate")
+    parser.add_argument("--override-ack-gate", action="store_true",
+                        help="D38 — bypass the pre-dispatch acknowledged-ticker "
+                             "gate. By default any ticker the user has ticked "
+                             "off in the HTML (`data/acknowledged_tickers.json`) "
+                             "is dropped from the candidate set without spending.")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -254,6 +259,25 @@ def main() -> int:
     if not candidates:
         print("[3_8_rescue_dispatch] no rescue candidates; run scripts/3_8_compute_rescue.py first.")
         return 0
+
+    # D38 — pre-dispatch acknowledged-ticker gate (mirrors M7).
+    if args.override_ack_gate:
+        print("[3_8_rescue_dispatch] --override-ack-gate: skipping the acknowledged-ticker gate.")
+    else:
+        from module_7.gate import apply_ticker_gate, load_acknowledged_tickers
+        ack = load_acknowledged_tickers()
+        if ack:
+            kept, dropped = apply_ticker_gate(candidates, ack)
+            if dropped:
+                dropped_tickers = sorted({d["ticker"] for d in dropped})
+                print(f"[3_8_rescue_dispatch] ack-gate: dropped {len(dropped)} catalysts "
+                      f"across {len(dropped_tickers)} reviewed ticker(s) — "
+                      f"{', '.join(dropped_tickers[:10])}"
+                      + (f", ... +{len(dropped_tickers)-10} more" if len(dropped_tickers) > 10 else ""))
+            candidates = kept
+            if not candidates:
+                print("[3_8_rescue_dispatch] all candidates gated out by ack-set; exiting.")
+                return 0
 
     candidate_tickers = sorted({c["ticker"] for c in candidates})
     print(f"[3_8_rescue_dispatch] refreshing live prices for {len(candidate_tickers)} ticker(s)…")

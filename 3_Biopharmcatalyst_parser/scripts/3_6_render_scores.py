@@ -788,8 +788,76 @@ JS = r"""
   function saveAcknowledged() {
     try { localStorage.setItem(_ACK_LS_KEY, JSON.stringify(Array.from(acknowledged))); }
     catch (_) { /* quota full or storage disabled */ }
+    // D38 — POST the deduped ticker set to the live-price server so
+    // dispatch-time gates (M7/M8) can read it. No-op on file:// or
+    // when the server is down.
+    syncAckTickersToServer();
   }
   function isUnacknowledged(r) { return !acknowledged.has(catalystPk(r)); }
+
+  // ============ D38 — bulk-by-ticker ack + server sync ============
+  // Extract the unique ticker set from currently-acknowledged PKs.
+  function acknowledgedTickers() {
+    const out = new Set();
+    acknowledged.forEach(pk => {
+      const t = (pk.split('|')[0] || '').trim().toUpperCase();
+      if (t) out.add(t);
+    });
+    return out;
+  }
+  // Debounced POST so a burst of ack-toggles (e.g. user clicking
+  // through 10 rows in 2 seconds) only hits the server once.
+  let _ackSyncTimer = null;
+  function syncAckTickersToServer() {
+    if (!_onLivePricePage()) return;          // file:// → no server
+    if (_ackSyncTimer) clearTimeout(_ackSyncTimer);
+    _ackSyncTimer = setTimeout(async () => {
+      _ackSyncTimer = null;
+      const tickers = Array.from(acknowledgedTickers());
+      try {
+        await fetch('/api/save_acknowledged_tickers', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({tickers}),
+        });
+      } catch (_) { /* server down → next save retries */ }
+    }, 500);
+  }
+  // D38 — when the user ticks/unticks ANY row, propagate to every row
+  // sharing the same ticker. Rationale: one Claude API call covers the
+  // company; ticking one row marks the whole ticker as reviewed.
+  function setTickerAck(ticker, isAcked) {
+    const T = (ticker || '').trim().toUpperCase();
+    if (!T) return;
+    const rows = (window.__DATA && window.__DATA.rows) || [];
+    rows.forEach(r => {
+      if ((r.ticker || '').trim().toUpperCase() !== T) return;
+      const pk = catalystPk(r);
+      if (isAcked) acknowledged.add(pk);
+      else acknowledged.delete(pk);
+    });
+    saveAcknowledged();    // also syncs to server
+  }
+  // D38 migration: any ticker with AT LEAST ONE acked PK has every
+  // other row for that ticker bulk-acked. Handles the pre-D38
+  // localStorage state where the user may have ticked only some rows.
+  function migrateAcknowledgedToTickerLevel() {
+    const tickers = acknowledgedTickers();
+    if (!tickers.size) return;
+    const rows = (window.__DATA && window.__DATA.rows) || [];
+    let changed = 0;
+    rows.forEach(r => {
+      const T = (r.ticker || '').trim().toUpperCase();
+      if (T && tickers.has(T)) {
+        const pk = catalystPk(r);
+        if (!acknowledged.has(pk)) { acknowledged.add(pk); changed++; }
+      }
+    });
+    if (changed > 0) {
+      saveAcknowledged();
+      console.log('[D38] bulk-acked', changed, 'rows under', tickers.size, 'tickers');
+    }
+  }
   function bootstrapAcknowledged() {
     // First-ever load (no localStorage key exists): the M8-rescued
     // rows are the 'new' batch the user is supposed to review. The
@@ -1597,19 +1665,18 @@ JS = r"""
       const tr = e.target.closest('tr[data-idx]');
       if (tr) toggleRow(tr);
     });
-    // D35b — ack-toggle change handler. Updates the acknowledged Set,
-    // persists to localStorage, and re-renders the table so the .unack
-    // class on the parent TR (and the expand row) is refreshed.
+    // D35b + D38 — ack-toggle change handler. Updates the acknowledged
+    // Set, persists to localStorage, syncs to server, and re-renders.
+    // D38: ticking one row bulk-marks every other row sharing the same
+    // ticker so the M7/M8 pre-dispatch gate treats the whole ticker as
+    // reviewed. One Claude call per company = one ack.
     document.getElementById('rows-body').addEventListener('change', e => {
       const box = e.target.closest('.ack-toggle input[type="checkbox"]');
       if (!box) return;
       const idx = Number(box.dataset.ackIdx);
       const r = window.__DATA.rows[idx];
       if (!r) return;
-      const pk = catalystPk(r);
-      if (box.checked) acknowledged.add(pk);
-      else acknowledged.delete(pk);
-      saveAcknowledged();
+      setTickerAck(r.ticker, box.checked);
       renderTable();
     });
   }
@@ -1636,6 +1703,13 @@ JS = r"""
     // rescue rows (and any future new BPC entries) light up green
     // until the user ticks the box in their expand panel.
     bootstrapAcknowledged();
+    // D38 — bulk-expand any ticker that has at least one acked PK so
+    // every row of that ticker gets the same treatment. One-time
+    // migration for pre-D38 state; idempotent on subsequent loads.
+    migrateAcknowledgedToTickerLevel();
+    // D38 — also push the current ack set up to the server so the gate
+    // is populated even if the user hasn't toggled anything this load.
+    syncAckTickersToServer();
     const kpis = aggregate(window.__DATA.rows);
     renderMeta(window.__DATA, kpis);
     renderKpiStrip(kpis);

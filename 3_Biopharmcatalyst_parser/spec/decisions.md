@@ -1872,3 +1872,86 @@ scripts/
 - The bat could `SELECT MAX(finished_at) FROM ingest_log WHERE module='prune'` and print "Last DB prune was X days ago" at the top of every run as a visibility nudge, even when --auto is no-op.
 
 ---
+
+## D38 — Pre-dispatch acknowledged-ticker gate (2026-06-01)
+
+**Trigger:** after the v6 BPC ingest brought 500 new rows + 31 net new rescued catalysts into the Catalyst tab, the user observed that re-running M7 or M8 against the new feed would re-dispatch on tickers they had already reviewed (ticked the ack-toggle in the UI). One Claude call per company is already enough — different drugs of the same ticker don't add new analyst value to the user's workflow.
+
+**Decision:** add a ticker-level gate that sits between candidate selection and Claude dispatch in both M7 (`3_7_deep_dive.py`) and M8 (`3_8_rescue_dispatch.py`), and also in both cost estimators so the cost preview reflects what would actually dispatch. Two behavior changes:
+
+### D38a — Bulk ack at ticker level (JS UI change)
+
+Previously the ack-toggle in each row's expand panel added/removed a single PK (`ticker|drug|nct|type`) to `localStorage.catalyst_acknowledged_v1`. After D38, ticking ANY row for ticker T bulk-acks every other row whose `r.ticker === T`. Same semantics on un-tick: untick one → untick all rows for the ticker.
+
+Implementation in `scripts/3_6_render_scores.py`:
+- `setTickerAck(ticker, isAcked)` iterates `window.__DATA.rows` and toggles every matching PK.
+- The change handler simplifies to `setTickerAck(r.ticker, box.checked)` instead of touching a single PK.
+- `migrateAcknowledgedToTickerLevel()` runs once per page load and expands any ticker with at least one acked PK to ALL rows of that ticker. Handles pre-D38 localStorage cleanly.
+
+### D38b — Server endpoint persists the ack set to disk
+
+The live-price server (`3_7_serve_selection.py`) gains a new `POST /api/save_acknowledged_tickers` endpoint that writes the deduped ticker set to `data/acknowledged_tickers.json`:
+
+```json
+{
+  "saved_at_utc": "2026-06-01T22:30:00+00:00",
+  "tickers": ["AAPL", "BMY", "MRK"]
+}
+```
+
+The JS calls this endpoint debounced (500 ms) after every ack change AND once on page load via `syncAckTickersToServer()`. Bursts of ack-toggles → one HTTP call. file:// mode → silent no-op (no server to hit; the dispatcher just won't filter, which is the safe default).
+
+### D38c — Dispatch-time gate
+
+New module: `src/module_7/gate.py` (~150 lines, pure compute). Public API:
+
+- `load_acknowledged_tickers(path=None) -> frozenset[str]` — reads the JSON file; returns empty set on missing / corrupt / wrong-shape body. **Fails OPEN** so the dispatcher never crashes because of a malformed file.
+- `save_acknowledged_tickers(tickers, path=None)` — atomic via `tmp + rename`; normalises to uppercase + dedupes + sorts before writing.
+- `apply_ticker_gate(candidates, acknowledged) -> (kept, dropped)` — case-insensitive ticker match; defensively keeps candidates with a missing/blank ticker field.
+
+Integration points (4 scripts):
+- `scripts/3_7_deep_dive.py` and `scripts/3_8_rescue_dispatch.py` — apply the gate right after the candidates fetch, before D23 drug-grouping. Print summary line: `[3_7_deep_dive] ack-gate: dropped N catalysts across M reviewed ticker(s) — AAA, BBB, ...`. Exit cleanly if all candidates were gated out.
+- `scripts/3_7_estimate_cost.py` and `scripts/3_8_estimate_cost.py` — apply the same gate so the cost preview matches what the dispatcher would actually do.
+
+**New CLI flag on all four scripts:** `--override-ack-gate`. Bypasses the gate when the user actively wants to re-dispatch on an acknowledged ticker. Default behaviour is to honour the gate.
+
+### Verification
+
+End-to-end test with `data/acknowledged_tickers.json` containing `["ALXO", "TENX"]`:
+
+| Command | Candidates count |
+|---|---:|
+| `3_7_estimate_cost.py` (gate active) | 65 (67 → −2 for ALXO/TENX) |
+| `3_7_estimate_cost.py --override-ack-gate` | 67 |
+
+Difference exactly the two seeded tickers. ✓
+
+### Schema + sample data on disk
+
+```
+data/
+├─ acknowledged_tickers.json   ← NEW (D38) — written by server when JS POSTs
+│     {
+│       "saved_at_utc": "2026-06-01T22:30:00+00:00",
+│       "tickers": ["AAPL", "BMY", ...]
+│     }
+```
+
+File is small (~few KB), gitignored under the existing `data/` rule, never grows unboundedly (it's a flat-set of tickers, not an event log).
+
+### Tests
+
+14 new in `tests/test_module7_gate.py`:
+- `apply_ticker_gate`: empty-ack no-op, basic drop, case-insensitive, multi-drug-per-ticker bulk drop, missing-ticker defensive keep, blank-ticker defensive keep, custom `ticker_key` param
+- `load_acknowledged_tickers`: missing file, corrupt JSON, wrong shape (top-level list instead of object), non-string entries
+- `save_acknowledged_tickers`: round-trip + dedupe + uppercase normalisation, atomic tmp-file cleanup
+
+Total repo: **500 passing** (was 486 + 14 new), 4 skipped. No regressions.
+
+### Future-work signals
+
+- A `--show-ack-list` CLI that prints the current acknowledged ticker set (today: `cat data/acknowledged_tickers.json`).
+- If the user wants per-ticker time-bounded re-review ("re-dispatch tickers I haven't ticked in > 6 months"), the JSON schema could grow a `last_acked_at` timestamp per ticker. Not built yet.
+- The bat could `SELECT COUNT(*) FROM` (or just `wc -l`) the ack file and print "Currently gating N reviewed tickers" at the top of every M7/M8 dispatch step.
+
+---

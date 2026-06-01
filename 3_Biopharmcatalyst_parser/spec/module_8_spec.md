@@ -388,6 +388,14 @@ CING is the standout: sub-$5 stock, 66% p_final, 1-week catalyst — exactly the
 
 A separate audit script (`_tmp_audit_competitor.py` + `_tmp_audit_reverse.py`, deleted after use) compared the BPC + M8 stack against a competitor 14-day catalyst list. Result: our DB covers **~4× more small-cap catalysts** in any given 14-day window. The competitor's apparent depth was concentrated in big-pharma assets that the H1 mcap < $2B gate rejects by design. **Conclusion: stay with BPC + M8 for the small-cap tier.** Audit scripts can be recreated for any future competitor evaluation.
 
+### Pre-dispatch gate (D38) — applies to M8 rescue too
+
+Per [decisions.md § D38](decisions.md), `scripts/3_8_rescue_dispatch.py` (and `3_8_estimate_cost.py`) load `data/acknowledged_tickers.json` after `fetch_rescue_candidates()` and DROP any candidate whose ticker the user has marked as reviewed in the HTML. The gate runs case-insensitively on ticker; M8's drug-group D23 dedup happens AFTER the gate, so a ticker with 5 rescue catalysts → 0 dispatches if the user acked any one of them.
+
+Bypass per-call with `--override-ack-gate`. Empty / missing `data/acknowledged_tickers.json` = no gating.
+
+The cost preview (`3_8_estimate_cost.py`) honours the gate too so the estimate reflects what would actually dispatch. Pass `--override-ack-gate` to the estimator to see the un-gated cost.
+
 ### Retention interaction with M8 data (D37)
 
 Per [decisions.md § D37](decisions.md), `scripts/3_prune_old_data.py` applies quarterly:
