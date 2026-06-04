@@ -40,7 +40,16 @@ def fetch_latest_deep_dive_map(
     *,
     only_snapshot_date: Optional[str] = None,
 ) -> dict[tuple, dict]:
-    """Return ``{(snapshot_date, ticker, drug, nct, type): deep_dive_payload}``.
+    """Return ``{(ticker, drug, nct, type): deep_dive_payload}``.
+
+    D38 (2026-06-04 bug fix): key is now the **catalyst PK without
+    snapshot_date**. Previously we keyed on the full 5-tuple including
+    snapshot_date, which meant that when M6 ingested a new BPC docx and
+    the rolling-view rolled a catalyst forward to a newer snapshot, its
+    prior deep_dive became invisible — same ticker/drug/nct/type, but
+    a different snapshot_date didn't match. Per catalyst PK we keep the
+    deep_dive whose `run_id` is highest (i.e. the most recent dispatch
+    across all snapshots for that catalyst).
 
     The payload is shaped to match the spec's `_data.js::row.deep_dive`
     contract (no raw_text — fetched lazily by the local HTTP server).
@@ -56,7 +65,7 @@ def fetch_latest_deep_dive_map(
         sql = """
         SELECT d.* FROM deep_dives d
         JOIN (
-            SELECT snapshot_date, ticker, drug, nct_number, next_catalyst_type,
+            SELECT ticker, drug, nct_number, next_catalyst_type,
                    MAX(run_id) AS max_run
             FROM deep_dives
         """
@@ -65,9 +74,8 @@ def fetch_latest_deep_dive_map(
             sql += " WHERE snapshot_date = ? "
             params.append(only_snapshot_date)
         sql += """
-            GROUP BY snapshot_date, ticker, drug, nct_number, next_catalyst_type
+            GROUP BY ticker, drug, nct_number, next_catalyst_type
         ) latest ON
-            latest.snapshot_date = d.snapshot_date AND
             latest.ticker = d.ticker AND
             latest.drug = d.drug AND
             latest.nct_number = d.nct_number AND
@@ -80,8 +88,7 @@ def fetch_latest_deep_dive_map(
 
     out: dict[tuple, dict] = {}
     for r in rows:
-        key = (r["snapshot_date"], r["ticker"], r["drug"],
-               r["nct_number"], r["next_catalyst_type"])
+        key = (r["ticker"], r["drug"], r["nct_number"], r["next_catalyst_type"])
         out[key] = {
             "run_id":              r["run_id"],
             "run_completed_at":    r["created_at"],
@@ -154,10 +161,13 @@ def attach_deep_dive_payload(
 ) -> None:
     """Mutate `rows` in place: add `deep_dive` key per row (None when absent).
 
+    D38 (2026-06-04 bug fix): match by (ticker, drug, nct, type) only —
+    NOT including snapshot_date. See `fetch_latest_deep_dive_map` for
+    the rationale.
+
     The renderer feeds the result through `json.dumps`.
     """
     for row in rows:
-        key = (row.get("snapshot_date"), row.get("ticker"),
-               row.get("drug"), row.get("nct_number"),
-               row.get("next_catalyst_type"))
+        key = (row.get("ticker"), row.get("drug"),
+               row.get("nct_number"), row.get("next_catalyst_type"))
         row["deep_dive"] = dd_map.get(key)

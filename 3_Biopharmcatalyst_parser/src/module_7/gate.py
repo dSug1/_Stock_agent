@@ -91,6 +91,53 @@ def save_acknowledged_tickers(
     tmp.replace(p)
 
 
+def collapse_to_one_per_ticker(
+    candidates: list[dict],
+    *,
+    ticker_key: str = "ticker",
+    drug_key: str = "drug",
+) -> tuple[list[dict], list[dict]]:
+    """D38 — collapse multi-drug catalysts down to ONE per ticker.
+
+    Per-ticker selection rule: keep the candidate with the lexicographically
+    smallest `drug` value (deterministic + easy to reason about). Ties on
+    drug fall back to the smallest nct_number, then catalyst type. The
+    user's intent is "one Claude call per company, regardless of how
+    many drugs they have in the pipeline" — D23 by default does one call
+    per (ticker, drug), which can still produce 3-5 calls for big pipelines.
+
+    Returns ``(kept, dropped)`` so the caller can log which drugs were
+    skipped.
+    """
+    by_ticker: dict[str, list[dict]] = {}
+    for c in candidates:
+        t = c.get(ticker_key)
+        if not isinstance(t, str) or not t.strip():
+            # Defensively keep candidates with missing ticker.
+            by_ticker.setdefault("__MISSING__", []).append(c)
+            continue
+        by_ticker.setdefault(t.strip().upper(), []).append(c)
+
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for ticker, rows in by_ticker.items():
+        if ticker == "__MISSING__":
+            kept.extend(rows)
+            continue
+        # Deterministic per-ticker pick.
+        rows_sorted = sorted(
+            rows,
+            key=lambda r: (
+                (r.get(drug_key) or "").upper(),
+                (r.get("nct_number") or "").upper(),
+                (r.get("next_catalyst_type") or "").upper(),
+            ),
+        )
+        kept.append(rows_sorted[0])
+        dropped.extend(rows_sorted[1:])
+    return kept, dropped
+
+
 def apply_ticker_gate(
     candidates: list[dict],
     acknowledged: frozenset[str] | set[str],

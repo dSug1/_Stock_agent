@@ -62,6 +62,9 @@ def main() -> int:
     parser.add_argument("--override-ack-gate", action="store_true",
                         help="D38 — bypass the acknowledged-ticker gate when "
                              "estimating; useful to see the un-gated cost.")
+    parser.add_argument("--one-drug-per-ticker", action="store_true",
+                        help="D38 — mirror the dispatcher's same-named flag so "
+                             "the cost preview reflects what would actually run.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(
@@ -103,6 +106,14 @@ def main() -> int:
             if not candidates:
                 print("[3_8_estimate_cost] all candidates gated out; nothing to estimate.")
                 return 0
+
+    if args.one_drug_per_ticker:
+        from module_7.gate import collapse_to_one_per_ticker
+        kept, dropped = collapse_to_one_per_ticker(candidates)
+        if dropped:
+            print(f"[3_8_estimate_cost] --one-drug-per-ticker: dropped {len(dropped)} "
+                  f"extra drug-rows ({len({d['ticker'] for d in dropped})} tickers)")
+        candidates = kept
     by_class: dict[str, int] = {}
     for c in candidates:
         k = c.get("rescue_class") or "?"

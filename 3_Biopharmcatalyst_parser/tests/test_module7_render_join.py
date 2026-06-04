@@ -60,7 +60,8 @@ def test_returns_one_row(tmp_path):
     with db_connect(tmp_path / "dd.db") as cx:
         _write(cx)
     out = fetch_latest_deep_dive_map(tmp_path / "dd.db")
-    key = ("2026-05-28", "TCRX", "TX45", "NCT99000001", "Topline Data")
+    # D38 bug fix (2026-06-04) — key dropped snapshot_date.
+    key = ("TCRX", "TX45", "NCT99000001", "Topline Data")
     assert key in out
     assert out[key]["p_final"] == 0.49
     assert out[key]["expectancy_per_week_pct"] == 1.8
@@ -71,7 +72,7 @@ def test_decodes_json_blocks(tmp_path):
     with db_connect(tmp_path / "dd.db") as cx:
         _write(cx)
     out = fetch_latest_deep_dive_map(tmp_path / "dd.db")
-    key = ("2026-05-28", "TCRX", "TX45", "NCT99000001", "Topline Data")
+    key = ("TCRX", "TX45", "NCT99000001", "Topline Data")
     dd = out[key]
     # rnpv_by_indication must be a parsed list, not raw JSON text
     assert isinstance(dd["rnpv_by_indication"], list)
@@ -88,12 +89,15 @@ def test_picks_max_run_id_per_pk(tmp_path):
         _write(cx, run_id=3, p_final=0.50)
         _write(cx, run_id=2, p_final=0.45)
     out = fetch_latest_deep_dive_map(tmp_path / "dd.db")
-    key = ("2026-05-28", "TCRX", "TX45", "NCT99000001", "Topline Data")
+    key = ("TCRX", "TX45", "NCT99000001", "Topline Data")
     assert out[key]["run_id"] == 3
     assert out[key]["p_final"] == 0.50
 
 
 def test_only_snapshot_date_filter(tmp_path):
+    """The only_snapshot_date arg still filters the SOURCE rows; the
+    resulting map's keys no longer carry snapshot_date though (D38 fix).
+    """
     init_deep_dives_db(tmp_path / "dd.db")
     with db_connect(tmp_path / "dd.db") as cx:
         _write(cx, snapshot_date="2026-05-27")
@@ -102,7 +106,35 @@ def test_only_snapshot_date_filter(tmp_path):
         tmp_path / "dd.db", only_snapshot_date="2026-05-28",
     )
     assert len(only) == 1
-    assert list(only.keys())[0][0] == "2026-05-28"
+    # Key is a 4-tuple now; snapshot_date isn't in it but the underlying
+    # row IS from 2026-05-28 per the filter.
+    key = next(iter(only.keys()))
+    assert len(key) == 4
+
+
+def test_pk_match_works_across_different_snapshot_dates(tmp_path):
+    """D38 bug-fix regression test (2026-06-04).
+
+    A deep_dive written with snapshot_date X must be discoverable from a
+    catalyst_scores rolling-view row at snapshot_date Y, as long as the
+    (ticker, drug, nct, type) PK matches. Reproduces the v6-ingest bug
+    where prior snapshots' deep_dives went dark after the new snapshot
+    rolled the rolling-view forward.
+    """
+    init_deep_dives_db(tmp_path / "dd.db")
+    with db_connect(tmp_path / "dd.db") as cx:
+        _write(cx, snapshot_date="2026-05-28", run_id=4, p_final=0.50)
+    dd_map = fetch_latest_deep_dive_map(tmp_path / "dd.db")
+    # Render-time row at a DIFFERENT snapshot_date but same PK.
+    rows = [{
+        "snapshot_date": "2026-06-01",  # newer snapshot
+        "ticker": "TCRX", "drug": "TX45",
+        "nct_number": "NCT99000001",
+        "next_catalyst_type": "Topline Data",
+    }]
+    attach_deep_dive_payload(rows, dd_map)
+    assert rows[0]["deep_dive"] is not None, "deep_dive should follow PK regardless of snapshot_date"
+    assert rows[0]["deep_dive"]["p_final"] == 0.50
 
 
 def test_raw_text_NOT_in_payload(tmp_path):

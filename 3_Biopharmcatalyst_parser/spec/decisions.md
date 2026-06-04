@@ -1954,4 +1954,26 @@ Total repo: **500 passing** (was 486 + 14 new), 4 skipped. No regressions.
 - If the user wants per-ticker time-bounded re-review ("re-dispatch tickers I haven't ticked in > 6 months"), the JSON schema could grow a `last_acked_at` timestamp per ticker. Not built yet.
 - The bat could `SELECT COUNT(*) FROM` (or just `wc -l`) the ack file and print "Currently gating N reviewed tickers" at the top of every M7/M8 dispatch step.
 
+### D38 (2026-06-04) follow-up — `--one-drug-per-ticker` + render_join bug fix
+
+Two changes landed when the user asked to run M7 on "all green-highlighted tickers, only for those":
+
+**1. `--one-drug-per-ticker` flag.** Added to all four dispatch + estimator scripts. New helper in `module_7/gate.py::collapse_to_one_per_ticker` deterministically picks the smallest-named drug per ticker (tie-break: nct_number, then catalyst type). User intent: one Claude call per company, not D23's default of one per (ticker, drug). For tickers like GTBP / INAB / SION that BPC lists with 2+ drugs, this halves the per-ticker cost without losing coverage of the company.
+
+**2. Render-join snapshot-mismatch bug.** `src/module_7/render_join.py::fetch_latest_deep_dive_map` had been keying by `(snapshot_date, ticker, drug, nct, type)` since D16. When v6 BPC ingest moved catalysts to snapshot_date=2026-06-01, the older deep_dives (dispatch-time snapshot 2026-05-28) became invisible — same PK but different snapshot_date didn't match. **Fix:** drop snapshot_date from the join key. Per-PK retention rule becomes "the deep_dive with the highest run_id wins" (same intent, just no longer accidentally segmented by snapshot_date).
+
+**Measured impact of the fix on the live DB:**
+- Un-acked rows on the Catalyst tab: **42 of 43** now show their existing Claude analysis (was 3).
+- Full Catalyst tab: 276 of 306 rows show deep_dive (was ~30).
+- Sidecar grew 1.3 MB → 3.7 MB to carry the previously-stranded analyses.
+
+**Regression test:** `tests/test_module7_render_join.py::test_pk_match_works_across_different_snapshot_dates` writes a deep_dive at snapshot X and asserts the renderer finds it from a catalyst_scores row at snapshot Y (same PK).
+
+**Dispatch runs that landed during this work:**
+- Run #8 (M7): 4 hard-pass un-acked tickers, $0.16 actual.
+- Run #9 (M8): 9 fresh + 24 cache-hits across 33 candidates after gate + collapse. 7/9 parsed, 2 catalyst_already_passed (IRWD + LTRN — real signal). $0.37 actual.
+- Best new picks: **SABS** (Type 1 Diabetes, B-class, p=0.63, +5.0%/wk), MNPR (Wilson disease, p=0.88).
+
+**Tests:** 501 passing (was 500; +1 regression test, 4 updated for the new key shape), 4 skipped.
+
 ---

@@ -214,6 +214,12 @@ def main() -> int:
                              "gate. By default any ticker the user has ticked "
                              "off in the HTML (`data/acknowledged_tickers.json`) "
                              "is dropped from the candidate set without spending.")
+    parser.add_argument("--one-drug-per-ticker", action="store_true",
+                        help="D38 — collapse multi-drug catalysts to a single "
+                             "candidate per ticker (deterministic: smallest "
+                             "drug name alphabetically). Use when one Claude "
+                             "call per company is enough, rather than D23's "
+                             "default of one per (ticker, drug).")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -327,6 +333,24 @@ def main() -> int:
             if not candidates:
                 print("[3_7_deep_dive] all candidates gated out by ack-set; exiting.")
                 return 0
+
+    # D38 — optional collapse to one drug per ticker.
+    if args.one_drug_per_ticker:
+        from module_7.gate import collapse_to_one_per_ticker
+        kept, dropped = collapse_to_one_per_ticker(candidates)
+        if dropped:
+            by_ticker_dropped: dict[str, list[str]] = {}
+            for d in dropped:
+                by_ticker_dropped.setdefault(d["ticker"], []).append(d.get("drug") or "")
+            tickers_summary = [
+                f"{t} ({len(drugs)})"
+                for t, drugs in sorted(by_ticker_dropped.items())
+            ][:5]
+            print(f"[3_7_deep_dive] --one-drug-per-ticker: dropped {len(dropped)} "
+                  f"extra drug-rows across {len(by_ticker_dropped)} ticker(s) "
+                  f"{', '.join(tickers_summary)}"
+                  + (f", ..." if len(by_ticker_dropped) > 5 else ""))
+        candidates = kept
 
     # D25 — refresh live yfinance prices for every candidate ticker so the
     # pack Claude sees carries the LATEST share price (not the M6.5

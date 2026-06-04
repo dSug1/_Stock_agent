@@ -180,6 +180,11 @@ def main() -> int:
                              "gate. By default any ticker the user has ticked "
                              "off in the HTML (`data/acknowledged_tickers.json`) "
                              "is dropped from the candidate set without spending.")
+    parser.add_argument("--one-drug-per-ticker", action="store_true",
+                        help="D38 — collapse multi-drug catalysts to a single "
+                             "candidate per ticker (deterministic: smallest "
+                             "drug name alphabetically). Use when one Claude "
+                             "call per company is enough.")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -278,6 +283,14 @@ def main() -> int:
             if not candidates:
                 print("[3_8_rescue_dispatch] all candidates gated out by ack-set; exiting.")
                 return 0
+
+    if args.one_drug_per_ticker:
+        from module_7.gate import collapse_to_one_per_ticker
+        kept, dropped = collapse_to_one_per_ticker(candidates)
+        if dropped:
+            print(f"[3_8_rescue_dispatch] --one-drug-per-ticker: dropped {len(dropped)} "
+                  f"extra drug-rows ({len({d['ticker'] for d in dropped})} tickers)")
+        candidates = kept
 
     candidate_tickers = sorted({c["ticker"] for c in candidates})
     print(f"[3_8_rescue_dispatch] refreshing live prices for {len(candidate_tickers)} ticker(s)…")
