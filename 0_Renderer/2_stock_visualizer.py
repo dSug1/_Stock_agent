@@ -7,12 +7,13 @@ Features
 --------
 - Accepts ticker symbol OR company legal name (resolved via Yahoo Finance search API)
 - Granularity auto-selected based on requested time period
-- Per-ticker JSON cache in _outputs/cache/{TICKER}.json
+- SQLite cache in _outputs/cache/prices.db (tables: meta, bars, period_fetch)
   · metadata refreshed weekly (company name, sector, exchange …)
   · price data refreshed per-interval TTL; every 6 s during market hours
+  · bars keyed by (ticker, interval, t) and shared across periods at the same interval
 - One static HTML template in _outputs/templates/1_chart_template.html
 - Browser chart (TradingView Lightweight Charts) auto-scales axes
-- Live poll every 6 s only when US market is open
+- Live poll every 6 s only when the exchange is open
 
 Usage
 -----
@@ -53,6 +54,18 @@ PERIOD_INTERVAL: dict[str, str] = {
 }
 
 VALID_PERIODS = list(PERIOD_INTERVAL.keys())
+
+# Market-closed fallback. yfinance frequently returns an EMPTY frame for an
+# intraday request whose period is "today" (e.g. period="1d", interval="1m")
+# when the market is closed / pre-open — there is no current session to return.
+# When that happens we retry with a wider window so the most recent *prior*
+# session's bars are still captured. The frontend anchors on the last session
+# and shows its final bar as the price, i.e. the previous market close.
+INTRADAY_FALLBACK_PERIOD: dict[str, str] = {
+    "1m":  "5d",    # 1m history is limited to ~7 days upstream
+    "5m":  "1mo",
+    "1h":  "3mo",
+}
 
 # Cache TTL per interval (seconds).
 # During market hours the 1m/5m/1h intervals use 6 s TTL to drive live updates.
@@ -183,7 +196,11 @@ DB_PATH = CACHE_DIR / "prices.db"
 # Approximate window per period — used as a lower bound when serving bars.
 # Generous buffers absorb yfinance's slightly inclusive date semantics.
 PERIOD_WINDOW_DAYS: dict[str, float | None] = {
-    "1d":  2,
+    "1d":  5,    # ≥ a 3-day holiday weekend, so the last session is always in
+                 # range when launching during a market-closed stretch. The
+                 # frontend anchors on the last bar's session, so the extra
+                 # trailing days never change what's drawn — they only keep the
+                 # previous close reachable.
     "5d":  10,
     "1mo": 40,
     "3mo": 100,
@@ -274,7 +291,10 @@ def db_set_meta(meta: dict) -> None:
 
 
 def db_get_bars(ticker: str, interval: str, since_unix: int | None) -> list[dict]:
-    sql = "SELECT t, o, h, l, c, v FROM bars WHERE ticker=? AND interval=?"
+    # `c IS NOT NULL` skips any NaN/NULL bars that an older build may have
+    # written before _df_to_records dropped them — those would crash the
+    # chart's last.c.toFixed() on the client. (See D18.)
+    sql = "SELECT t, o, h, l, c, v FROM bars WHERE ticker=? AND interval=? AND c IS NOT NULL"
     args: list = [ticker, interval]
     if since_unix is not None:
         sql += " AND t >= ?"
@@ -396,13 +416,20 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
             unix_ts = _to_unix(raw_ts)
         except Exception:
             continue
-        o = float(row.get("Open",  0) or 0)
-        h = float(row.get("High",  0) or 0)
-        l = float(row.get("Low",   0) or 0)
-        c = float(row.get("Close", 0) or 0)
-        v = int(row.get("Volume",  0) or 0)
+        o = row.get("Open"); h = row.get("High")
+        l = row.get("Low");  c = row.get("Close")
+        # Drop rows with no real trade. yfinance emits a trailing row for the
+        # current (incomplete) daily/weekly/monthly period with NaN OHLC when
+        # the market is closed. NaN closes used to slip through (NaN != 0), get
+        # stored as SQLite NULL, and crash the chart's last.c.toFixed(). Skip
+        # any row whose OHLC isn't fully finite.
+        if any(pd.isna(x) for x in (o, h, l, c)):
+            continue
+        o = float(o); h = float(h); l = float(l); c = float(c)
         if c == 0:
             continue
+        raw_v = row.get("Volume", 0)
+        v = 0 if pd.isna(raw_v) else int(raw_v)
         records.append({"t": unix_ts,
                         "o": round(o, 4), "h": round(h, 4),
                         "l": round(l, 4), "c": round(c, 4),
@@ -411,10 +438,23 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
 
 
 def fetch_prices(ticker: str, period: str, interval: str) -> list[dict]:
-    """Download OHLCV bars for one ticker. Returns record dicts."""
-    return _df_to_records(yf.Ticker(ticker).history(
+    """Download OHLCV bars for one ticker. Returns record dicts.
+
+    If an intraday request comes back empty (market closed / pre-open), retry
+    once with a wider window (INTRADAY_FALLBACK_PERIOD) so the last session's
+    bars are still returned — otherwise the chart has nothing to show and the
+    price reads 0.00 until the user manually switches periods.
+    """
+    recs = _df_to_records(yf.Ticker(ticker).history(
         period=period, interval=interval, auto_adjust=True
     ))
+    if not recs:
+        fb = INTRADAY_FALLBACK_PERIOD.get(interval)
+        if fb and fb != period:
+            recs = _df_to_records(yf.Ticker(ticker).history(
+                period=fb, interval=interval, auto_adjust=True
+            ))
+    return recs
 
 
 def fetch_prices_batch(tickers: list[str], period: str, interval: str) -> dict[str, list[dict]]:
@@ -439,6 +479,15 @@ def fetch_prices_batch(tickers: list[str], period: str, interval: str) -> dict[s
             out[t] = _df_to_records(df[t].dropna(how="all"))
         except Exception:
             out[t] = []
+    # Market-closed fallback (mirrors fetch_prices): any ticker that returned
+    # no intraday bars is re-fetched over a wider window so the last session is
+    # still captured. Recurses with the wider period, which terminates because
+    # the fallback period maps to itself (fb == period → no further retry).
+    fb = INTRADAY_FALLBACK_PERIOD.get(interval)
+    if fb and fb != period:
+        empties = [t for t in tickers if not out.get(t)]
+        if empties:
+            out.update(fetch_prices_batch(empties, fb, interval))
     return out
 
 

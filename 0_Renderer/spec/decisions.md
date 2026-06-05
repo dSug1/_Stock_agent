@@ -4,7 +4,7 @@
 
 **Update discipline.** At the end of any non-trivial change: if something was calibrated, renamed, newly introduced, or deviates from spec, append or revise the relevant entry with a link to the code line of record (`[file:NN](../file#L<n>)`).
 
-**Last updated:** 2026-04-24 (spec folder bootstrapped; entries D1–D11 captured from existing code and chat history).
+**Last updated:** 2026-06-05 (added **D17** — market-closed launch shows the previous close, not 0.00 — and **D18** — drop NaN bars that crashed 3mo+ charts at market close — and re-synced every `2_stock_visualizer.py` / `index.html` / `1_chart_template.html` line anchor against live code; see handoff §7/§11). Prior: 2026-04-24 (spec folder bootstrapped; entries D1–D11 captured from existing code and chat history).
 
 ---
 
@@ -28,7 +28,7 @@
 
 **How it's tracked.** `period_fetch(ticker, period, fetched_at)` records freshness per-period, not per-bar. `db_mark_period_fresh()` walks `PERIOD_ORDER` and marks every shorter-or-equal period at the same interval as fresh when the longer one returns.
 
-**Where:** [2_stock_visualizer.py:312-327](../2_stock_visualizer.py#L312) `db_mark_period_fresh()`; [2_stock_visualizer.py:216-221](../2_stock_visualizer.py#L216) bars table schema.
+**Where:** [2_stock_visualizer.py:332-347](../2_stock_visualizer.py#L332) `db_mark_period_fresh()`; [2_stock_visualizer.py:230-236](../2_stock_visualizer.py#L230) bars table schema.
 
 ---
 
@@ -38,7 +38,7 @@
 
 **Why.** The chart iframe polls `/api/data` every 6 s during market hours. Without a matching TTL, every poll would hit yfinance, which is unfriendly and slow. With the 6-s TTL, the second poll inside a 6-s window returns cached data instantly.
 
-**Where:** [2_stock_visualizer.py:469-473](../2_stock_visualizer.py#L469) `_effective_ttl()`.
+**Where:** [2_stock_visualizer.py:518-522](../2_stock_visualizer.py#L518) `_effective_ttl()`.
 
 ---
 
@@ -52,7 +52,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Implementation.** `/api/data_batch?mode=swr` short-circuits all fetches. Tickers with no cache row are omitted from the response (not `None`). The frontend notices the omission and re-requests only those tickers in fresh mode.
 
-**Where:** [2_stock_visualizer.py:529-540](../2_stock_visualizer.py#L529) (SWR branch of `get_chart_data_batch`); frontend consumer in [index.html](../index.html) period-button handler around line 2740.
+**Where:** [2_stock_visualizer.py:578-589](../2_stock_visualizer.py#L578) (SWR branch of `get_chart_data_batch`); frontend consumer in [index.html](../index.html) period-button handler `broadcastPeriodWithBatch()` around line 2885.
 
 ---
 
@@ -66,7 +66,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 - Filter `records` to only bars with `t >= sessionOpenEpoch` before building candles / line / volume series.
 - % baseline for 1D is `prevClose1d` if available, else `first.o` (new-install fallback).
 
-**Where:** [1_chart_template.html:870-884](../_outputs/templates/1_chart_template.html#L870) (session anchor + filter); [1_chart_template.html:906-913](../_outputs/templates/1_chart_template.html#L906) (% baseline in on-chart panel); matching block in the parent broadcast ~line 950.
+**Where:** [1_chart_template.html:855-867](../_outputs/templates/1_chart_template.html#L855) (session anchor + filter); [1_chart_template.html:920](../_outputs/templates/1_chart_template.html#L920) (% baseline in on-chart panel); matching block in the price-info broadcast ~line 961.
 
 **Alternative considered.** Shrink `PERIOD_WINDOW_DAYS["1d"]` to less than 1 day server-side. Rejected: it would fail over weekends and holidays when the most recent session may be ≥2 calendar days old.
 
@@ -82,7 +82,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Browser side.** The calibrated offset is published via `/api/time_info`. The frontend calibrates `Date.now()` once at load and computes `isMarketOpenNow()` locally — no round-trip per poll.
 
-**Where:** [2_stock_visualizer.py:99-149](../2_stock_visualizer.py#L99).
+**Where:** [2_stock_visualizer.py:112-162](../2_stock_visualizer.py#L112).
 
 ---
 
@@ -104,7 +104,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Decision.** Before serializing, sort the ring by `atan2(worldPos.z − center.z, worldPos.x − center.x)`. What is persisted is the sequence the user **sees** going around the ring, not the internal array order.
 
-**Where:** [index.html:1247-1265](../index.html#L1247) `persistSession()`.
+**Where:** [index.html:1286](../index.html#L1286) `persistSession()`.
 
 ---
 
@@ -116,7 +116,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Rebuild triggers.** Beyond gen/closest changes, a rebuild is also forced when the sort-mode signature changes (for `percent` sort) and when `←/→` swaps a billboard (which otherwise wouldn't change gen or closest).
 
-**Where:** [index.html:2016](../index.html#L2016) `buildTickerListRows()`; rebuild trigger on swap at [index.html:3329-3333](../index.html#L3329) added 2026-04-24.
+**Where:** [index.html:2057](../index.html#L2057) `buildTickerListRows()`; rebuild trigger on swap at [index.html:3414](../index.html#L3414) added 2026-04-24.
 
 ---
 
@@ -140,13 +140,13 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Why not a new `sv-target2` message.** A single message guarantees both values are updated atomically; there's no window where target1 is fresh and target2 is stale.
 
-**Where:** broadcast at [index.html:2364-2372](../index.html#L2364) `broadcastTargetPrice()`; consumer at [1_chart_template.html:1033-1040](../_outputs/templates/1_chart_template.html#L1033).
+**Where:** broadcast at [index.html:2425](../index.html#L2425) `broadcastTargetPrice()`; consumer at [1_chart_template.html:1068](../_outputs/templates/1_chart_template.html#L1068).
 
 ---
 
 ## D12 — Hard-coded port 5000
 
-**Rule.** `PORT = 5000` in [2_stock_visualizer.py:761](../2_stock_visualizer.py#L761). No CLI flag, no env var.
+**Rule.** `PORT = 5000` in [2_stock_visualizer.py:810](../2_stock_visualizer.py#L810). No CLI flag, no env var.
 
 **Why it's acceptable.** Local personal tool, one instance at a time, no conflict concern.
 
@@ -174,11 +174,11 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Fix.** Before removing the row, call `inputEl.blur()` and `window.getSelection()?.removeAllRanges()`. Same two steps applied to the stale-entry cleanup path in `buildTickerListRows()` (so a billboard removed from the ring while its input is focused doesn't leak a caret).
 
-**Where:** [index.html:2287-2302](../index.html#L2287) `toggleMarkerInputRow()`; [index.html:2076-2086](../index.html#L2076) stale-entry loop in `buildTickerListRows()`.
+**Where:** [index.html:2340](../index.html#L2340) `toggleMarkerInputRow()`; [index.html:2123](../index.html#L2123) stale-entry loop in `buildTickerListRows()`.
 
 **Invariant for future changes.** Any code path that removes a focused input from the DOM must blur it first and clear the window selection. Treat `input.select()` as leaving residue; pair it with an explicit cleanup on close.
 
-**Extended 2026-04-24** to the state-2 entry-target inputs (`.cb-target-input` inside `#chat-body`). Same bug class: every state-2 exit path (`chat-state-btn` close, `chat-back-btn` to state 1, giraffe `ticker-go` toggle, and the closest-ticker flip inside `updateTickerDetail` that calls `$chatBody.replaceChildren()`) now funnels through a shared helper `clearChatBodyCaret()` that blurs the focused descendant and clears window selection before the DOM mutation or class flip happens. Helper at [index.html:2732-2742](../index.html#L2732); call sites at [index.html:2744](../index.html#L2744), [2752](../index.html#L2752), [2781](../index.html#L2781), [2555](../index.html#L2555).
+**Extended 2026-04-24** to the state-2 entry-target inputs (`.cb-target-input` inside `#chat-body`). Same bug class: every state-2 exit path (`chat-state-btn` close, `chat-back-btn` to state 1, giraffe `ticker-go` toggle, and the closest-ticker flip inside `updateTickerDetail` that calls `$chatBody.replaceChildren()`) now funnels through a shared helper `clearChatBodyCaret()` that blurs the focused descendant and clears window selection before the DOM mutation or class flip happens. Helper at [index.html:2742](../index.html#L2742); call sites at [index.html:2554](../index.html#L2554), [2751](../index.html#L2751), [2760](../index.html#L2760), [2785](../index.html#L2785).
 
 **Generalised invariant.** When hiding or rebuilding any panel that may contain a focused text input, call the matching `clear*Caret()` helper *before* the DOM / class mutation. Removing the input after it has lost focus is safe; removing it while focused — or hiding its container with focus still inside — can leak a phantom caret on Chromium.
 
@@ -195,7 +195,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 - `updateBillboardProjection()` still computes `_closestInteractive` from camera distance, then **overrides** it with `_clickOrbitTarget` while a rotation is in flight. This makes `_closestInteractive` an "intent-aware" pointer: what the UI should be anchored on *right now*, not strictly what's geometrically closest.
 - `buildTickerListRows()` marks `.closest` by **identity** (`bb === _closestInteractive`) instead of visual position. In default sort mode the two are equivalent (closest sorts to index 0); in percent-sort mode the identity check keeps state 2 showing the correct billboard.
 
-**Where:** [index.html:3479-3492](../index.html#L3479) (`updateBillboardProjection()` override block); [index.html:2149-2155](../index.html#L2149) (`.closest` identity check in `buildTickerListRows()`).
+**Where:** [index.html:3578](../index.html#L3578) (`updateBillboardProjection()` override block); [index.html:2207](../index.html#L2207) (`.closest` identity check in `buildTickerListRows()`).
 
 **Invariant for future changes.** `_closestInteractive` is the single source of truth for "which billboard does the UI represent". Any new UI surface that needs to track the selected billboard must read `_closestInteractive`, not re-derive from distance or from ticker-list row position.
 
@@ -225,11 +225,97 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 **Alternative considered:** storing source on the billboard object rather than in localStorage. Rejected — billboards are transient UI objects rebuilt from `ringTickers`; storage must outlive them.
 
 **Where:**
-- Enum + helpers: [index.html:1103-1131](../index.html#L1103) (`TICKER_SOURCE`, `getTickerSource`, `markTickerManual`, `markTickerAuto`).
-- Initial-ring bootstrap: [index.html:1213-1224](../index.html#L1213).
-- Go handler: [index.html:2969-2984](../index.html#L2969).
-- CSS: [index.html:760-766](../index.html#L760) (`.source-auto` rule).
-- Ticker-list render: [index.html:2286-2293](../index.html#L2286) (dirty-check + class toggle).
-- Price-overlay render: [index.html:1987-1990](../index.html#L1987).
+- Enum + helpers: [index.html:1118-1135](../index.html#L1118) (`TICKER_SOURCE`, `getTickerSource`, `markTickerManual`, `markTickerAuto`).
+- Initial-ring bootstrap: [index.html:1255-1259](../index.html#L1255).
+- Go handler: [index.html:3014](../index.html#L3014).
+- CSS: [index.html:759-763](../index.html#L759) (`.source-auto` rule).
+- Ticker-list render: [index.html:2296](../index.html#L2296) (dirty-check + class toggle).
+- Price-overlay render: [index.html:1991](../index.html#L1991).
 
 **Future integration.** When the auto-ingest script ships, it should call `markTickerAuto(symbol)` for every ticker it adds. It must NOT call `markTickerManual`, and it must NOT bypass the helpers and write to localStorage directly — both would defeat the user-action-wins policy.
+
+---
+
+## D17 — Market-closed launch must show the previous close, not 0.00 (2026-06-05)
+
+**Symptom.** Launching the app while the market is closed showed a blank / `0.00` price on every
+billboard. The price only appeared after the user manually clicked a *different* period — which then
+displayed correctly.
+
+**Root cause (three compounding factors).**
+1. The parent does **not** batch-fetch on initial load; each iframe self-loads via `loadChart()` using its
+   `src` query params, which default to **period `1d` / interval `1m`**.
+2. yfinance's `history(period="1d", interval="1m")` returns an **empty** frame when there is no *current*
+   session (market closed / pre-open). So the fresh fetch returned `[]`, nothing was cached, and the chart
+   had no bars. Clicking another period (`5d`, `1mo`, …) requests a window yfinance *does* return even when
+   closed — hence the "switch period to fix it" workaround.
+3. Even when prior-session 1m bars were cached, the `1d` serving window was only **2 days**, so the last
+   session fell out of range over a weekend / holiday.
+
+**Decision.**
+- **Intraday empty-fetch fallback.** `fetch_prices()` / `fetch_prices_batch()` retry once with a wider
+  window (`INTRADAY_FALLBACK_PERIOD = {1m:"5d", 5m:"1mo", 1h:"3mo"}`) whenever an intraday request comes back
+  empty. The frontend already anchors on the last bar's session (D5), so the extra bars don't change the
+  drawing — they just make the last session (and thus the previous close) available.
+- **Widen `PERIOD_WINDOW_DAYS["1d"]` 2 → 5.** Covers a 3-day holiday weekend so the previous session is
+  always in the serving window.
+- **Relax the chart price-panel guard `records.length >= 2` → `>= 1`.** A closed-market session can collapse
+  to a single visible bar; we still render its close (with `first` falling back to `last` for the % math)
+  instead of leaving the panel blank.
+
+Together these mean the **launch path now renders the previous close immediately** — no manual period
+switch needed.
+
+**Why fallback + window, not just one.** The fallback gets the bars *into* the cache; the wider window keeps
+them *reachable* when serving `1d` after a multi-day gap. Either alone leaves a hole (fresh-empty cache, or
+post-weekend launch respectively).
+
+**Termination.** `fetch_prices_batch()` recurses with the fallback period; it terminates because the
+fallback period maps to itself for that interval (`fb == period` → no further retry).
+
+**Trade-off.** Market-hours `1d` polls can now return up to 5 days of cached 1m bars instead of 2. On
+localhost the payload delta (~1–2k small rows) is negligible; the frontend filters to the last session
+regardless.
+
+**Where:** [2_stock_visualizer.py:64](../2_stock_visualizer.py#L64) `INTRADAY_FALLBACK_PERIOD`;
+[2_stock_visualizer.py:452](../2_stock_visualizer.py#L452) `fetch_prices()` fallback;
+[2_stock_visualizer.py:486](../2_stock_visualizer.py#L486) `fetch_prices_batch()` fallback;
+[2_stock_visualizer.py:199](../2_stock_visualizer.py#L199) `PERIOD_WINDOW_DAYS["1d"]`;
+[1_chart_template.html:925](../_outputs/templates/1_chart_template.html#L925) and
+[1_chart_template.html:966](../_outputs/templates/1_chart_template.html#L966) (price-panel + broadcast guards).
+
+---
+
+## D18 — Drop NaN bars: yfinance's incomplete-period row crashed the chart at market close (2026-06-05)
+
+**Symptom.** With the market closed, switching to **3mo or any longer period** (intervals `1d` / `1wk` /
+`1mo`) threw `Failed to render: Cannot read properties of null (reading 'toFixed')`. Intraday periods
+(`1d` / `5d` / `1mo`) were unaffected.
+
+**Root cause.** For a daily/weekly/monthly request, yfinance appends a row for the **current, incomplete
+period** (today / this week / this month). When that period hasn't traded yet (market closed / pre-open) its
+OHLC are `NaN`. `_df_to_records` only skipped `c == 0`, and `NaN != 0`, so the row slipped through:
+`float(row["Close"]) → nan` → `round(nan,4) → nan` → `db_upsert_bars` writes it → **SQLite coerces NaN to
+NULL** → `db_get_bars` returns `c = None` → JSON `null` → the client's `last.c.toFixed(2)` throws. Intraday
+intervals don't emit a NaN trailing row (yfinance just omits future bars), which is why only 3mo+ broke.
+
+**Decision — defence in depth (3 layers).**
+1. **Ingest filter.** `_df_to_records()` skips any row whose O/H/L/C isn't fully finite (`pd.isna`), and
+   coerces a NaN volume to 0. No NaN/NULL bar is ever written again.
+2. **Serve filter.** `db_get_bars()` adds `AND c IS NOT NULL`, so NULL rows an **older build already wrote**
+   into a user's `prices.db` are ignored rather than served. (They remain as harmless dead rows; the next
+   fresh fetch simply doesn't re-emit them.)
+3. **Client guard.** `renderChart()` filters `data.records` to finite-close bars before use, so no malformed
+   payload from any source can reach `toFixed`.
+
+**Why all three.** #1 stops the bleak going forward; #2 neutralises caches already polluted by the old code
+(the committed `prices.db` had such rows); #3 is a cheap last line so the chart can never crash on bar data
+again. Any one alone leaves a gap (existing NULLs, or a future provider with the same quirk).
+
+**Interaction with the swap surface (§11).** A future licensed-provider swap must keep emitting only finite
+bars (or rely on filter #2/#3). The cleaning lives in `_df_to_records`, shared by `fetch_prices` /
+`fetch_prices_batch`.
+
+**Where:** [2_stock_visualizer.py:408](../2_stock_visualizer.py#L408) `_df_to_records()` NaN skip;
+[2_stock_visualizer.py:293](../2_stock_visualizer.py#L293) `db_get_bars()` `c IS NOT NULL`;
+[1_chart_template.html:846](../_outputs/templates/1_chart_template.html#L846) `renderChart()` finite-close filter.

@@ -839,7 +839,12 @@ async function loadChart() {
 
 function renderChart(data) {
   const { meta, interval, fetched_at, market_open, exchange_schedule } = data;
-  let records = data.records;
+  // Drop any bar with a non-finite close. A NaN/None close (yfinance's trailing
+  // incomplete-period row at market close) would otherwise reach last.c.toFixed()
+  // and throw "Cannot read properties of null". Belt-and-suspenders with the
+  // server-side filters (see decisions D18).
+  let records = (data.records || []).filter(
+    r => r && typeof r.c === "number" && isFinite(r.c));
 
   // Keep exchange schedule in sync — used by isMarketOpenNow() between polls
   if (exchange_schedule) {
@@ -914,7 +919,10 @@ function renderChart(data) {
   setTimeout(() => { _ignoreRangeChange = false; }, 250);
 
   // ── Price panel ───────────────────────────────────────────────────────────
-  if (records.length >= 2) {
+  // >= 1 (not >= 2): when the market is closed the last session may collapse
+  // to a single visible bar; we still want its close shown as the price rather
+  // than a blank/0.00. `first` falls back to `last` so the % math stays sane.
+  if (records.length >= 1) {
     const last  = records[records.length - 1];
     const first = records[0];
     const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
@@ -955,7 +963,7 @@ function renderChart(data) {
   }
 
   // Broadcast price info to parent so the fixed overlay can display it.
-  if (window.parent !== window && records.length >= 2) {
+  if (window.parent !== window && records.length >= 1) {
     const last  = records[records.length - 1];
     const first = records[0];
     const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;

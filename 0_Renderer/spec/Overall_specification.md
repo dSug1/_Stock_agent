@@ -128,7 +128,7 @@ Index: `idx_bars_lookup` on `(ticker, interval, t)`.
 
 ### 4.3 Period → interval mapping
 
-Defined by `PERIOD_INTERVAL` in [2_stock_visualizer.py:43-53](../2_stock_visualizer.py#L43):
+Defined by `PERIOD_INTERVAL` in [2_stock_visualizer.py:44-54](../2_stock_visualizer.py#L44):
 
 | Period | Interval | Notes |
 |---|---|---|
@@ -146,7 +146,7 @@ Bars are **keyed by interval**, not by period. Fetching `1y @ 1d` automatically 
 
 ### 4.4 TTLs
 
-Base TTLs per interval, in `CACHE_TTL` ([2_stock_visualizer.py:59-66](../2_stock_visualizer.py#L59)):
+Base TTLs per interval, in `CACHE_TTL` ([2_stock_visualizer.py:72-79](../2_stock_visualizer.py#L72)):
 
 | Interval | Base TTL | During market hours (intraday only) |
 |---|---|---|
@@ -163,13 +163,13 @@ Metadata TTL: **7 days** (`META_TTL = 604_800`). `_ensure_meta_fresh()` refreshe
 
 ### 4.5 Period window
 
-`PERIOD_WINDOW_DAYS` in [2_stock_visualizer.py:185-195](../2_stock_visualizer.py#L185) defines how far back the DB is queried when serving bars for a period:
+`PERIOD_WINDOW_DAYS` in [2_stock_visualizer.py:198-208](../2_stock_visualizer.py#L198) defines how far back the DB is queried when serving bars for a period:
 
 ```
-1d:2, 5d:10, 1mo:40, 3mo:100, 6mo:200, 1y:400, 2y:750, 5y:1900, max:None
+1d:5, 5d:10, 1mo:40, 3mo:100, 6mo:200, 1y:400, 2y:750, 5y:1900, max:None
 ```
 
-These are generous buffers that absorb yfinance's inclusive date semantics. A 2-day window for `1d` means the chart iframe may receive bars from both the current and the previous session; the iframe anchors on the **last bar's date** to pick the correct session and extracts the prior-day close for the % baseline (see decisions D5).
+These are generous buffers that absorb yfinance's inclusive date semantics. The `1d` window is **5 days** (widened from 2 on 2026-06-05, D17): the iframe anchors on the **last bar's date** to pick the correct session and extracts the prior-day close for the % baseline (see D5), so the extra trailing days never change what's drawn — they only guarantee the most recent session (hence the previous close) is still in range when the app launches during a market-closed stretch that spans a weekend or holiday.
 
 ### 4.6 Fresh vs SWR modes
 
@@ -383,7 +383,7 @@ The parent (`index.html`) and each iframe (`1_chart_template.html`) are same-ori
 1. **yfinance ToS** — already discussed; app is local-personal only until provider is swapped.
 2. **Holiday accuracy** — approximate for 9 Asian + Latin-American regions (§9).
 3. **Session-anchor edge case** — if the SQLite cache only has a prior session's 1m bars (new DB, weekend), the chart will anchor on that session until the next 1-minute fetch returns today's first bar. Resolves automatically on first successful live poll.
-4. **One port** — hardcoded to 5000 (`PORT = 5000` in [2_stock_visualizer.py:761](../2_stock_visualizer.py#L761)). No CLI flag.
+4. **One port** — hardcoded to 5000 (`PORT = 5000` in [2_stock_visualizer.py:810](../2_stock_visualizer.py#L810)). No CLI flag.
 5. **No auth** — Flask binds to `0.0.0.0`, so anyone on the LAN can read the cached data. Acceptable for a personal-tool on a trusted network; not acceptable for a deployed service.
 
 ---
@@ -392,17 +392,19 @@ The parent (`index.html`) and each iframe (`1_chart_template.html`) are same-ori
 
 | Concern | File : symbol |
 |---|---|
-| Cache TTLs | [2_stock_visualizer.py:59](../2_stock_visualizer.py#L59) `CACHE_TTL` |
-| Period→interval | [2_stock_visualizer.py:43](../2_stock_visualizer.py#L43) `PERIOD_INTERVAL` |
-| DB schema | [2_stock_visualizer.py:202](../2_stock_visualizer.py#L202) `_init_db()` |
-| Fresh vs SWR | [2_stock_visualizer.py:476](../2_stock_visualizer.py#L476) `get_chart_data()` |
-| Batch fetch | [2_stock_visualizer.py:515](../2_stock_visualizer.py#L515) `get_chart_data_batch()` |
-| Clock sync | [2_stock_visualizer.py:99](../2_stock_visualizer.py#L99) `_fetch_clock_offset()` |
+| Cache TTLs | [2_stock_visualizer.py:72](../2_stock_visualizer.py#L72) `CACHE_TTL` |
+| Period→interval | [2_stock_visualizer.py:44](../2_stock_visualizer.py#L44) `PERIOD_INTERVAL` |
+| Intraday market-closed fallback | [2_stock_visualizer.py:64](../2_stock_visualizer.py#L64) `INTRADAY_FALLBACK_PERIOD` (D17) |
+| DB schema | [2_stock_visualizer.py:219](../2_stock_visualizer.py#L219) `_init_db()` |
+| Fresh vs SWR | [2_stock_visualizer.py:525](../2_stock_visualizer.py#L525) `get_chart_data()` |
+| Batch fetch | [2_stock_visualizer.py:564](../2_stock_visualizer.py#L564) `get_chart_data_batch()` |
+| NaN-bar filter (ingest + serve) | [2_stock_visualizer.py:408](../2_stock_visualizer.py#L408) `_df_to_records()` / [293](../2_stock_visualizer.py#L293) `db_get_bars()` (D18) |
+| Clock sync | [2_stock_visualizer.py:112](../2_stock_visualizer.py#L112) `_fetch_clock_offset()` |
 | Exchange schedules | [market_calendars.py:22](../market_calendars.py#L22) `EXCHANGE_SCHEDULES` |
-| Ring layout & projection | [index.html:1052](../index.html#L1052) (Three.js module block) |
-| localStorage keys | [index.html:1084](../index.html#L1084) onward |
-| Ticker list build | [index.html:2016](../index.html#L2016) `buildTickerListRows()` |
-| Price-overlay update | [index.html:1943](../index.html#L1943) `updatePriceOverlay()` |
-| Session persistence | [index.html:1247](../index.html#L1247) `persistSession()` |
+| Ring layout & projection | [index.html:1044](../index.html#L1044) (Three.js module block) |
+| localStorage keys | [index.html:1078](../index.html#L1078) onward |
+| Ticker list build | [index.html:2057](../index.html#L2057) `buildTickerListRows()` |
+| Price-overlay update | [index.html:1982](../index.html#L1982) `updatePriceOverlay()` |
+| Session persistence | [index.html:1286](../index.html#L1286) `persistSession()` |
 | Chart render | [1_chart_template.html:840](../_outputs/templates/1_chart_template.html#L840) `renderChart()` |
-| Target labels | [1_chart_template.html:408](../_outputs/templates/1_chart_template.html#L408) `_renderOneTarget()` |
+| Target labels | [1_chart_template.html:428](../_outputs/templates/1_chart_template.html#L428) `_renderOneTarget()` |
