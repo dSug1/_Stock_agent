@@ -303,6 +303,17 @@ def main() -> int:
                              "~1.5s after the server starts (mirrors 0_Renderer pattern).")
     args = parser.parse_args()
 
+    # D38 follow-up (2026-06-04) — prewarm the in-memory yfinance cache
+    # from the renderer's disk cache so the JS's first /api/live_price
+    # poll doesn't trigger a full cold ~50s yfinance batch fetch when the
+    # browser loads the page.
+    from module_7.live_price import prewarm_from_disk
+    disk_cache = PROJECT_ROOT / "data" / "render_price_cache.json"
+    n_ok, n_fail = prewarm_from_disk(disk_cache)
+    if n_ok or n_fail:
+        print(f"[3_7_serve_selection] prewarmed live-price cache from {disk_cache.name}: "
+              f"{n_ok} success(es) + {n_fail} failure(s) preloaded")
+
     httpd = ThreadingHTTPServer((args.host, args.port), _Handler)
     url = f"http://{args.host}:{args.port}/catalyst_scores.html"
     print(f"[3_7_serve_selection] {url}")

@@ -135,3 +135,85 @@ def test_load_ignores_non_string_entries(tmp_path):
         "tickers": ["AAA", 123, None, "BBB", "", "  ", "ccc"],
     }), encoding="utf-8")
     assert load_acknowledged_tickers(path) == frozenset({"AAA", "BBB", "CCC"})
+
+
+# ─── prewarm_from_disk (D38 follow-up 2026-06-04) ───────────────────
+
+
+def test_prewarm_returns_zero_when_file_missing(tmp_path):
+    from module_7.live_price import clear_cache, prewarm_from_disk
+    clear_cache()
+    n_ok, n_fail = prewarm_from_disk(tmp_path / "missing.json")
+    assert (n_ok, n_fail) == (0, 0)
+
+
+def test_prewarm_returns_zero_on_corrupt_json(tmp_path):
+    from module_7.live_price import clear_cache, prewarm_from_disk
+    clear_cache()
+    p = tmp_path / "bad.json"
+    p.write_text("{not json", encoding="utf-8")
+    n_ok, n_fail = prewarm_from_disk(p)
+    assert (n_ok, n_fail) == (0, 0)
+
+
+def test_prewarm_populates_cache_with_successes(tmp_path):
+    from module_7.live_price import _CACHE, clear_cache, prewarm_from_disk
+    clear_cache()
+    p = tmp_path / "cache.json"
+    p.write_text(json.dumps({
+        "AAA": {"price_usd": 12.34, "fetched_at_utc": "2026-06-04T10:00:00", "cached_at_epoch": 1.0},
+        "BBB": {"price_usd": 56.78, "fetched_at_utc": "2026-06-04T10:00:00", "cached_at_epoch": 1.0},
+    }), encoding="utf-8")
+    n_ok, n_fail = prewarm_from_disk(p)
+    assert n_ok == 2
+    assert n_fail == 0
+    assert "AAA" in _CACHE
+    assert _CACHE["AAA"].price.price_usd == 12.34
+    clear_cache()
+
+
+def test_prewarm_distinguishes_successes_from_failures(tmp_path):
+    from module_7.live_price import _CACHE, clear_cache, prewarm_from_disk
+    clear_cache()
+    p = tmp_path / "mixed.json"
+    p.write_text(json.dumps({
+        "AAA": {"price_usd": 12.34, "fetched_at_utc": "t", "cached_at_epoch": 1.0},
+        "DEAD": {"price_usd": None, "fetched_at_utc": "t", "cached_at_epoch": 1.0},
+    }), encoding="utf-8")
+    n_ok, n_fail = prewarm_from_disk(p)
+    assert (n_ok, n_fail) == (1, 1)
+    assert _CACHE["DEAD"].price.price_usd is None
+    assert _CACHE["AAA"].price.price_usd == 12.34
+    clear_cache()
+
+
+def test_prewarm_skips_malformed_entries(tmp_path):
+    from module_7.live_price import _CACHE, clear_cache, prewarm_from_disk
+    clear_cache()
+    p = tmp_path / "malformed.json"
+    p.write_text(json.dumps({
+        "AAA": {"price_usd": 12.34, "fetched_at_utc": "t", "cached_at_epoch": 1.0},
+        "BAD_PRICE": {"price_usd": "not a number", "fetched_at_utc": "t", "cached_at_epoch": 1.0},
+        "NOT_A_DICT": "garbage",
+        "": {"price_usd": 99, "fetched_at_utc": "t", "cached_at_epoch": 1.0},  # blank ticker
+    }), encoding="utf-8")
+    n_ok, n_fail = prewarm_from_disk(p)
+    assert n_ok == 1            # only AAA
+    assert n_fail == 0
+    assert "AAA" in _CACHE
+    assert "BAD_PRICE" not in _CACHE
+    clear_cache()
+
+
+def test_prewarm_normalises_ticker_to_upper(tmp_path):
+    from module_7.live_price import _CACHE, clear_cache, prewarm_from_disk
+    clear_cache()
+    p = tmp_path / "lower.json"
+    p.write_text(json.dumps({
+        "aaa": {"price_usd": 1.0, "fetched_at_utc": "t", "cached_at_epoch": 1.0},
+        "  Bbb  ": {"price_usd": 2.0, "fetched_at_utc": "t", "cached_at_epoch": 1.0},
+    }), encoding="utf-8")
+    prewarm_from_disk(p)
+    assert "AAA" in _CACHE
+    assert "BBB" in _CACHE
+    clear_cache()

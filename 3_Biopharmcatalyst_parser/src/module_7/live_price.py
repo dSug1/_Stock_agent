@@ -210,3 +210,69 @@ def clear_cache() -> None:
     """Test/debug helper — wipe the in-memory TTL cache."""
     with _LOCK:
         _CACHE.clear()
+
+
+def prewarm_from_disk(disk_cache_path) -> tuple[int, int]:
+    """D38 follow-up (2026-06-04) — populate the in-memory cache from the
+    renderer's disk price cache so the live-price server doesn't pay a
+    cold-cache penalty (~50-60s for ~300 tickers) on the first
+    `/api/live_price` poll after `run_3_Biopharm_render.bat` launches.
+
+    The renderer's disk cache (`data/render_price_cache.json`) is written
+    by `scripts/3_6_render_scores.py::_fetch_render_time_prices` and has
+    the shape:
+
+        {
+          "TICKER": {
+            "price_usd":       18.56,           # null for cached failures
+            "fetched_at_utc":  "2026-06-04...",
+            "cached_at_epoch": 1748497398.45
+          }, ...
+        }
+
+    Successes prewarm the in-memory _CACHE with `inserted_monotonic = now`,
+    so they're fresh for the next `_DEFAULT_TTL_S` (60s). Failures prewarm
+    too — they'll be considered fresh for the longer `_FAILURE_TTL_S`
+    (30 min), avoiding re-probes of delisted/illiquid tickers.
+
+    Returns ``(n_successes, n_failures)`` prewarmed.
+    """
+    import json
+    from pathlib import Path
+    p = Path(disk_cache_path)
+    if not p.exists():
+        return (0, 0)
+    try:
+        cache = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return (0, 0)
+    if not isinstance(cache, dict):
+        return (0, 0)
+    now_mono = _now_mono()
+    n_ok = 0
+    n_fail = 0
+    with _LOCK:
+        for ticker, entry in cache.items():
+            if not isinstance(entry, dict):
+                continue
+            t = str(ticker).strip().upper()
+            if not t:
+                continue
+            price = entry.get("price_usd")
+            fetched_at = entry.get("fetched_at_utc") or _now_iso()
+            if price:
+                try:
+                    px = float(price)
+                except (TypeError, ValueError):
+                    continue
+                lp = LivePrice(ticker=t, price_usd=px, fetched_at_utc=fetched_at)
+                _CACHE[t] = _CacheEntry(price=lp, inserted_monotonic=now_mono)
+                n_ok += 1
+            else:
+                # Cached failure — extends to _FAILURE_TTL_S window.
+                lp = LivePrice(ticker=t, price_usd=None,
+                               fetched_at_utc=fetched_at,
+                               error="prewarmed failure (disk cache)")
+                _CACHE[t] = _CacheEntry(price=lp, inserted_monotonic=now_mono)
+                n_fail += 1
+    return (n_ok, n_fail)

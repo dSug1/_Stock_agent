@@ -1976,4 +1976,31 @@ Two changes landed when the user asked to run M7 on "all green-highlighted ticke
 
 **Tests:** 501 passing (was 500; +1 regression test, 4 updated for the new key shape), 4 skipped.
 
+### D38 follow-up #2 (2026-06-04) — Server-side yfinance prewarm
+
+**Trigger:** the user reported `run_3_Biopharm_render.bat` had regressed back to ~1 minute to launch (vs ~5s steady-state target). Investigation pinned it to the JS's first `/api/live_price` poll: the live-price server has its OWN in-memory cache (separate from the renderer's disk cache at `data/render_price_cache.json`), and that in-memory cache is cold on every server restart. With ~300 hard_pass+rescued tickers in the allowlist, the first poll triggered a full yfinance batch fetch (~50s wall) before the browser could paint live cells.
+
+**Fix:** `module_7/live_price.py::prewarm_from_disk(path)` reads the renderer's disk cache and populates the server's in-memory `_CACHE` at startup. Successes prewarm with `inserted_monotonic = now` (fresh for the standard 60s TTL); failures prewarm with the same timestamp but get the longer 30-min failure TTL. Wired into `scripts/3_7_serve_selection.py::main` immediately before `httpd.serve_forever()`.
+
+**Verified impact** (measured on the live DB with 203 priced + 5 failure tickers in the disk cache):
+- `prewarm_from_disk`: 0.00s
+- Simulated first `/api/live_price` poll for all 208 tickers: 0.00s (all served from prewarmed cache)
+- Total Python bootstrap including imports: ~2.5s
+- **Net: bat launch back at the D35e baseline (~5s including render + server boot + browser open delay), down from ~60s.**
+
+**Tests:** 6 new in `tests/test_module7_gate.py` (added alongside the existing gate tests since they're tightly related to D38 work):
+- prewarm returns (0,0) on missing file
+- prewarm returns (0,0) on corrupt JSON
+- prewarm populates _CACHE with successes
+- prewarm distinguishes success vs failure entries
+- prewarm skips malformed entries (non-numeric price, non-dict value, blank ticker)
+- prewarm normalises ticker to UPPER
+
+Total repo: **507 passing**, 4 skipped, no regressions.
+
+### Future-work signals (D38 follow-up #2)
+
+- The render disk cache (D35e) and the live-price-server in-memory cache are still SEPARATE caches with different TTLs (30 min vs 60 s). They share a one-way prewarm path now. Unifying them — having both processes read/write the same disk store — would close the last gap, but adds disk I/O on every server poll. Probably not worth it until the disk cache hits multi-MB.
+- If a server is left running for hours past the bat's render, the cache will drift. Re-running the render bat re-warms it; otherwise live polling refreshes per-ticker as the 60s TTL expires.
+
 ---
