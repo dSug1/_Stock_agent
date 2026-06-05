@@ -26,10 +26,32 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-try:
-    import yfinance as yf
-except ImportError:                                              # pragma: no cover
-    yf = None                                                    # type: ignore
+# D38 follow-up #3 (2026-06-04) — Lazy-import yfinance. The import costs
+# ~1.1s wall time which dominates `run_3_Biopharm_render.bat` startup.
+# Warm-cache code paths (prewarm-from-disk; in-memory cache hits) never
+# touch yfinance, so deferring the import until a real fetch shaves ~1s
+# off both the renderer and the server bootstrap.
+#
+# Sentinel values for the cache:
+#   None  → never tried
+#   False → import attempted, ModuleNotFoundError raised
+#   <module> → successfully imported
+_yf_cache: object = None
+
+
+def _get_yf():
+    """Return the imported yfinance module on first call (caches the
+    handle), or None if yfinance isn't installed. Cheap to call repeatedly."""
+    global _yf_cache
+    if _yf_cache is not None:
+        return _yf_cache if _yf_cache is not False else None
+    try:
+        import yfinance as yf_module                              # noqa: F401
+        _yf_cache = yf_module
+        return yf_module
+    except ImportError:                                           # pragma: no cover
+        _yf_cache = False
+        return None
 
 
 _DEFAULT_TTL_S = 60.0     # 60s — same scale 0_Renderer uses for its slowest pollers
@@ -100,6 +122,7 @@ def _fresh(entry: _CacheEntry, ttl_s: float) -> bool:
 def _fetch_one(ticker: str) -> LivePrice:
     """Single-ticker fetch. Uses yfinance .fast_info when available (cheap),
     falls back to .history(period='1d') if needed."""
+    yf = _get_yf()
     if yf is None:
         return LivePrice(ticker, None, _now_iso(), error="yfinance not installed")
     try:
@@ -131,6 +154,7 @@ def _fetch_batch(tickers: list[str]) -> dict[str, LivePrice]:
     """yf.download(period='1d') for many tickers in one HTTP call."""
     if not tickers:
         return {}
+    yf = _get_yf()
     if yf is None:
         return {t: LivePrice(t, None, _now_iso(), error="yfinance not installed")
                 for t in tickers}

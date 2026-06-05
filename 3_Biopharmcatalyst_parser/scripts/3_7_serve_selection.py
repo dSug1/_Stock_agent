@@ -324,6 +324,9 @@ def main() -> int:
     if args.open_browser:
         # D29 — delayed browser launch via daemon Timer so the server has
         # time to bind before the browser issues its first GET.
+        # D38 follow-up #3 (2026-06-04) — reduced 1.5s → 0.3s. The server
+        # binds in microseconds; the original 1.5s was overcautious and
+        # was dominating the bat's perceived launch time.
         import webbrowser as _webbrowser
         def _open():
             try:
@@ -331,7 +334,7 @@ def main() -> int:
                 print(f"[3_7_serve_selection] launched default browser at {url}")
             except Exception as e:                               # noqa: BLE001
                 print(f"[3_7_serve_selection] could not auto-launch browser: {e}")
-        timer = threading.Timer(1.5, _open)
+        timer = threading.Timer(0.3, _open)
         timer.daemon = True
         timer.start()
 

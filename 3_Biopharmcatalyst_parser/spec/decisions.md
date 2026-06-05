@@ -2003,4 +2003,31 @@ Total repo: **507 passing**, 4 skipped, no regressions.
 - The render disk cache (D35e) and the live-price-server in-memory cache are still SEPARATE caches with different TTLs (30 min vs 60 s). They share a one-way prewarm path now. Unifying them — having both processes read/write the same disk store — would close the last gap, but adds disk I/O on every server poll. Probably not worth it until the disk cache hits multi-MB.
 - If a server is left running for hours past the bat's render, the cache will drift. Re-running the render bat re-warms it; otherwise live polling refreshes per-ticker as the 60s TTL expires.
 
+### D38 follow-up #3 (2026-06-04) — Further bat launch reductions
+
+**Trigger:** after follow-up #2 the bat was still ~6s. The user asked for more.
+
+**Profile** (measured): render 3.97s + server boot 1.32s + browser timer 1.5s + venv activation ~0.3s ≈ 7s. Inside the 1.32s of server boot, **1.1s was the eager `import yfinance` at module-import time** even though the warm-cache path never calls yfinance. Same story in the renderer.
+
+**Three changes:**
+
+1. **Lazy-import yfinance in `module_7/live_price.py`.** Module-level `try/except ImportError` block replaced with a `_get_yf()` helper that imports yfinance on first real call and caches the handle. `_fetch_one` and `_fetch_batch` call it. Renderer warm path (all entries cached) → never imports yfinance. Server bootstrap (no cache misses yet) → never imports yfinance.
+
+2. **Browser launch timer 1.5s → 0.3s** in `scripts/3_7_serve_selection.py::main`. The server binds in microseconds; the 1.5s delay from D29 was overcautious.
+
+3. (No code change but worth noting) `scripts/3_6_render_scores.py` already imports `from module_7.live_price import get_live_prices` at the top; the lazy yfinance fix means that import is now cheap.
+
+**Measured impact:**
+
+| Step | Pre #3 | Post #3 |
+|---|---:|---:|
+| Render (warm cache) | 3.97s | **2.88s** (-1.1s; lazy yfinance) |
+| Server import chain | 1.32s | **0.44s** (-0.9s; lazy yfinance) |
+| Browser timer | 1.5s | **0.3s** (-1.2s) |
+| **Total bat launch** | **~7s** | **~4s** |
+
+**Net since D35e baseline:** the bat is **back to ~4s**, identical to the no-yfinance baseline (`--no-fetch-prices`). On a cold first-of-day render where yfinance IS needed for cache misses, the import cost still happens at first `_fetch_batch` invocation rather than at startup — so the first render is unchanged at ~27s but every subsequent render in the same session is ~4s.
+
+**Tests:** No new tests; the existing live-price + gate suites cover both warm-cache (lazy-yfinance not loaded) and cold-cache (lazy-yfinance loaded on demand) paths. 507 still passing.
+
 ---
