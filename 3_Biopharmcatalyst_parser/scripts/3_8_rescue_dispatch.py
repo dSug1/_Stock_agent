@@ -185,6 +185,9 @@ def main() -> int:
                              "candidate per ticker (deterministic: smallest "
                              "drug name alphabetically). Use when one Claude "
                              "call per company is enough.")
+    parser.add_argument("--override-coverage-gate", action="store_true",
+                        help="D39 — bypass the coverage gate (drops tickers "
+                             "with any prior deep_dive row, M7 or M8).")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -291,6 +294,25 @@ def main() -> int:
             print(f"[3_8_rescue_dispatch] --one-drug-per-ticker: dropped {len(dropped)} "
                   f"extra drug-rows ({len({d['ticker'] for d in dropped})} tickers)")
         candidates = kept
+
+    # D39 — coverage gate
+    if args.override_coverage_gate:
+        print("[3_8_rescue_dispatch] --override-coverage-gate: skipping the coverage gate.")
+    else:
+        from module_8 import apply_coverage_gate, tickers_with_existing_dispatch
+        covered = tickers_with_existing_dispatch()
+        if covered:
+            kept, dropped = apply_coverage_gate(candidates, covered)
+            if dropped:
+                dropped_tickers = sorted({d["ticker"] for d in dropped})
+                print(f"[3_8_rescue_dispatch] coverage-gate: dropped {len(dropped)} catalysts "
+                      f"across {len(dropped_tickers)} ticker(s) with prior deep_dive — "
+                      f"{', '.join(dropped_tickers[:10])}"
+                      + (f", ... +{len(dropped_tickers)-10} more" if len(dropped_tickers) > 10 else ""))
+            candidates = kept
+            if not candidates:
+                print("[3_8_rescue_dispatch] all candidates gated out by coverage-set; exiting.")
+                return 0
 
     candidate_tickers = sorted({c["ticker"] for c in candidates})
     print(f"[3_8_rescue_dispatch] refreshing live prices for {len(candidate_tickers)} ticker(s)…")

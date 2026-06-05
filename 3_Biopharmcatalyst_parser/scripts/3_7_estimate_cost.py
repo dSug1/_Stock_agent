@@ -67,6 +67,9 @@ def main() -> int:
     parser.add_argument("--one-drug-per-ticker", action="store_true",
                         help="D38 — mirror the dispatcher's same-named flag so "
                              "the cost preview reflects what would actually run.")
+    parser.add_argument("--override-coverage-gate", action="store_true",
+                        help="D39 — mirror the dispatcher's flag so the cost "
+                             "preview reflects the un-gated cost.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(
@@ -112,6 +115,21 @@ def main() -> int:
             print(f"[3_7_estimate_cost] --one-drug-per-ticker: dropped {len(dropped)} "
                   f"extra drug-rows ({len({d['ticker'] for d in dropped})} tickers)")
         candidates = kept
+
+    # D39 — coverage gate
+    if not args.override_coverage_gate:
+        from module_8 import apply_coverage_gate, tickers_with_existing_dispatch
+        covered = tickers_with_existing_dispatch()
+        if covered:
+            kept, dropped = apply_coverage_gate(candidates, covered)
+            if dropped:
+                print(f"[3_7_estimate_cost] coverage-gate: {len(dropped)} catalyst(s) "
+                      f"across {len({d['ticker'] for d in dropped})} ticker(s) would be "
+                      f"skipped (use --override-coverage-gate to ignore)")
+            candidates = kept
+            if not candidates:
+                print("[3_7_estimate_cost] all candidates gated out by coverage; nothing to estimate.")
+                return 0
 
     # Build packs (cheap — pure local SQLite reads).
     packs: list[tuple[dict, dict]] = []      # (candidate, pack)

@@ -2031,3 +2031,53 @@ Total repo: **507 passing**, 4 skipped, no regressions.
 **Tests:** No new tests; the existing live-price + gate suites cover both warm-cache (lazy-yfinance not loaded) and cold-cache (lazy-yfinance loaded on demand) paths. 507 still passing.
 
 ---
+
+## D39 — Ticker-coverage gate (one Claude call per company) (2026-06-05)
+
+**Trigger:** the user's rule: *"in the future, whenever I run the pipeline, do not run the module 7 Claude API call for any catalyst-tab new ticker-drug for which a module 7 Claude API call has already been run on the ticker or another drug. The new ticker-drug row shall appear in green highlight but the mention 'already covered' shall be written in the 'expectancy/week' cell : this function shall be executed by the module 8."*
+
+This is a stronger version of D38's ack-gate. D38 requires the user to actively tick the ack-toggle to gate the ticker; D39 gates BY DEFAULT once any deep_dive row exists for the ticker. Combined: a brand-new BPC catalyst at the same company doesn't trigger a Claude call.
+
+**User decisions captured up front (via `AskUserQuestion`):**
+- *"Does coverage count M7 OR M8 dispatches?"* → **Both.** Any deep_dive row counts. (Simpler implementation; matches the existing ack-gate's ticker-level semantics.)
+- *"Should drug_signature change re-open the gate?"* → **No.** Ticker-level gate is final; user must `--override-coverage-gate` to re-dispatch on a substantively new catalyst.
+
+**Architecture:**
+
+```
+src/module_8/
+└─ coverage.py                          # NEW
+       tickers_with_existing_dispatch(db_path) → frozenset[str]
+       apply_coverage_gate(candidates, covered) → (kept, dropped)
+```
+
+Mirrors the D38 gate's API deliberately: case-insensitive ticker match, defensively keeps candidates with missing/blank `ticker`. Fails OPEN on missing DB / missing table / sqlite errors so a startup hiccup never blocks a user-driven dispatch.
+
+**Dispatch + estimator wiring (4 scripts):**
+- `scripts/3_7_deep_dive.py`, `scripts/3_8_rescue_dispatch.py`, `scripts/3_7_estimate_cost.py`, `scripts/3_8_estimate_cost.py` each call `tickers_with_existing_dispatch` → `apply_coverage_gate` AFTER the D38 ack-gate and `--one-drug-per-ticker` collapse. Print one-line summary of dropped tickers. Exit cleanly when all candidates gated out.
+- **New flag** on all four: `--override-coverage-gate`. Use when BPC published a substantively new catalyst that warrants a fresh analysis.
+
+**Renderer wiring:**
+- After `attach_deep_dive_payload(rows, dd_map)`, the renderer extracts the covered ticker set from `dd_map`'s keys (position 0 = ticker, since render_join uses 4-tuple keys post-D38 fix #1) and adds `payload["covered_tickers"] = sorted({…})` to the data sidecar.
+- JS reads `window.__DATA.covered_tickers` and modifies the `ddExpWeek` cell logic: when a row has NO `deep_dive` AND its ticker is in the covered set, render `<span ... title="Another drug of this ticker already has a Claude analysis. D39 gate skips dispatch.">already covered</span>` instead of the usual em-dash.
+- The row keeps its pale-green un-acked tint (D35b/D38). The user can still tick the ack-toggle to mark the company as fully reviewed; until then the row stands out in the table as "new BPC entry that we won't analyse because the ticker is already covered".
+
+**Renderer impact** (measured on the live DB right after wire-up, with 209 acked + 197 covered tickers):
+- Catalyst-tab rows: 306 total.
+- 276 already had a `deep_dive` payload (no change).
+- **17 rows newly render "already covered"** instead of em-dash (no deep_dive, but the ticker is in the covered set).
+- 13 rows truly have no analysis anywhere — still render em-dash.
+- 3 of the 17 are green-highlighted (un-acked) — the exact case from the user's spec.
+
+**Tests:** `tests/test_module8_coverage.py` — 11 tests covering both helpers:
+- `tickers_with_existing_dispatch`: missing DB / missing table / distinct + uppercase normalisation / blank+None entries / case-insensitive deduplication
+- `apply_coverage_gate`: empty noop / basic drop / case-insensitive / multi-drug bulk drop / missing-ticker defensive / custom ticker_key
+
+**Total repo: 518 passing**, 4 skipped, no regressions.
+
+### Future-work signals
+
+- Add a `--show-coverage` CLI that prints the current covered ticker set + drug counts per ticker.
+- The renderer currently builds the covered set from the existing `dd_map.keys()` (cheap, no extra DB call). If the renderer ever stops loading `dd_map` for some reason, the covered set would silently empty out. Defensive: call `tickers_with_existing_dispatch()` directly. Tracked as a possible robustness pass.
+
+---

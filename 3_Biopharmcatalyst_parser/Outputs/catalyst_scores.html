@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="template-version" content="b29b50c">
+<meta name="template-version" content="faa62d6">
 <title>Catalyst scores</title>
 <style>
 :root {
@@ -1066,10 +1066,22 @@ tbody td .score {
       const ddMoveVal  = recomp ? recomp.e_move_pct : null;
       const ddMove     = ddMoveVal == null ? '<span style="color:var(--text-dim)">—</span>'
                           : `<span style="color:${ddMoveVal >= 0 ? 'var(--green)' : 'var(--red)'}">${ddMoveVal >= 0 ? '+' : ''}${ddMoveVal.toFixed(1)}%</span>` + liveTag;
+      // D39 — when the row has no deep_dive of its own but the ticker is
+      // in window.__DATA.covered_tickers (i.e. another drug of the same
+      // company already has a Claude analysis), render "already covered"
+      // instead of em-dash so the user can see at a glance that no
+      // further dispatch will run for this ticker.
+      const _coveredAndUnscored = (
+        !dd
+        && Array.isArray(window.__DATA && window.__DATA.covered_tickers)
+        && window.__DATA.covered_tickers.includes((r.ticker || '').toUpperCase())
+      );
       const ddExpWeek  = (recomp && recomp.expectancy_per_week_pct != null)
                           ? (recomp.expectancy_per_week_pct >= 0 ? '+' : '')
                             + recomp.expectancy_per_week_pct.toFixed(2) + '%/wk' + liveTag
-                          : '<span style="color:var(--text-dim)">—</span>';
+                          : (_coveredAndUnscored
+                              ? '<span style="color:var(--text-dim);font-size:11px" title="Another drug of this ticker already has a Claude analysis. D39 gate skips dispatch.">already covered</span>'
+                              : '<span style="color:var(--text-dim)">—</span>');
       // D25 — replace static BPC price with live yfinance value where available.
       // For market cap we scale BPC's static mcap by the price ratio (shares
       // are approximately constant intraday; this is more robust than

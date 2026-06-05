@@ -18,6 +18,11 @@ Decisions: spec/decisions.md § D35
 from __future__ import annotations
 
 from .config import Module8Config, default_config_path, load_module_8_config
+from .coverage import (
+    DEFAULT_DEEP_DIVES_DB_PATH,
+    apply_coverage_gate,
+    tickers_with_existing_dispatch,
+)
 from .prompt import load_rescue_prefix
 from .rescue_filter import (
     RescueClass,
@@ -30,4 +35,6 @@ __all__ = [
     "Module8Config", "default_config_path", "load_module_8_config",
     "load_rescue_prefix",
     "RescueClass", "RescueDecision", "classify_catalyst", "classify_rows",
+    "DEFAULT_DEEP_DIVES_DB_PATH",
+    "apply_coverage_gate", "tickers_with_existing_dispatch",
 ]

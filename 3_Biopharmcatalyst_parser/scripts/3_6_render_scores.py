@@ -1230,10 +1230,22 @@ JS = r"""
       const ddMoveVal  = recomp ? recomp.e_move_pct : null;
       const ddMove     = ddMoveVal == null ? '<span style="color:var(--text-dim)">—</span>'
                           : `<span style="color:${ddMoveVal >= 0 ? 'var(--green)' : 'var(--red)'}">${ddMoveVal >= 0 ? '+' : ''}${ddMoveVal.toFixed(1)}%</span>` + liveTag;
+      // D39 — when the row has no deep_dive of its own but the ticker is
+      // in window.__DATA.covered_tickers (i.e. another drug of the same
+      // company already has a Claude analysis), render "already covered"
+      // instead of em-dash so the user can see at a glance that no
+      // further dispatch will run for this ticker.
+      const _coveredAndUnscored = (
+        !dd
+        && Array.isArray(window.__DATA && window.__DATA.covered_tickers)
+        && window.__DATA.covered_tickers.includes((r.ticker || '').toUpperCase())
+      );
       const ddExpWeek  = (recomp && recomp.expectancy_per_week_pct != null)
                           ? (recomp.expectancy_per_week_pct >= 0 ? '+' : '')
                             + recomp.expectancy_per_week_pct.toFixed(2) + '%/wk' + liveTag
-                          : '<span style="color:var(--text-dim)">—</span>';
+                          : (_coveredAndUnscored
+                              ? '<span style="color:var(--text-dim);font-size:11px" title="Another drug of this ticker already has a Claude analysis. D39 gate skips dispatch.">already covered</span>'
+                              : '<span style="color:var(--text-dim)">—</span>');
       // D25 — replace static BPC price with live yfinance value where available.
       // For market cap we scale BPC's static mcap by the price ratio (shares
       // are approximately constant intraday; this is more robust than
@@ -2092,6 +2104,13 @@ def render(
         attach_deep_dive_payload(rows, dd_map)
         n_with_dd = sum(1 for r in rows if r.get("deep_dive"))
 
+        # D39 — covered-ticker set from deep_dives. Used by the JS to
+        # render "already covered" in the expectancy/week cell of any
+        # row whose ticker has a prior Claude analysis under a different
+        # drug. dd_map keys are (ticker, drug, nct, type) after the
+        # 2026-06-04 PK-stable bug fix, so position 0 is the ticker.
+        covered_tickers = sorted({k[0].upper() for k in dd_map.keys() if k[0]})
+
         # D35 — one-shot yfinance fetch for hard_pass + rescued tickers.
         # Result is attached per-row so the JS can paint blue/green
         # immediately on page load (intraday polling overrides during
@@ -2124,6 +2143,10 @@ def render(
             "rows": rows,
             "insider_trades": insider_trades,
             "funds_breakdown": funds_breakdown,
+            # D39 — set of tickers with at least one prior Claude analysis.
+            # JS shows "already covered" in the expectancy/week cell when a
+            # row's ticker is in this set but the row itself lacks a deep_dive.
+            "covered_tickers": covered_tickers,
         }
     finally:
         conn.close()

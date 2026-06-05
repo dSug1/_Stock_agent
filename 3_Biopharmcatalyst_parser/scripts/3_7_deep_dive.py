@@ -220,6 +220,12 @@ def main() -> int:
                              "drug name alphabetically). Use when one Claude "
                              "call per company is enough, rather than D23's "
                              "default of one per (ticker, drug).")
+    parser.add_argument("--override-coverage-gate", action="store_true",
+                        help="D39 — bypass the coverage gate that drops "
+                             "candidates whose ticker already has a deep_dive "
+                             "row (any prior M7 or M8 dispatch). Use when BPC "
+                             "published a substantively new catalyst for the "
+                             "company that warrants a fresh analysis.")
     parser.add_argument("--biotech-db", type=Path, default=BIOTECH_DB)
     parser.add_argument("--fundamentals-db", type=Path, default=FUNDAMENTALS_DB)
     parser.add_argument("--config", type=Path, default=default_config_path())
@@ -351,6 +357,26 @@ def main() -> int:
                   f"{', '.join(tickers_summary)}"
                   + (f", ..." if len(by_ticker_dropped) > 5 else ""))
         candidates = kept
+
+    # D39 — coverage gate: drop any ticker that already has a deep_dive row
+    # (M7 or M8). One Claude call per company is enough.
+    if args.override_coverage_gate:
+        print("[3_7_deep_dive] --override-coverage-gate: skipping the coverage gate.")
+    else:
+        from module_8 import apply_coverage_gate, tickers_with_existing_dispatch
+        covered = tickers_with_existing_dispatch()
+        if covered:
+            kept, dropped = apply_coverage_gate(candidates, covered)
+            if dropped:
+                dropped_tickers = sorted({d["ticker"] for d in dropped})
+                print(f"[3_7_deep_dive] coverage-gate: dropped {len(dropped)} catalysts "
+                      f"across {len(dropped_tickers)} ticker(s) with prior deep_dive — "
+                      f"{', '.join(dropped_tickers[:10])}"
+                      + (f", ... +{len(dropped_tickers)-10} more" if len(dropped_tickers) > 10 else ""))
+            candidates = kept
+            if not candidates:
+                print("[3_7_deep_dive] all candidates gated out by coverage-set; exiting.")
+                return 0
 
     # D25 — refresh live yfinance prices for every candidate ticker so the
     # pack Claude sees carries the LATEST share price (not the M6.5
