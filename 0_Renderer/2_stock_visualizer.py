@@ -69,13 +69,16 @@ INTRADAY_FALLBACK_PERIOD: dict[str, str] = {
 
 # Cache TTL per interval (seconds).
 # During market hours the 1m/5m/1h intervals use 6 s TTL to drive live updates.
+# 1wk/1mo are 1 day (not 7/30 days) so the trailing, still-forming week/month
+# bar refreshes daily and the coarse charts stay current — older bars in those
+# series never change, so re-fetching daily costs one cheap call (D20).
 CACHE_TTL: dict[str, int] = {
     "1m":  6,
     "5m":  30,
     "1h":  300,
     "1d":  86_400,
-    "1wk": 604_800,
-    "1mo": 2_592_000,
+    "1wk": 86_400,
+    "1mo": 86_400,
 }
 
 # Meta TTL: refresh company info once per week
@@ -306,6 +309,16 @@ def db_get_bars(ticker: str, interval: str, since_unix: int | None) -> list[dict
              "c": r["c"], "v": r["v"]} for r in rows]
 
 
+def db_get_last_close(ticker: str, interval: str) -> dict | None:
+    """Most recent non-null bar for (ticker, interval) as {t, c}, or None."""
+    with _db() as cx:
+        row = cx.execute(
+            "SELECT t, c FROM bars WHERE ticker=? AND interval=? AND c IS NOT NULL "
+            "ORDER BY t DESC LIMIT 1", (ticker, interval)
+        ).fetchone()
+    return {"t": row["t"], "c": row["c"]} if row else None
+
+
 def db_upsert_bars(ticker: str, interval: str, records: list[dict]) -> None:
     if not records:
         return
@@ -504,14 +517,37 @@ def _ensure_meta_fresh(ticker: str) -> dict:
 def _build_payload(ticker: str, period: str, interval: str, meta: dict) -> dict:
     """Assemble the JSON payload returned by /api/data and /api/data_batch."""
     exchange_code = meta.get("exchange") or mc.DEFAULT_EXCHANGE
+    # Canonical "current price" (D19): sourced from ONE interval per ticker so it
+    # is identical no matter which period the user views — the selected period's
+    # records only drive the chart shape and the per-window gain/loss baseline.
+    last    = db_get_last_close(ticker, _price_interval(exchange_code))
+    records = db_get_bars(ticker, interval, _period_since_unix(period))
+
+    # Pin the trailing bar's close to the canonical price (D20) so the chart's
+    # right edge equals the headline. Only when the canonical price is NEWER than
+    # the last bar — i.e. a coarse 1wk/1mo bar (or a still-forming daily bar) that
+    # hasn't caught up, or a live tick during market hours. The timestamp guard
+    # means an intraday series, whose last bar is already the freshest point, is
+    # never rewritten. High/low are widened so the candle stays valid.
+    if last and records and last["t"] > records[-1]["t"]:
+        px   = last["c"]
+        tail = records[-1]
+        tail["c"] = px
+        if px > tail["h"]:
+            tail["h"] = px
+        if px < tail["l"]:
+            tail["l"] = px
+
     return {
         "meta":              meta,
         "interval":          interval,
         "period":            period,
         "fetched_at":        db_get_period_fetched_at(ticker, period),
-        "records":           db_get_bars(ticker, interval, _period_since_unix(period)),
+        "records":           records,
         "market_open":       is_market_open(exchange_code),
         "exchange_schedule": mc.schedule_for_json(exchange_code),
+        "last_price":        last["c"] if last else None,
+        "last_price_at":     last["t"] if last else None,
     }
 
 
@@ -520,6 +556,34 @@ def _effective_ttl(interval: str, exchange_code: str) -> int:
     if interval in ("1m", "5m", "1h") and is_market_open(exchange_code):
         return 6
     return base
+
+
+# Canonical "current price" source (D19). The headline price must be ONE value
+# per ticker, identical regardless of the selected period — only the per-window
+# gain/loss should differ. So it is read from a single interval rather than from
+# the selected period's last bar (whose coarse-interval trailing bar can be a
+# stale month/week-to-date snapshot). During market hours that source is the 1m
+# feed (live); when closed it is the daily close (the official last-session
+# price). PRICE_INTERVAL_ANCHOR maps that interval → the period used to fetch it.
+PRICE_INTERVAL_ANCHOR: dict[str, str] = {"1m": "1d", "1d": "6mo"}
+
+
+def _price_interval(exchange_code: str) -> str:
+    return "1m" if is_market_open(exchange_code) else "1d"
+
+
+def _ensure_price_interval_fresh(ticker: str, exchange_code: str) -> None:
+    """Refresh the canonical price interval if its cache is older than its TTL.
+    No-op when the data is already warm (the common case) or when the caller's
+    own period fetch already covers that interval."""
+    iv = _price_interval(exchange_code)
+    anchor = PRICE_INTERVAL_ANCHOR[iv]
+    if _age_seconds(db_get_period_fetched_at(ticker, anchor)) <= _effective_ttl(iv, exchange_code):
+        return
+    print(f"  [cache] refreshing canonical {iv} price for {ticker} …")
+    recs = fetch_prices(ticker, anchor, iv)
+    db_upsert_bars(ticker, iv, recs)
+    db_mark_period_fresh(ticker, anchor, datetime.datetime.utcnow().isoformat())
 
 
 def get_chart_data(ticker: str, period: str, mode: str = "fresh") -> dict | None:
@@ -555,6 +619,12 @@ def get_chart_data(ticker: str, period: str, mode: str = "fresh") -> dict | None
         records = fetch_prices(ticker, period, interval)
         db_upsert_bars(ticker, interval, records)
         db_mark_period_fresh(ticker, period, datetime.datetime.utcnow().isoformat())
+
+    # Keep the canonical current-price source fresh so the headline price is the
+    # same on every period (D19). Skipped when the requested interval already IS
+    # the canonical one (the fetch above covered it).
+    if _price_interval(exchange) != interval:
+        _ensure_price_interval_fresh(ticker, exchange)
 
     payload          = _build_payload(ticker, period, interval, meta)
     payload["stale"] = False
@@ -608,6 +678,29 @@ def get_chart_data_batch(tickers: list[str], period: str, mode: str = "fresh") -
         for t, recs in batch.items():
             db_upsert_bars(t, interval, recs)
             db_mark_period_fresh(t, period, now_iso)
+
+    # Keep each ticker's canonical current-price source fresh (D19), grouped by
+    # (interval, anchor-period) so same-state tickers refresh in one batched call.
+    # Tickers whose requested interval already IS the canonical one are skipped.
+    price_targets: dict[tuple[str, str], list[str]] = {}
+    for t in tickers:
+        exch = metas[t].get("exchange") or mc.DEFAULT_EXCHANGE
+        piv  = _price_interval(exch)
+        if piv == interval:
+            continue
+        anchor = PRICE_INTERVAL_ANCHOR[piv]
+        if _age_seconds(db_get_period_fetched_at(t, anchor)) > _effective_ttl(piv, exch):
+            price_targets.setdefault((piv, anchor), []).append(t)
+    for (piv, anchor), ts in price_targets.items():
+        now_iso2 = datetime.datetime.utcnow().isoformat()
+        print(f"  [cache] refreshing canonical {piv} price for {ts} …")
+        try:
+            pbatch = fetch_prices_batch(ts, anchor, piv)
+        except Exception:
+            pbatch = {t: fetch_prices(t, anchor, piv) for t in ts}
+        for t, recs in pbatch.items():
+            db_upsert_bars(t, piv, recs)
+            db_mark_period_fresh(t, anchor, now_iso2)
 
     out = {}
     for t in tickers:

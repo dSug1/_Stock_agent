@@ -4,7 +4,7 @@
 
 **Update discipline.** At the end of any non-trivial change: if something was calibrated, renamed, newly introduced, or deviates from spec, append or revise the relevant entry with a link to the code line of record (`[file:NN](../file#L<n>)`).
 
-**Last updated:** 2026-06-05 (added **D17** — market-closed launch shows the previous close, not 0.00 — and **D18** — drop NaN bars that crashed 3mo+ charts at market close — and re-synced every `2_stock_visualizer.py` / `index.html` / `1_chart_template.html` line anchor against live code; see handoff §7/§11). Prior: 2026-04-24 (spec folder bootstrapped; entries D1–D11 captured from existing code and chat history).
+**Last updated:** 2026-06-05 (added **D17** — market-closed launch shows the previous close, not 0.00; **D18** — drop NaN bars that crashed 3mo+ charts at market close; **D19** — canonical current price identical across periods; **D20** — coarse chart bars made current via trailing-bar pin + shorter 1wk/1mo TTLs — and re-synced every `2_stock_visualizer.py` / `index.html` / `1_chart_template.html` line anchor against live code; see handoff §7/§11–14). Prior: 2026-04-24 (spec folder bootstrapped; entries D1–D11 captured from existing code and chat history).
 
 ---
 
@@ -28,7 +28,7 @@
 
 **How it's tracked.** `period_fetch(ticker, period, fetched_at)` records freshness per-period, not per-bar. `db_mark_period_fresh()` walks `PERIOD_ORDER` and marks every shorter-or-equal period at the same interval as fresh when the longer one returns.
 
-**Where:** [2_stock_visualizer.py:332-347](../2_stock_visualizer.py#L332) `db_mark_period_fresh()`; [2_stock_visualizer.py:230-236](../2_stock_visualizer.py#L230) bars table schema.
+**Where:** [2_stock_visualizer.py:345-360](../2_stock_visualizer.py#L345) `db_mark_period_fresh()`; [2_stock_visualizer.py:233-239](../2_stock_visualizer.py#L233) bars table schema.
 
 ---
 
@@ -38,7 +38,7 @@
 
 **Why.** The chart iframe polls `/api/data` every 6 s during market hours. Without a matching TTL, every poll would hit yfinance, which is unfriendly and slow. With the 6-s TTL, the second poll inside a 6-s window returns cached data instantly.
 
-**Where:** [2_stock_visualizer.py:518-522](../2_stock_visualizer.py#L518) `_effective_ttl()`.
+**Where:** [2_stock_visualizer.py:554-558](../2_stock_visualizer.py#L554) `_effective_ttl()`.
 
 ---
 
@@ -52,7 +52,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Implementation.** `/api/data_batch?mode=swr` short-circuits all fetches. Tickers with no cache row are omitted from the response (not `None`). The frontend notices the omission and re-requests only those tickers in fresh mode.
 
-**Where:** [2_stock_visualizer.py:578-589](../2_stock_visualizer.py#L578) (SWR branch of `get_chart_data_batch`); frontend consumer in [index.html](../index.html) period-button handler `broadcastPeriodWithBatch()` around line 2885.
+**Where:** [2_stock_visualizer.py:648-659](../2_stock_visualizer.py#L648) (SWR branch of `get_chart_data_batch`); frontend consumer in [index.html](../index.html) period-button handler `broadcastPeriodWithBatch()` around line 2885.
 
 ---
 
@@ -66,7 +66,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 - Filter `records` to only bars with `t >= sessionOpenEpoch` before building candles / line / volume series.
 - % baseline for 1D is `prevClose1d` if available, else `first.o` (new-install fallback).
 
-**Where:** [1_chart_template.html:855-867](../_outputs/templates/1_chart_template.html#L855) (session anchor + filter); [1_chart_template.html:920](../_outputs/templates/1_chart_template.html#L920) (% baseline in on-chart panel); matching block in the price-info broadcast ~line 961.
+**Where:** [1_chart_template.html:860-873](../_outputs/templates/1_chart_template.html#L860) (session anchor + filter); [1_chart_template.html:940](../_outputs/templates/1_chart_template.html#L940) (% baseline in on-chart panel); matching block in the price-info broadcast ~line 980. (Note: the displayed price itself now comes from the canonical `last_price`, D19; `prevClose1d` is still the 1d baseline.)
 
 **Alternative considered.** Shrink `PERIOD_WINDOW_DAYS["1d"]` to less than 1 day server-side. Rejected: it would fail over weekends and holidays when the most recent session may be ≥2 calendar days old.
 
@@ -82,7 +82,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Browser side.** The calibrated offset is published via `/api/time_info`. The frontend calibrates `Date.now()` once at load and computes `isMarketOpenNow()` locally — no round-trip per poll.
 
-**Where:** [2_stock_visualizer.py:112-162](../2_stock_visualizer.py#L112).
+**Where:** [2_stock_visualizer.py:115-165](../2_stock_visualizer.py#L115).
 
 ---
 
@@ -140,13 +140,13 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Why not a new `sv-target2` message.** A single message guarantees both values are updated atomically; there's no window where target1 is fresh and target2 is stale.
 
-**Where:** broadcast at [index.html:2425](../index.html#L2425) `broadcastTargetPrice()`; consumer at [1_chart_template.html:1068](../_outputs/templates/1_chart_template.html#L1068).
+**Where:** broadcast at [index.html:2425](../index.html#L2425) `broadcastTargetPrice()`; consumer at [1_chart_template.html:1087](../_outputs/templates/1_chart_template.html#L1087).
 
 ---
 
 ## D12 — Hard-coded port 5000
 
-**Rule.** `PORT = 5000` in [2_stock_visualizer.py:810](../2_stock_visualizer.py#L810). No CLI flag, no env var.
+**Rule.** `PORT = 5000` in [2_stock_visualizer.py:903](../2_stock_visualizer.py#L903). No CLI flag, no env var.
 
 **Why it's acceptable.** Local personal tool, one instance at a time, no conflict concern.
 
@@ -278,11 +278,11 @@ localhost the payload delta (~1–2k small rows) is negligible; the frontend fil
 regardless.
 
 **Where:** [2_stock_visualizer.py:64](../2_stock_visualizer.py#L64) `INTRADAY_FALLBACK_PERIOD`;
-[2_stock_visualizer.py:452](../2_stock_visualizer.py#L452) `fetch_prices()` fallback;
-[2_stock_visualizer.py:486](../2_stock_visualizer.py#L486) `fetch_prices_batch()` fallback;
-[2_stock_visualizer.py:199](../2_stock_visualizer.py#L199) `PERIOD_WINDOW_DAYS["1d"]`;
-[1_chart_template.html:925](../_outputs/templates/1_chart_template.html#L925) and
-[1_chart_template.html:966](../_outputs/templates/1_chart_template.html#L966) (price-panel + broadcast guards).
+[2_stock_visualizer.py:465](../2_stock_visualizer.py#L465) `fetch_prices()` fallback;
+[2_stock_visualizer.py:499](../2_stock_visualizer.py#L499) `fetch_prices_batch()` fallback;
+[2_stock_visualizer.py:202](../2_stock_visualizer.py#L202) `PERIOD_WINDOW_DAYS["1d"]`;
+[1_chart_template.html:936](../_outputs/templates/1_chart_template.html#L936) and
+[1_chart_template.html:978](../_outputs/templates/1_chart_template.html#L978) (price-panel + broadcast guards).
 
 ---
 
@@ -316,6 +316,99 @@ again. Any one alone leaves a gap (existing NULLs, or a future provider with the
 bars (or rely on filter #2/#3). The cleaning lives in `_df_to_records`, shared by `fetch_prices` /
 `fetch_prices_batch`.
 
-**Where:** [2_stock_visualizer.py:408](../2_stock_visualizer.py#L408) `_df_to_records()` NaN skip;
-[2_stock_visualizer.py:293](../2_stock_visualizer.py#L293) `db_get_bars()` `c IS NOT NULL`;
+**Where:** [2_stock_visualizer.py:421](../2_stock_visualizer.py#L421) `_df_to_records()` NaN skip;
+[2_stock_visualizer.py:296](../2_stock_visualizer.py#L296) `db_get_bars()` `c IS NOT NULL`;
 [1_chart_template.html:846](../_outputs/templates/1_chart_template.html#L846) `renderChart()` finite-close filter.
+
+---
+
+## D19 — Current price is canonical (one value per ticker), independent of the selected period (2026-06-05)
+
+**Symptom.** Outside market hours, the headline "current price" changed when switching periods — e.g. AAPL
+read 272.53 on 1D, 273.48 on 5D, 272.51 on 3Mo/6Mo/1Y, 270.23 on 2Y/5Y, 260.48 on MAX. The user reasonably
+expects the current price to be the same on every period; only the gain/loss over the window should differ.
+
+**Root cause.** The displayed price was `records[last].c` — the close of the **last bar of the selected
+period's interval**. Each period uses a different interval (1D→1m, 5D→5m, 1mo→1h, 3–12mo→1d, 2–5y→1wk,
+max→1mo), each cached independently with its own TTL. Coarse intervals (`1wk` TTL 7d, `1mo` TTL 30d) keep a
+**stale trailing bar** that is a week/month-to-date snapshot from whenever it was last fetched, so the
+"current price" disagreed across periods. (Confirmed from the cache: the `1mo` bar was an April-month bar
+last fetched ~2 weeks before the `1m`/`1d` data.)
+
+**Decision.** Decouple the headline price from the period's bars. The server attaches a **canonical
+`last_price`** (and `last_price_at`) to every payload, read from a single interval per ticker:
+- **Market open →** `1m` (the live feed — preserves the ticking 1D experience).
+- **Market closed →** `1d` (the official last-session close).
+
+`_price_interval(exchange)` picks the interval; `_ensure_price_interval_fresh()` refreshes it (self-gating on
+TTL) on fresh-mode requests when the requested interval isn't already the canonical one, so the value is both
+**consistent and current** regardless of which period triggered the request. The client uses `last_price` for
+the price label, change, target %, and title; the period's `records` now only drive the **chart shape** and
+the **gain/loss baseline** (`first.o`, or `prevClose1d` for 1d). Change = `last_price − baseline`, so only the
+gain/loss varies per period — exactly the expected behaviour.
+
+**Why interval-switched rather than always-daily.** Always-daily would freeze the live 1D headline during
+market hours (daily TTL is 1 day, so it wouldn't tick). Always-intraday would be stale/missing for tickers
+only ever viewed at long periods. Keying off market state gives the right source in both regimes; tickers on
+different exchanges resolve independently (the batch path groups refreshes by `(interval, anchor)`).
+
+**Fallback.** `last_price` is `null` only when the canonical interval has nothing cached yet (e.g. first SWR
+paint before the fresh call lands); the client falls back to the period's last bar for that one frame.
+
+**Consequence / known wrinkle (RESOLVED by D20).** Originally the chart's right-edge bar on a coarse period
+could still be a stale month/week close while the headline showed the fresh canonical price. **D20** closes
+that gap — the trailing bar is now pinned to the canonical price and the `1wk`/`1mo` TTLs were shortened.
+
+**Interaction with the swap surface (§11/D17).** `last_price` is derived purely from cached bars via
+`db_get_last_close`, and the canonical interval is filled by the same `fetch_prices`/`fetch_prices_batch`
+used everywhere — a future licensed-provider swap needs no special handling here.
+
+**Where:** [2_stock_visualizer.py:312](../2_stock_visualizer.py#L312) `db_get_last_close()`;
+[2_stock_visualizer.py:517](../2_stock_visualizer.py#L517) `_build_payload()` (`last_price`/`last_price_at`);
+[2_stock_visualizer.py:568](../2_stock_visualizer.py#L568) `PRICE_INTERVAL_ANCHOR` /
+[571](../2_stock_visualizer.py#L571) `_price_interval()` / [575](../2_stock_visualizer.py#L575)
+`_ensure_price_interval_fresh()`; fresh-path hooks in `get_chart_data` and `get_chart_data_batch`;
+client `currentPrice` at [1_chart_template.html:882](../_outputs/templates/1_chart_template.html#L882),
+used in the price panel ([936](../_outputs/templates/1_chart_template.html#L936)) and broadcast
+([978](../_outputs/templates/1_chart_template.html#L978)).
+
+---
+
+## D20 — Coarse chart bars made current: trailing-bar pin + shorter 1wk/1mo TTLs (2026-06-05)
+
+**Context.** D19 made the *headline* price canonical, but left a "known wrinkle": on a coarse period at
+market close the chart's right-edge bar could still be a stale week/month-to-date close (e.g. MAX ending at
+260.48 while the headline read 272.51), because `1wk`/`1mo` data was refreshed at most every 7/30 days and the
+trailing bar is the only one that moves day-to-day. The user asked to make the coarse chart bars themselves
+current.
+
+**Decision — two complementary changes.**
+1. **Shorter coarse TTLs.** `CACHE_TTL["1wk"]` and `["1mo"]` dropped from 7 days / 30 days to **1 day**. Older
+   bars in a weekly/monthly series never change, so a daily re-fetch (one cheap yfinance call when the period
+   is viewed) keeps the trailing bar — and any just-completed week/month — current without missing bars.
+2. **Trailing-bar pin.** `_build_payload()` overwrites the **last served bar's close** with the canonical
+   `last_price` (widening high/low so the candle stays valid), but **only when `last_price_at` is newer than
+   that bar** (`last["t"] > records[-1]["t"]`). This makes the chart's right edge equal the headline exactly,
+   and during market hours it tracks the live 1m tick.
+
+**Why the timestamp guard matters.** It targets exactly the bars that lag: a coarse `1wk`/`1mo` trailing bar
+(stamped at week/month start) and a still-forming daily bar during open (stamped at day start, older than the
+live 1m). It deliberately does **not** rewrite an intraday series' last bar (already the freshest point), so
+the 1D/5D charts keep their real last tick. For the daily periods (3–12 mo) at close the trailing daily bar
+already equals the canonical daily close, so the guard is a no-op there.
+
+**Why both, not just one.** The pin alone fixes the trailing *close* but can't add a complete week/month bar
+that went stale (cache older than one period → a missing bar, leaving a gap); the shorter TTL refetches those.
+The shorter TTL alone leaves the trailing bar up to ~1 day behind during market hours; the pin makes it live.
+Together the coarse chart is both complete and current.
+
+**Verified.** With the committed cache at market close, the served trailing close for 2Y/5Y/MAX is now 272.51
+(was 270.23 / 260.48), candles remain valid (`low ≤ close ≤ high`), and it matches the headline.
+
+**Trade-off.** The pinned trailing bar's high/low may slightly overstate the true week/month extreme if the
+canonical price is an outlier (it widens the range to include the current price). This only affects the
+single in-progress bar and is the expected behaviour of a "current period so far" candle.
+
+**Where:** [2_stock_visualizer.py:75](../2_stock_visualizer.py#L75) `CACHE_TTL` (`1wk`/`1mo` = 1 day);
+[2_stock_visualizer.py:517](../2_stock_visualizer.py#L517) `_build_payload()` trailing-bar pin (the
+`last["t"] > records[-1]["t"]` block).

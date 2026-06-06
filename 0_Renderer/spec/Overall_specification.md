@@ -146,7 +146,7 @@ Bars are **keyed by interval**, not by period. Fetching `1y @ 1d` automatically 
 
 ### 4.4 TTLs
 
-Base TTLs per interval, in `CACHE_TTL` ([2_stock_visualizer.py:72-79](../2_stock_visualizer.py#L72)):
+Base TTLs per interval, in `CACHE_TTL` ([2_stock_visualizer.py:75-83](../2_stock_visualizer.py#L75)):
 
 | Interval | Base TTL | During market hours (intraday only) |
 |---|---|---|
@@ -154,8 +154,11 @@ Base TTLs per interval, in `CACHE_TTL` ([2_stock_visualizer.py:72-79](../2_stock
 | `5m`  | 30 s | **6 s** |
 | `1h`  | 5 min | **6 s** |
 | `1d`  | 1 day | — |
-| `1wk` | 7 days | — |
-| `1mo` | 30 days | — |
+| `1wk` | 1 day | — |
+| `1mo` | 1 day | — |
+
+`1wk` / `1mo` are **1 day** (not 7 / 30) so the trailing, still-forming week/month bar refreshes daily and the
+coarse charts stay current (D20). Older bars in those series never change, so the daily re-fetch is one cheap call.
 
 `_effective_ttl()` drops the three intraday intervals (`1m`, `5m`, `1h`) to 6 s whenever the resolved exchange is currently open. That is what drives the "live" feel of the chart — the frontend re-polls every 6 s while the market is open, and each poll hits a warm cache unless ≥ 6 s have elapsed since the last upstream fetch.
 
@@ -163,7 +166,7 @@ Metadata TTL: **7 days** (`META_TTL = 604_800`). `_ensure_meta_fresh()` refreshe
 
 ### 4.5 Period window
 
-`PERIOD_WINDOW_DAYS` in [2_stock_visualizer.py:198-208](../2_stock_visualizer.py#L198) defines how far back the DB is queried when serving bars for a period:
+`PERIOD_WINDOW_DAYS` in [2_stock_visualizer.py:201-211](../2_stock_visualizer.py#L201) defines how far back the DB is queried when serving bars for a period:
 
 ```
 1d:5, 5d:10, 1mo:40, 3mo:100, 6mo:200, 1y:400, 2y:750, 5y:1900, max:None
@@ -210,12 +213,20 @@ SWR is enforced by `get_chart_data()` and `get_chart_data_batch()`; the HTTP lay
   "fetched_at":        "2026-04-24T14:30:06",
   "records":           [ {"t":1713965400,"o":7.08,"h":7.09,"l":7.05,"c":7.07,"v":1234}, … ],
   "market_open":       true,
+  "last_price":        7.07,
+  "last_price_at":     1713965400,
   "exchange_schedule": { "code":"NMS","name":"NASDAQ","tz":"America/New_York",
                          "open":[9,30],"close":[16,0],"break_start":null,
                          "break_end":null,"approximate":false },
   "stale":             false
 }
 ```
+
+`last_price` / `last_price_at` are the **canonical current price** (D19): sourced from one
+interval per ticker (`1m` while the exchange is open, else the daily close), so the headline price is
+identical across every period — only the per-window gain/loss changes. `records` still carry the selected
+period's bars for the chart and the gain/loss baseline. `last_price` is `null` only when nothing is cached
+for the canonical interval yet; the client then falls back to the period's last bar.
 
 ---
 
@@ -383,7 +394,7 @@ The parent (`index.html`) and each iframe (`1_chart_template.html`) are same-ori
 1. **yfinance ToS** — already discussed; app is local-personal only until provider is swapped.
 2. **Holiday accuracy** — approximate for 9 Asian + Latin-American regions (§9).
 3. **Session-anchor edge case** — if the SQLite cache only has a prior session's 1m bars (new DB, weekend), the chart will anchor on that session until the next 1-minute fetch returns today's first bar. Resolves automatically on first successful live poll.
-4. **One port** — hardcoded to 5000 (`PORT = 5000` in [2_stock_visualizer.py:810](../2_stock_visualizer.py#L810)). No CLI flag.
+4. **One port** — hardcoded to 5000 (`PORT = 5000` in [2_stock_visualizer.py:903](../2_stock_visualizer.py#L903)). No CLI flag.
 5. **No auth** — Flask binds to `0.0.0.0`, so anyone on the LAN can read the cached data. Acceptable for a personal-tool on a trusted network; not acceptable for a deployed service.
 
 ---
@@ -392,14 +403,15 @@ The parent (`index.html`) and each iframe (`1_chart_template.html`) are same-ori
 
 | Concern | File : symbol |
 |---|---|
-| Cache TTLs | [2_stock_visualizer.py:72](../2_stock_visualizer.py#L72) `CACHE_TTL` |
+| Cache TTLs | [2_stock_visualizer.py:75](../2_stock_visualizer.py#L75) `CACHE_TTL` |
 | Period→interval | [2_stock_visualizer.py:44](../2_stock_visualizer.py#L44) `PERIOD_INTERVAL` |
 | Intraday market-closed fallback | [2_stock_visualizer.py:64](../2_stock_visualizer.py#L64) `INTRADAY_FALLBACK_PERIOD` (D17) |
-| DB schema | [2_stock_visualizer.py:219](../2_stock_visualizer.py#L219) `_init_db()` |
-| Fresh vs SWR | [2_stock_visualizer.py:525](../2_stock_visualizer.py#L525) `get_chart_data()` |
-| Batch fetch | [2_stock_visualizer.py:564](../2_stock_visualizer.py#L564) `get_chart_data_batch()` |
-| NaN-bar filter (ingest + serve) | [2_stock_visualizer.py:408](../2_stock_visualizer.py#L408) `_df_to_records()` / [293](../2_stock_visualizer.py#L293) `db_get_bars()` (D18) |
-| Clock sync | [2_stock_visualizer.py:112](../2_stock_visualizer.py#L112) `_fetch_clock_offset()` |
+| DB schema | [2_stock_visualizer.py:222](../2_stock_visualizer.py#L222) `_init_db()` |
+| Fresh vs SWR | [2_stock_visualizer.py:589](../2_stock_visualizer.py#L589) `get_chart_data()` |
+| Batch fetch | [2_stock_visualizer.py:634](../2_stock_visualizer.py#L634) `get_chart_data_batch()` |
+| NaN-bar filter (ingest + serve) | [2_stock_visualizer.py:421](../2_stock_visualizer.py#L421) `_df_to_records()` / [296](../2_stock_visualizer.py#L296) `db_get_bars()` (D18) |
+| Canonical current price + trailing-bar pin | [2_stock_visualizer.py:571](../2_stock_visualizer.py#L571) `_price_interval()` / [517](../2_stock_visualizer.py#L517) `_build_payload()` `last_price` (D19/D20) |
+| Clock sync | [2_stock_visualizer.py:115](../2_stock_visualizer.py#L115) `_fetch_clock_offset()` |
 | Exchange schedules | [market_calendars.py:22](../market_calendars.py#L22) `EXCHANGE_SCHEDULES` |
 | Ring layout & projection | [index.html:1044](../index.html#L1044) (Three.js module block) |
 | localStorage keys | [index.html:1078](../index.html#L1078) onward |

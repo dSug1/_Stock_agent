@@ -873,6 +873,17 @@ function renderChart(data) {
     if (firstTodayIdx > 0) records = records.slice(firstTodayIdx);
   }
 
+  // Canonical current price (D19): server-provided, identical across every
+  // period so the headline price doesn't change when you switch time windows —
+  // only the per-window gain/loss does. Falls back to this period's last bar
+  // when the server didn't supply one (e.g. first SWR paint before the fresh
+  // call lands).
+  const _lastBar = records.length ? records[records.length - 1] : null;
+  const currentPrice =
+    (typeof data.last_price === "number" && isFinite(data.last_price))
+      ? data.last_price
+      : (_lastBar ? _lastBar.c : null);
+
   // ── Price series ─────────────────────────────────────────────────────────
   const candles = records.map(r => ({
     time:  r.t,    // Unix epoch — Lightweight Charts accepts this directly
@@ -922,21 +933,22 @@ function renderChart(data) {
   // >= 1 (not >= 2): when the market is closed the last session may collapse
   // to a single visible bar; we still want its close shown as the price rather
   // than a blank/0.00. `first` falls back to `last` so the % math stays sane.
-  if (records.length >= 1) {
-    const last  = records[records.length - 1];
+  if (records.length >= 1 && currentPrice != null) {
     const first = records[0];
+    // Baseline is the window's start (or yesterday's close for 1d). It changes
+    // per period; `currentPrice` does not — so only the gain/loss varies. (D19)
     const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
-    const chg   = last.c - ref;
+    const chg   = currentPrice - ref;
     const chgPct= ((chg / ref) * 100).toFixed(2);
     const color = chg >= 0 ? "#3fb950" : "#f85149";
 
     $tickerLabel.textContent  = meta.ticker || "—";
     $companyLabel.textContent = meta.short_name || "";
-    $priceLabel.textContent   = last.c.toFixed(2);
+    $priceLabel.textContent   = currentPrice.toFixed(2);
     $priceLabel.style.color   = color;
     $changeLabel.textContent  = `${chg >= 0 ? "+" : ""}${chg.toFixed(2)} (${chgPct}%)`;
     $changeLabel.style.color  = color;
-    _lastClosePrice = last.c;
+    _lastClosePrice = currentPrice;
     renderTargetLabel();
     // Tint line/area series to match price direction
     const rgba = (hex, a) => {
@@ -949,7 +961,7 @@ function renderChart(data) {
       topColor:    rgba(color, 0.28),
       bottomColor: rgba(color, 0.02),
     });
-    document.title            = `${meta.ticker} ${last.c.toFixed(2)} — Stock Visualizer`;
+    document.title            = `${meta.ticker} ${currentPrice.toFixed(2)} — Stock Visualizer`;
   }
 
   // ── Status / footer ───────────────────────────────────────────────────────
@@ -963,19 +975,18 @@ function renderChart(data) {
   }
 
   // Broadcast price info to parent so the fixed overlay can display it.
-  if (window.parent !== window && records.length >= 1) {
-    const last  = records[records.length - 1];
+  if (window.parent !== window && records.length >= 1 && currentPrice != null) {
     const first = records[0];
     const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
-    const chg   = last.c - ref;
+    const chg   = currentPrice - ref;
     const chgPct= ((chg / ref) * 100).toFixed(2);
     try {
       window.parent.postMessage({
         type: 'sv-price-info',
         ticker: meta.ticker || '',
         company: meta.short_name || '',
-        price: last.c.toFixed(2),
-        priceNum: last.c,
+        price: currentPrice.toFixed(2),
+        priceNum: currentPrice,
         change: `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${chgPct}%)`,
         positive: chg >= 0,
         status: market_open ? 'open' : 'closed',
