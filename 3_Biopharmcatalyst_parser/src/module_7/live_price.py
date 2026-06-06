@@ -7,8 +7,9 @@ deep-dive ranking doesn't need 6-second granularity — 60s is enough).
 Used by:
   • `scripts/3_7_serve_selection.py` — `/api/live_price` endpoint that
     the HTML JS polls during market hours.
-  • `scripts/3_7_deep_dive.py` — before pack-building, refresh the
-    price for each dispatched ticker so Claude sees the **latest** price.
+  • `scripts/3_8_claude_dispatch.py` (D40 unified dispatcher) — before
+    pack-building, refresh the price for each dispatched ticker so
+    Claude sees the **latest** price.
 
 The function is intentionally narrow: one batched call per request,
 falls back to per-ticker on batch failure.

@@ -200,59 +200,40 @@ if /i "%RUN_M65%"=="y" (
 )
 
 REM ============================================================
-REM Module 7 — Claude API deep-dive (BILLED — gated by mandatory [y/N]).
-REM Default feed is rolling-view hard_pass tickers, filtered through the
-REM catalyst-identity cache (D17). Estimated cost printed pre-dispatch.
-REM Use scripts\3_7_estimate_cost.py first for a dry-run preview.
+REM Module 7 — compute rescue eligibility (FREE; D40 — was M8.0).
+REM Classifies every hard_pass=0 catalyst as A/B/C rescue or "stays
+REM excluded" and writes the flags into catalyst_scores.rescued +
+REM rescue_class. Idempotent. ALWAYS runs (no [y/N] gate) so the M8
+REM dispatcher below sees up-to-date rescue flags.
 REM ============================================================
 echo.
-echo === Module 7 — Claude API deep-dive (Anthropic-billed) ===
-echo Run scripts\3_7_estimate_cost.py first to preview cost ^(no API call^).
-set /p RUN_M7="Proceed to Module 7 (THIS WILL SPEND MONEY on Anthropic)? [y/N]: "
-if /i "%RUN_M7%"=="y" (
-    python scripts\3_7_deep_dive.py
-    if errorlevel 1 (
-        echo [WARN] Module 7 reported a failure or was aborted at the gate.
-    )
-    REM --- Re-render the HTML so M7 outputs land in catalyst_scores.html -
-    echo.
-    set /p RUN_RENDER7="Re-render catalyst_scores.html with M7 deep-dives? [Y/n]: "
-    if /i not "%RUN_RENDER7%"=="n" (
-        python scripts\3_6_render_scores.py
-        if errorlevel 1 (
-            echo [WARN] HTML render failed, continuing.
-        )
-    )
-)
-
-REM ============================================================
-REM Module 8 — Catalyst rescue + re-dispatch (D35).
-REM Two-step:
-REM   (a) 3_8_compute_rescue.py — free; populates catalyst_scores.rescued
-REM       + rescue_class for H1-small-cap, H3-imminent/undated, H5-non-
-REM       standard catalysts. Always safe to run; idempotent.
-REM   (b) 3_8_rescue_dispatch.py — Anthropic-billed; same gating as M7.
-REM       Skip cleanly if you only want the rescue flags populated.
-REM ============================================================
-echo.
-echo === Module 8a: compute rescue eligibility (free) ===
-python scripts\3_8_compute_rescue.py
+echo === Module 7: compute rescue eligibility (free) ===
+python scripts\3_7_compute_eligibility.py
 if errorlevel 1 (
-    echo [WARN] 3_8_compute_rescue.py failed; rescue tab will be empty.
+    echo [WARN] Module 7 ^(compute_eligibility^) failed; rescue tab will be empty.
 )
 
+REM ============================================================
+REM Module 8 — UNIFIED Claude API dispatch (D40 — BILLED).
+REM Fans out TWO parallel Anthropic batches under the hood:
+REM   batch_hp   = hard-pass feed (m7-v2 prompt)
+REM   batch_res  = rescue feed     (m8-rescue-v1 prompt)
+REM but presents ONE combined cost estimate and ONE [y/N] gate.
+REM Wall time = max(hp, res) (parallel ThreadPoolExecutor), not sum.
+REM Use scripts\3_8_estimate_cost.py first for a dry-run preview.
+REM ============================================================
 echo.
-echo === Module 8b — Claude API rescue dispatch (Anthropic-billed) ===
+echo === Module 8 — Claude API unified dispatch (Anthropic-billed) ===
 echo Run scripts\3_8_estimate_cost.py first to preview cost ^(no API call^).
-set /p RUN_M8="Proceed to Module 8 rescue dispatch (THIS WILL SPEND MONEY)? [y/N]: "
+set /p RUN_M8="Proceed to Module 8 (THIS WILL SPEND MONEY on Anthropic)? [y/N]: "
 if /i "%RUN_M8%"=="y" (
-    python scripts\3_8_rescue_dispatch.py
+    python scripts\3_8_claude_dispatch.py
     if errorlevel 1 (
         echo [WARN] Module 8 reported a failure or was aborted at the gate.
     )
-    REM --- Re-render the HTML so M8 outputs land in the Rescued tab -
+    REM --- Re-render the HTML so M8 outputs land in the report ----
     echo.
-    set /p RUN_RENDER8="Re-render catalyst_scores.html with M8 rescue deep-dives? [Y/n]: "
+    set /p RUN_RENDER8="Re-render catalyst_scores.html with M8 deep-dives? [Y/n]: "
     if /i not "%RUN_RENDER8%"=="n" (
         python scripts\3_6_render_scores.py
         if errorlevel 1 (
@@ -261,10 +242,10 @@ if /i "%RUN_M8%"=="y" (
     )
 ) else (
     REM Even without dispatch, re-render so the new Rescued tab counts
-    REM reflect the compute_rescue step above.
+    REM reflect the M7 compute_eligibility step above.
     python scripts\3_6_render_scores.py
     if errorlevel 1 (
-        echo [WARN] HTML re-render after compute_rescue failed.
+        echo [WARN] HTML re-render after compute_eligibility failed.
     )
 )
 
@@ -288,4 +269,16 @@ if errorlevel 1 (
 
 echo.
 echo === run_3_Biopharmcatalyst_parser complete ===
+
+REM ============================================================
+REM D40 follow-up #2 — auto-launch the render bat so the user gets
+REM the browser opened to the latest catalyst_scores.html without
+REM having to invoke run_3_Biopharm_render.bat manually.
+REM The render bat blocks on serve_forever; Ctrl-C in this window
+REM stops the local server (and exits this bat).
+REM ============================================================
+echo.
+echo === Auto-launching run_3_Biopharm_render.bat ^(server + browser^) ===
+call "%PARSER_ROOT%run_3_Biopharm_render.bat"
+
 endlocal

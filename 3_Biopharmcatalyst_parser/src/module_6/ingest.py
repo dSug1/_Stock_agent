@@ -58,8 +58,8 @@ class ScoreStats:
 
 
 # D35 — switched from INSERT OR REPLACE to ON CONFLICT DO UPDATE so the
-# `rescued` + `rescue_class` columns (managed by scripts/3_8_compute_rescue.py)
-# survive M6 re-runs. INSERT OR REPLACE would reset them to defaults
+# `rescued` + `rescue_class` columns (managed by scripts/3_7_compute_eligibility.py
+# in the D40 layout; was scripts/3_8_compute_rescue.py pre-D40) survive M6 re-runs. INSERT OR REPLACE would reset them to defaults
 # (0 / NULL), forcing a compute_rescue re-run after every M6 ingest.
 _INSERT_SQL = """
 INSERT INTO catalyst_scores (

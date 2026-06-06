@@ -1,4 +1,8 @@
-"""Module 8 — compute rescue eligibility + UPDATE catalyst_scores.
+"""Module 7 — compute rescue eligibility + UPDATE catalyst_scores.
+
+D40 — renamed from 3_8_compute_rescue.py so the bat executes modules in
+numerical order (this free pre-step now runs as M7, before M8's billed
+Claude dispatch).
 
 Reads every hard_pass=0 row in the rolling-view (latest snapshot per
 catalyst), classifies it via module_8.rescue_filter, and writes the
@@ -6,13 +10,14 @@ result back to:
     catalyst_scores.rescued       (0 / 1)
     catalyst_scores.rescue_class  ('A' / 'B' / 'C' / 'AB' / ... / NULL)
 
-Idempotent: re-running rewrites the same values. Designed to run as a
-post-M6 step in the orchestrator bat (after M6 emits fail_reasons but
-before M8's dispatch script runs).
+Idempotent: re-running rewrites the same values. The catalyst_scores
+table also gets `rescued = 0, rescue_class = NULL` cleared on any
+hard_pass=1 row that previously carried rescue flags (so a re-run of M6
+that promotes a ticker to hard_pass leaves no stale rescue tag).
 
 Usage (from 3_Biopharmcatalyst_parser/):
-    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_compute_rescue.py
-    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_compute_rescue.py --dry-run
+    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_7_compute_eligibility.py
+    PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_7_compute_eligibility.py --dry-run
 """
 from __future__ import annotations
 
@@ -50,7 +55,6 @@ def _load_mcap_map(fundamentals_db: Path, biotech_db: Path) -> dict[str, Optiona
             ):
                 if r["ticker"] not in mcap:
                     mcap[r["ticker"]] = float(r["market_cap_fdsc_usd"])
-    # Fallback: BPC's static mcap (some rows have it even when M6.5 doesn't).
     conn = get_connection(biotech_db)
     try:
         for r in conn.execute(
@@ -95,12 +99,7 @@ def _write_back(
     biotech_db: Path,
     updates: list[tuple[str, Optional[str], str, str, str, str, str]],
 ) -> int:
-    """UPDATE catalyst_scores SET rescued=?, rescue_class=? for each row.
-
-    Each update tuple: (rescued, rescue_class, snapshot_date, ticker, drug,
-    nct_number, next_catalyst_type) — values come first because that's the
-    SQL parameter order.
-    """
+    """UPDATE catalyst_scores SET rescued=?, rescue_class=? for each row."""
     if not updates:
         return 0
     conn = get_connection(biotech_db)
@@ -132,20 +131,17 @@ def main() -> int:
                         help="Show what would change without writing.")
     args = parser.parse_args()
 
-    print(f"[3_8_compute_rescue] biotech-db: {args.biotech_db}")
-    print(f"[3_8_compute_rescue] fundamentals-db: {args.fundamentals_db}")
+    print(f"[3_7_compute_eligibility] biotech-db: {args.biotech_db}")
+    print(f"[3_7_compute_eligibility] fundamentals-db: {args.fundamentals_db}")
 
     rows = _fetch_excluded_rows(args.biotech_db)
-    print(f"[3_8_compute_rescue] rolling-view excluded rows: {len(rows)}")
+    print(f"[3_7_compute_eligibility] rolling-view excluded rows: {len(rows)}")
 
     mcap_map = _load_mcap_map(args.fundamentals_db, args.biotech_db)
-    print(f"[3_8_compute_rescue] mcap lookup populated for {len(mcap_map)} tickers")
+    print(f"[3_7_compute_eligibility] mcap lookup populated for {len(mcap_map)} tickers")
 
-    # Also need next_catalyst_type for each row to drive Class C scope.
-    # It's already in catalyst_scores so it's in `rows` above.
     decisions = classify_rows(rows, mcap_lookup=mcap_map)
 
-    # Bucket counts + per-class breakdown
     n_rescued = sum(1 for _, d in decisions if d.rescued)
     by_class: dict[str, int] = {}
     for _, d in decisions:
@@ -158,8 +154,6 @@ def main() -> int:
         print(f"     class={cls}: {by_class[cls]}")
     print()
 
-    # Build the UPDATE batch — only write rows whose rescued/rescue_class
-    # actually CHANGED, so the script is idempotent and quiet on re-runs.
     updates: list[tuple] = []
     n_changed = 0
     n_unchanged = 0
@@ -177,9 +171,6 @@ def main() -> int:
         ))
         n_changed += 1
 
-    # Also need to reset previously-rescued rows back to 0 if they're now
-    # hard_pass=1 (because M6 was re-run and they passed all gates). The
-    # query above doesn't include them — let's clear them in a separate pass.
     conn = get_connection(args.biotech_db)
     try:
         cur = conn.execute(
@@ -196,11 +187,11 @@ def main() -> int:
 
     if args.dry_run:
         print()
-        print("[3_8_compute_rescue] --dry-run: no writes performed.")
+        print("[3_7_compute_eligibility] --dry-run: no writes performed.")
         return 0
 
     written = _write_back(args.biotech_db, updates)
-    print(f"[3_8_compute_rescue] UPDATE catalyst_scores: {written} row(s)")
+    print(f"[3_7_compute_eligibility] UPDATE catalyst_scores: {written} row(s)")
 
     if n_to_clear:
         conn = get_connection(args.biotech_db)
@@ -210,7 +201,7 @@ def main() -> int:
                 "WHERE hard_pass = 1 AND (rescued = 1 OR rescue_class IS NOT NULL)"
             )
             conn.commit()
-            print(f"[3_8_compute_rescue] cleared {n_to_clear} stale rescue flag(s) on hard-pass rows")
+            print(f"[3_7_compute_eligibility] cleared {n_to_clear} stale rescue flag(s) on hard-pass rows")
         finally:
             conn.close()
 

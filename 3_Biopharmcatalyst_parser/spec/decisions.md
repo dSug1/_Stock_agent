@@ -2132,3 +2132,141 @@ Plus the 0.3s browser launch timer → **~3.0s to browser**. Bat end-to-end (inc
 - A `--no-render` flag on the server (currently the default behaviour when `--render` is omitted) is preserved for the case where the user wants to serve the existing HTML without rebuilding the sidecar.
 
 ---
+
+
+## D40 — Unified Claude dispatcher; M7/M8 renumbered to execute in numerical order (2026-06-06)
+
+**Trigger:** user observed that `run_3_Biopharmcatalyst_parser.bat` ran M7 (Claude API), then M8.0 (compute_rescue, free), then M8.1 (Claude API on rescued). Two billing events, two `[y/N]` gates, ~10 min serial wall time. Also: M8.0 needs to run BEFORE any Claude call, so the bat ran "M8" partially before "M7" — out of numerical order.
+
+**Architecture change** (scripts-only refactor; `src/module_7/` and `src/module_8/` directory layout unchanged):
+
+| Old (pre-D40) | New (D40) | Role |
+|---|---|---|
+| `scripts/3_7_deep_dive.py` | DELETED | Hard-pass M7 dispatcher |
+| `scripts/3_7_estimate_cost.py` | DELETED | M7 cost estimator |
+| `scripts/3_8_compute_rescue.py` | `scripts/3_7_compute_eligibility.py` | Free rescue-eligibility classifier — runs as M7 in the new order |
+| `scripts/3_8_rescue_dispatch.py` | DELETED | M8 rescue dispatcher |
+| `scripts/3_8_estimate_cost.py` (old, rescue only) | `scripts/3_8_estimate_cost.py` (NEW, unified) | Combined HP + RES cost preview |
+| — | `scripts/3_8_claude_dispatch.py` | NEW — unified Claude dispatcher (HP + RES) |
+
+**User decisions captured upfront via AskUserQuestion (2026-06-06):**
+
+| Question | Choice |
+|---|---|
+| Refactor scope | Scripts only — keep `src/module_7/` and `src/module_8/` internal organization. Internal naming doesn't appear in stdout. |
+| Prompt strategy | Keep BOTH prompts internally (m7-v2 for hard-pass, m8-rescue-v1 for rescued). Preserves prior-run cache lineage. Date-resolution preamble materially helps B-rescues. |
+| Gate UX | ONE combined `[y/N]` gate. Estimator/dispatcher print HP subtotal + RES subtotal + combined total. |
+
+**Why both prompts internally:**
+- M8 `m8-rescue-v1` prefix adds a "STEP 0 — RESOLVE THE CATALYST DATE" preamble that's specifically useful for B-class rescues (imminent/missing dates). Forcing hard-pass through that preamble adds ~150 useless input tokens per dispatch AND breaks the m7-v2 cache lineage for any `--override-coverage-gate` hard-pass re-dispatch.
+- The "one billed step" UX requirement is achieved by `ThreadPoolExecutor(max_workers=2)` submitting both batches simultaneously and polling them in parallel. User sees one cost estimate, one gate, one waiting period.
+
+**Wall-time win:** today's worst case is ~5 min (M7 batch) + ~5 min (M8 batch) = **~10 min serial**. After D40: max(hp_wall, res_wall) = **~5 min parallel**. Same per-token cost.
+
+**Internal architecture of `scripts/3_8_claude_dispatch.py`:**
+
+```
+fetch_hard_pass_candidates ─┐                   ┌─ submit_batch + poll ─┐
+                            ├─→ apply gates ───→┤                       ├─→ writeback (M7 row format)
+fetch_rescue_candidates   ──┘   _prepare_feed   └─ submit_batch + poll ─┘   writeback (M7 + D35 rescue fields)
+
+         ↓                                         ↑
+        live_prices (combined yf call)            ThreadPoolExecutor(max_workers=2)
+                                                  ↑
+                                              ONE [y/N] gate (combined cost)
+```
+
+**New CLI flags on `3_8_claude_dispatch.py`:**
+
+| Flag | Purpose |
+|---|---:|
+| `--skip-hard-pass` | Dispatch only the rescue batch. Mirrors the pre-D40 standalone `3_8_rescue_dispatch.py` UX. |
+| `--skip-rescue` | Dispatch only the hard-pass batch. Mirrors the pre-D40 standalone `3_7_deep_dive.py` UX. |
+| (all D38/D39 gate flags + `--resume-run` preserved) | — |
+
+`--resume-run N` looks up the run in `deep_dive_runs`, reads its `prompt_version`, and routes writeback to the correct path (HP format vs HP + D35 rescue fields). One resume per crashed batch; user invokes twice if both crashed (rare).
+
+**Bat changes:**
+- Removed both old M7 and M8 sections (`M7 deep_dive` step + `M8a compute_rescue` + `M8b rescue_dispatch`)
+- New M7 step: `python scripts\3_7_compute_eligibility.py` (free, always runs)
+- New M8 step: ONE `[y/N]` gate → `python scripts\3_8_claude_dispatch.py` → optional re-render
+- Cleaner numbered ordering: M0 → M1 → ... → M6 → M6.5 → **M7 (free) → M8 (billed, both batches)** → render → prune
+
+**Measured impact (smoke-tested on live DB, 2026-06-06):**
+
+| Metric | Value |
+|---|---:|
+| Unified estimator's HP feed (after all gates) | 0 dispatches → $0.00 |
+| Unified estimator's RES feed (after all gates) | 12 dispatches → $0.83 |
+| Combined cost preview | $0.83 |
+| Within $50 cost_ceiling | ✓ |
+| Dispatcher dry-run (`--skip-hard-pass --skip-rescue`) | exits 0 cleanly |
+| Full test suite | **518 passed**, 4 skipped, 0 regressions |
+
+**Backward compatibility:**
+- `data/claude_deep_dives.db` schema unchanged
+- `deep_dive_runs.gate_config_json` format unchanged for the writeback path; new `dispatch_kind` field added inside `gate_config` (purely informational)
+- Existing rows with prompt_version `m7-v2` or `m8-rescue-v1` continue to be cache-hit-able by the new dispatcher
+- D38 ack-gate, D39 coverage-gate, D23 drug-dedup, D38 `--one-drug-per-ticker`, D51 `--resume-run` all preserved
+- `--skip-hard-pass` / `--skip-rescue` flags let the user replay either old-style step in isolation if needed
+
+**Docstring updates in src/:**
+- `src/module_6/ingest.py`: comment now references `3_7_compute_eligibility.py`
+- `src/module_7/context_pack.py::fetch_rescue_candidates`: docstring now references `3_8_claude_dispatch.py`
+- `src/module_7/live_price.py`: module docstring now references `3_8_claude_dispatch.py`
+
+### Future-work signals
+
+- If `live_prices` yfinance batched call gets rate-limited, both batches see the same overlay — refactor to per-batch retry-with-backoff.
+- `--resume-run` is single-batch; if both batches crash simultaneously the user must invoke `--resume-run` twice. Acceptable rare-path UX; a future `--resume-all` could scan `deep_dive_runs` for any open batch and resume each.
+- The cost ceiling is taken as `max(cfg_m7.cost_ceiling_usd, cfg_m8.cost_ceiling_usd)` — a future config could expose a single `cost_ceiling_usd_combined` instead.
+
+---
+
+### D40 follow-up #1 (2026-06-06) — bat parens-escape fix
+
+**Symptom (user-reported):** `run_3_Biopharmcatalyst_parser.bat` closed abruptly right after Module 6.5 completed, before M7 (compute_eligibility) ran or the M8 [y/N] prompt appeared.
+
+**Root cause:** the new M7 block I added in D40 contained an unescaped `(compute_eligibility)` inside the WARN echo that lives inside an `if errorlevel 1 (...)` block:
+
+```bat
+if errorlevel 1 (
+    echo [WARN] Module 7 (compute_eligibility) failed; rescue tab will be empty.
+)
+```
+
+CMD's parser counts paren balance inside `if () (BODY)` constructs and treats raw `(`/`)` inside BODY as block delimiters. The inner `(compute_eligibility)` confused the parser — the closing `)` was interpreted as terminating the if-block early, leaving `failed; rescue tab will be empty.` as a stray command. CMD reported `failed was unexpected at this time.` and exited 255. The parse error fires regardless of whether the if-condition is true (so it bit on every run, not just on M6.5 failures).
+
+**Fix:** escape the inner parens (`^(...^)`), matching the convention every other paren-bearing echo in the bat already uses:
+
+```bat
+if errorlevel 1 (
+    echo [WARN] Module 7 ^(compute_eligibility^) failed; rescue tab will be empty.
+)
+```
+
+**Verification:** ran the M7 segment in isolation with python forced to exit 2 (so the if-block fires); WARN line + `AFTER_M7_OK` both printed, cmd exited 0. No parser error.
+
+**Lessons:**
+- Top-level echoes (outside `if`/`for` blocks) don't need paren escapes because CMD doesn't paren-count outside parenthesized blocks.
+- Echoes INSIDE parenthesized blocks always need `^(...^)`. Easy to forget. The pre-existing `Run scripts\3_8_estimate_cost.py first to preview cost ^(no API call^).` line follows this convention.
+- A grep audit pattern: `^\s*echo .*\(.*\)` (unescaped paren in echo) flags candidates; cross-reference against block-membership.
+
+---
+
+### D40 follow-up #2 (2026-06-06) — auto-launch render bat at end of orchestrator
+
+**User ask:** "at the end of the execution of run_3_Biopharmcatalyst_parser.bat, execute the run_3_Biopharm_render.bat so that the html file is rendered (currently, the html file is updated but it does not automatically render at the end of the run)."
+
+**Behavior change:** the orchestrator bat now ends with `call "%PARSER_ROOT%run_3_Biopharm_render.bat"` immediately before `endlocal`. The render bat (D39 #1 fast-launch variant — single Python process, ~3 s bootstrap) starts the local HTTP server on port 7034, opens the default browser at `http://127.0.0.1:7034/catalyst_scores.html`, and blocks on `serve_forever()` until the user Ctrl-C's.
+
+**Wasted work note:** the M8 step's optional re-render (the `[Y/n]` prompt that runs `3_6_render_scores.py` after the dispatch) already wrote a fresh `Outputs/catalyst_scores.html` + sidecar. The render bat's `--render` flag will re-run the renderer in-process before binding, so the same render runs twice (~2.4 s overhead on the second pass). Acceptable per user direction; cleaner architecturally than splitting render bat into "render-only" + "serve-only" sub-modes.
+
+**No gate:** the user explicitly asked for auto-execution, not a `[Y/n]` prompt. Power users who want to skip the server (e.g., to keep the cmd window for follow-up commands) can Ctrl-C the prompt within ~1 s of seeing the "Auto-launching" banner, then re-invoke the render bat later.
+
+**Side effects:**
+- `setlocal EnableDelayedExpansion` from the parent persists; render bat has no `setlocal` of its own, so its `set "PYTHON=…"` and `set "PYTHONPATH=src"` are scoped to the parent bat's local block (cleaned up by the parent's final `endlocal`).
+- Render bat's `cd /d "%~dp0"` is a no-op since the parent already cd'd to the same directory.
+- Render bat invokes `..\.venv\Scripts\python.exe` directly; the parent's `activate.bat` call earlier doesn't help or hurt.
+
+---

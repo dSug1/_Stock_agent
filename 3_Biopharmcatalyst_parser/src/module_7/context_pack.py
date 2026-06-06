@@ -412,8 +412,9 @@ def fetch_rescue_candidates(
 
     Returns one dict per catalyst whose `catalyst_scores.rescued = 1`,
     same columns as `fetch_hard_pass_candidates` plus a `rescue_class`
-    string ('A'/'B'/'C'/'AB'/...). Caller (3_8_rescue_dispatch.py)
-    builds packs and dispatches via the M7 machinery unchanged.
+    string ('A'/'B'/'C'/'AB'/...). Caller (3_8_claude_dispatch.py, the
+    unified D40 dispatcher) builds packs and dispatches via the M7
+    machinery unchanged.
 
     When ``classes`` is given (e.g. ['A','B']), filters to catalysts
     whose rescue_class CONTAINS any of those letters. None = all.

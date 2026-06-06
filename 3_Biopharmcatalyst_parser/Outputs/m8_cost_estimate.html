@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>M7 cost estimate 2026-05-27,2026-05-28,2026-06-01</title>
+<title>M7 cost estimate 2026-05-27,2026-06-01,2026-06-06</title>
 <style>
   body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
           max-width: 1100px; margin: 2em auto; padding: 0 1.5em;
@@ -22,20 +22,20 @@
 <body>
 <h1>Module 7 — pre-flight cost estimate</h1>
 <div class="stamp">
-  Snapshot: <code>2026-05-27,2026-05-28,2026-06-01</code> &middot;
+  Snapshot: <code>2026-05-27,2026-06-01,2026-06-06</code> &middot;
   Prompt version: <code>m8-rescue-v1:a18558c+edfa489</code> &middot;
   Model: <code>claude-opus-4-7</code> &middot;
-  Generated: 2026-06-04T15:16:46+00:00
+  Generated: 2026-06-06T04:17:14+00:00
 </div>
 
 <div class="summary">
-  <b>Feed size:</b> 9 tickers (9 API calls).<br>
+  <b>Feed size:</b> 12 tickers (12 API calls).<br>
   <b>Production cost (cache + batch):</b>
-    $0.6255
+    $0.8338
 </div>
 
 <h2>Active gates</h2>
-<div class="gates"><code>n_rescue_candidates</code> = <code>33</code><br><code>rescue_class_breakdown</code> = <code>{&#x27;B&#x27;: 22, &#x27;A&#x27;: 9, &#x27;BC&#x27;: 2}</code><br><code>n_drug_groups</code> = <code>33</code><br><code>n_skipped_cache_hits</code> = <code>24</code><br><code>n_to_dispatch_api_calls</code> = <code>9</code><br><code>n_rows_to_populate</code> = <code>9</code><br><code>explicit_tickers</code> = <code>&#x27;all rescued&#x27;</code><br><code>classes_filter</code> = <code>&#x27;A,B,C&#x27;</code><br><code>force_refresh</code> = <code>False</code><br><code>cost_ceiling_usd</code> = <code>50.0</code><br><code>prompt_version</code> = <code>&#x27;m8-rescue-v1:a18558c+edfa489&#x27;</code><br><code>model</code> = <code>&#x27;claude-opus-4-7&#x27;</code><br><code>max_output_tokens</code> = <code>12500</code><br><code>max_uses_web_search</code> = <code>10</code></div>
+<div class="gates"><code>n_hard_pass_candidates</code> = <code>0</code><br><code>n_rescue_candidates</code> = <code>12</code><br><code>rescue_class_breakdown</code> = <code>{&#x27;A&#x27;: 1, &#x27;B&#x27;: 8, &#x27;BC&#x27;: 2, &#x27;C&#x27;: 1}</code><br><code>n_hard_pass_drug_groups</code> = <code>0</code><br><code>n_rescue_drug_groups</code> = <code>12</code><br><code>n_hard_pass_to_dispatch</code> = <code>0</code><br><code>n_rescue_to_dispatch</code> = <code>12</code><br><code>n_skipped_cache_hits</code> = <code>0</code><br><code>n_to_dispatch_api_calls</code> = <code>12</code><br><code>n_rows_to_populate</code> = <code>12</code><br><code>explicit_tickers</code> = <code>&#x27;all (rolling-view)&#x27;</code><br><code>classes_filter</code> = <code>&#x27;A,B,C&#x27;</code><br><code>force_refresh</code> = <code>False</code><br><code>cost_ceiling_usd</code> = <code>50.0</code><br><code>prompt_version</code> = <code>&#x27;m7-v2:fcae987 + m8-rescue-v1:a18558c+edfa489&#x27;</code><br><code>model</code> = <code>&#x27;claude-opus-4-7&#x27;</code><br><code>max_output_tokens</code> = <code>12500</code><br><code>max_uses_web_search</code> = <code>10</code><br><code>hard_pass_subtotal_usd</code> = <code>0.0</code><br><code>rescue_subtotal_usd</code> = <code>0.8337585</code><br><code>combined_total_usd</code> = <code>0.8337585</code></div>
 
 <h2>Pricing scenarios</h2>
 <table>
@@ -49,7 +49,7 @@
     <th>Web-search fee (upper bound)</th>
     <th>Total</th>
   </tr>
-  <tr><td>no-optim</td><td>257,382</td><td>0</td><td>0</td><td>112,500</td><td>$12.30</td><td>$0.9000</td><td><b>$1.3198</b></td></tr><tr><td>cache-only</td><td>152,782</td><td>104,600</td><td>13,075</td><td>112,500</td><td>$10.71</td><td>$0.9000</td><td><b>$1.1610</b></td></tr><tr style="background:#e8f5e9; font-weight:600"><td>cache+batch (production)</td><td>152,782</td><td>104,600</td><td>13,075</td><td>112,500</td><td>$5.3548</td><td>$0.9000</td><td><b>$0.6255</b></td></tr>
+  <tr><td>no-optim</td><td>342,888</td><td>0</td><td>0</td><td>150,000</td><td>$16.39</td><td>$1.2000</td><td><b>$1.7593</b></td></tr><tr><td>cache-only</td><td>199,063</td><td>143,825</td><td>13,075</td><td>150,000</td><td>$14.28</td><td>$1.2000</td><td><b>$1.5475</b></td></tr><tr style="background:#e8f5e9; font-weight:600"><td>cache+batch (production)</td><td>199,063</td><td>143,825</td><td>13,075</td><td>150,000</td><td>$7.1376</td><td>$1.2000</td><td><b>$0.8338</b></td></tr>
 </table>
 
 <h2>Token-count assumptions</h2>
@@ -57,7 +57,7 @@
   <tr><td>Cached prefix tokens (system + few-shots)</td>
       <td>13,075</td></tr>
   <tr><td>Avg pack suffix tokens</td>
-      <td>412</td></tr>
+      <td>388</td></tr>
   <tr><td>Avg search-result tokens per call</td>
       <td>15,000</td></tr>
 </table>
