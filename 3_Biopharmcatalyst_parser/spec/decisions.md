@@ -2080,4 +2080,55 @@ Mirrors the D38 gate's API deliberately: case-insensitive ticker match, defensiv
 - Add a `--show-coverage` CLI that prints the current covered ticker set + drug counts per ticker.
 - The renderer currently builds the covered set from the existing `dd_map.keys()` (cheap, no extra DB call). If the renderer ever stops loading `dd_map` for some reason, the covered set would silently empty out. Defensive: call `tickers_with_existing_dispatch()` directly. Tracked as a possible robustness pass.
 
+### D39 follow-up #1 (2026-06-05) — `run_3_Biopharm_render.bat` further optimization
+
+**Trigger:** user observed the bat still took several seconds; asked whether the techniques used in `0_Renderer/run.bat` (which boots fast) could apply here.
+
+**Compared the two bats:**
+
+| Aspect | `0_Renderer/run.bat` | `run_3_Biopharm_render.bat` (pre-D39#1) |
+|---|---|---|
+| venv activation | invokes `..\.venv\Scripts\python.exe` directly | called `activate.bat` (~0.5s overhead) |
+| Python processes | one (`2_stock_visualizer.py`) | two (render → server) — second startup ~0.2s |
+
+**Two changes:**
+
+1. **New `--render` flag on `scripts/3_7_serve_selection.py`.** Loads `scripts/3_6_render_scores.py` by file path (script name starts with a digit so it's not a normal import target — `importlib.util.spec_from_file_location` handles it), executes the module to get the `render()` function, calls it in-process before the server's prewarm + bind + serve_forever. One Python process does both jobs.
+
+2. **Rewrote `run_3_Biopharm_render.bat`** in 0_Renderer's pattern:
+   - Removed the `call ..\activate.bat` step
+   - Invokes `%~dp0..\.venv\Scripts\python.exe` directly
+   - Single Python invocation with `--render --open-browser`
+
+**Measured impact** (instrumented breakdown of the new single-process bootstrap on the live DB):
+
+| Step | Time |
+|---|---:|
+| stdlib imports | 0.07s |
+| module_7 + module_8 imports (D38#3 lazy yfinance still in effect) | 0.21s |
+| Load `3_6_render_scores.py` via importlib | 0.01s |
+| `render()` execution (warm disk price cache + sidecar write) | 2.41s |
+| `prewarm_from_disk` (203 ok + 5 fail) | 0.00s |
+| HTTP bind | 0.01s |
+| **TOTAL bootstrap (before browser timer)** | **2.71s** |
+
+Plus the 0.3s browser launch timer → **~3.0s to browser**. Bat end-to-end (including cmd parsing) **~3.0-3.5s** vs the D38#3 baseline of ~4s.
+
+**Cumulative trajectory of bat launch time:**
+
+| Stage | Bat launch |
+|---|---:|
+| Original (pre-D35e disk cache) | ~27s |
+| Post-D35e (warm cache) + D35e failure caching | ~17s |
+| Post-D38#2 (server prewarm) | ~6s |
+| Post-D38#3 (lazy yfinance + faster browser timer) | ~4s |
+| **Post-D39#1 (single-process via `--render`)** | **~3-3.5s** |
+
+**Tests:** No new tests (the `--render` flag is a thin importlib wrapper around the existing `render()` function which the test suite already covers). 518 still passing.
+
+### Future-work signals (D39 follow-up #1)
+
+- Further reductions would need to attack the 2.41s `render()` itself. Profile candidates: JSON serialization of the 3.8 MB sidecar (~300-500ms), the catalyst_scores rolling-view SQL (~200-500ms), the insider_trades + funds_breakdown join queries.
+- A `--no-render` flag on the server (currently the default behaviour when `--render` is omitted) is preserved for the case where the user wants to serve the existing HTML without rebuilding the sidecar.
+
 ---

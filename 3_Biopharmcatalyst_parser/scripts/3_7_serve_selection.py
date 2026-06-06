@@ -300,8 +300,41 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--open-browser", action="store_true",
                         help="Auto-launch the default browser at the catalyst_scores.html URL "
-                             "~1.5s after the server starts (mirrors 0_Renderer pattern).")
+                             "~0.3s after the server starts (mirrors 0_Renderer pattern; "
+                             "D38#3 reduced from 1.5s).")
+    parser.add_argument("--render", action="store_true",
+                        help="D39 follow-up — run the renderer in-process before "
+                             "starting the server. Lets `run_3_Biopharm_render.bat` "
+                             "skip the second Python startup, mirroring 0_Renderer's "
+                             "single-process pattern. Adds ~3s (the render's own time) "
+                             "but avoids a ~0.5s extra venv/Python bootstrap.")
     args = parser.parse_args()
+
+    # D39 follow-up — optional in-process render before serve.
+    if args.render:
+        print()
+        print("[3_7_serve_selection] === in-process render ===")
+        # Import the renderer module by file path (script name starts with
+        # a digit so it's not a normal `import` target).
+        import importlib.util
+        scripts_dir = PROJECT_ROOT / "scripts"
+        spec = importlib.util.spec_from_file_location(
+            "_render_scores", scripts_dir / "3_6_render_scores.py",
+        )
+        if spec is None or spec.loader is None:
+            print("[3_7_serve_selection] could not load renderer; continuing without render.")
+        else:
+            render_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(render_mod)
+            try:
+                html_path, data_path, action = render_mod.render()
+                data_kb = data_path.stat().st_size / 1024
+                html_kb = html_path.stat().st_size / 1024
+                print(f"  data:     {data_path}  ({data_kb:.1f} KB) — refreshed")
+                print(f"  template: {html_path}  ({html_kb:.1f} KB) — {action}")
+            except Exception as e:                                    # noqa: BLE001
+                print(f"[3_7_serve_selection] in-process render failed: {e}")
+                print("[3_7_serve_selection] continuing with existing HTML/sidecar")
 
     # D38 follow-up (2026-06-04) — prewarm the in-memory yfinance cache
     # from the renderer's disk cache so the JS's first /api/live_price
