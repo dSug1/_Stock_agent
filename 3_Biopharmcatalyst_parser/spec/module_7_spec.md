@@ -1,6 +1,29 @@
 # Module 7 — Claude API deep-dive (and Module 6.5 — FDSC enrichment)
 
-**Status:** DRAFT for review. Nothing in this spec has been built yet.
+> **⚠ D40 RENUMBERING (2026-06-06):** the script that runs the Claude API
+> deep-dive has moved out of M7 and into a **unified M8 dispatcher**
+> (`scripts/3_8_claude_dispatch.py`). The bat now executes modules in
+> strict numerical order:
+>
+> | New order | Step | Billed? | Script |
+> |---|---|---|---|
+> | M6.5 | FDSC enrichment | free | `scripts/3_6_5_enrich_fundamentals.py` |
+> | **M7** | **Rescue-eligibility classification** (was M8.0 pre-D40) | free | `scripts/3_7_compute_eligibility.py` |
+> | **M8** | **Unified Claude dispatch** (HP + rescue feeds, ONE [y/N], parallel batches) | BILLED | `scripts/3_8_claude_dispatch.py` |
+>
+> This document still accurately describes the Claude-API deep-dive
+> mechanics (context pack, D17 cache, D23 drug-dedup, expectancy math,
+> M6.5 FDSC enrichment, etc.) — those layers all live under `src/module_7/`
+> and are reused unchanged. The CALLERS changed: where the pre-D40 prose
+> below says "M7 dispatcher" or "scripts/3_7_deep_dive.py", read
+> "`scripts/3_8_claude_dispatch.py` (D40 unified dispatcher)". Companion
+> details on the new M8 wrapper live in [module_8_spec.md](module_8_spec.md)
+> §6 and [decisions.md § D40](decisions.md).
+
+**Status:** Production. Numbering reorganised per D40 (2026-06-06); the
+script layout and bat invocation points have moved but the underlying
+context-pack / dispatch / parsing / scoring layers under `src/module_7/`
+are unchanged.
 **Owners:** `3_Biopharmcatalyst_parser/`
 **Depends on:** M6 (`catalyst_scores`), `2_Funds_parser/2_fundparser.db` (read-only).
 **Reuses:** `2_Funds_parser/src/module_4c/edgar_client.py` (SEC XBRL fetch + capital-raise parser), `0_Renderer/2_stock_visualizer.py` (yfinance prices + local cache).
@@ -792,11 +815,11 @@ drug_signature = lower_strip(drug)
 - `deep_dives.anchor_nct_number` + `anchor_next_catalyst_type` — non-NULL on copy rows; NULL on the anchor row itself.
 - `deep_dive_runs.gate_config_json.request_index` — minimal mapping `custom_id → {actual_ticker, drug, members, drug_signature, anchor_*}` so `--resume-run` can rebuild writeback context without re-querying biotech.db.
 
-Implementation:
+Implementation (post-D40):
 - [src/module_7/cache.py](../src/module_7/cache.py) — `compute_drug_signature`, `lookup_drug_cache`, `group_candidates_by_drug`, `partition_drug_groups_by_cache`.
 - [src/module_7/context_pack.py](../src/module_7/context_pack.py) — `augment_pack_with_drug_siblings`.
-- [scripts/3_7_deep_dive.py](../scripts/3_7_deep_dive.py) — `_prepare_per_group` + the expanded-row writeback loop.
-- [scripts/3_7_estimate_cost.py](../scripts/3_7_estimate_cost.py) — drug-grouping reported in the pre-flight summary.
+- [scripts/3_8_claude_dispatch.py](../scripts/3_8_claude_dispatch.py) — `_prepare_per_group` + the expanded-row writeback loop (D40 unified dispatcher; pre-D40 this was split across `3_7_deep_dive.py` and `3_8_rescue_dispatch.py`).
+- [scripts/3_8_estimate_cost.py](../scripts/3_8_estimate_cost.py) — drug-grouping reported in the pre-flight summary for both HP and RES feeds (D40 unified estimator; pre-D40 this was `3_7_estimate_cost.py`).
 
 ---
 
@@ -888,12 +911,18 @@ cost_ceiling_usd: 50.0                         # estimator aborts dispatch if sc
 │   ├─ module_7_system_prompt.md                   # NEW — cacheable prefix
 │   ├─ module_7_few_shots.md                       # NEW — 2-3 worked examples
 │   └─ module_7_web_search_domains.yaml            # NEW — biotech-collapsed whitelist
-├─ scripts/
-│   ├─ 3_6_5_enrich_fundamentals.py                # NEW — M6.5 CLI
-│   ├─ 3_7_estimate_cost.py                        # NEW — dry-run, no API call
-│   ├─ 3_7_deep_dive.py                            # NEW — M7 dispatcher (gate, batch, parse, write)
-│   ├─ 3_6_render_scores.py                        # MODIFIED — LEFT-JOIN claude_deep_dives.db; render 3 new columns + expanded-row section
-│   └─ 3_7_serve_selection.py                      # NEW — local HTTP server (copy of 2_Funds_parser 6_serve_report.py); also serves on-demand raw_text
+├─ scripts/   (current — D40 unified)
+│   ├─ 3_6_5_enrich_fundamentals.py                # M6.5 CLI
+│   ├─ 3_7_compute_eligibility.py                  # D40 — rescue classification (free)
+│   ├─ 3_8_estimate_cost.py                        # D40 — UNIFIED HP+RES cost preview (no API call)
+│   ├─ 3_8_claude_dispatch.py                      # D40 — UNIFIED Claude dispatcher (HP+RES parallel batches, ONE [y/N])
+│   ├─ 3_6_render_scores.py                        # MODIFIED — LEFT-JOIN claude_deep_dives.db; render Claude columns + expanded-row section
+│   └─ 3_7_serve_selection.py                      # local HTTP server + live-price API + D39 #1 --render flag
+│   # PRE-D40, NOW DELETED:
+│   #   3_7_deep_dive.py        → merged into 3_8_claude_dispatch.py
+│   #   3_7_estimate_cost.py    → merged into 3_8_estimate_cost.py
+│   #   3_8_compute_rescue.py   → renamed to 3_7_compute_eligibility.py
+│   #   3_8_rescue_dispatch.py  → merged into 3_8_claude_dispatch.py
 └─ src/
     ├─ module_6_5/                                 # NEW — FDSC enrichment
     │   ├─ __init__.py

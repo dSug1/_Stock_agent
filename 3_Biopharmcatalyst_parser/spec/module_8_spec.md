@@ -1,9 +1,31 @@
-# Module 8 — Catalyst rescue + re-dispatch
+# Module 8 — Unified Claude API dispatch (hard-pass + rescue, D40)
 
-**Status:** **production, dispatched at full scale (2026-05-29).** 282 deep_dive rows across 7 runs (M7 runs 1–4 + M8 runs 5–7). Run #6 covered the full 224-call rescue feed at 93% parse rate (14 of 15 errors are HARD-RULE-#8 catching stale BPC catalysts — real signal, not noise). 100% Claude-resolved-date coverage on M8 dispatches. 468 tests passing (23 M8-specific + 445 inherited).
+> **⚠ D40 ARCHITECTURE (2026-06-06):** M8 is no longer "rescue dispatch
+> only" — it is now the **unified Claude API entry point for the entire
+> pipeline**. The pre-D40 split (M7 = hard-pass Claude dispatch, M8 =
+> rescue compute + rescue Claude dispatch) was collapsed into:
+>
+> | Step | Role | Billed? | Script |
+> |---|---|---|---|
+> | M7 | Rescue-eligibility classification (free pre-step; was M8.0 pre-D40) | free | `scripts/3_7_compute_eligibility.py` |
+> | **M8** | **Unified Claude dispatch — submits TWO parallel Anthropic batches** (hard-pass with m7-v2 prompt + rescue with m8-rescue-v1 prompt) under ONE combined `[y/N]` gate, ONE cost estimate, wall time = max(hp, res) | BILLED | `scripts/3_8_claude_dispatch.py` |
+>
+> What's preserved from this spec (still 100% accurate): the rescue
+> classification algorithm (§2), the D35 schema additions (§3.1), the
+> rescue prompt preamble (§4.1), the date-retrieval task (§4.2), the
+> two added JSON fields (§4.3), and all renderer changes (§5).
+>
+> What changed: the script layout (§3.2) and run flow (§6) reflect the
+> D40 unification. The realized cost history (§7) is the pre-D40 M8
+> rescue tally; new D40 runs will add a `dispatch_kind` field
+> distinguishing HP vs RES anchors.
+>
+> Full rationale: [decisions.md § D40](decisions.md).
 
-**Spec date:** 2026-05-29 (initial D35) — updated 2026-05-29 (post-D36 UI consolidation + run #6 + run #7)
-**Decisions:** [decisions.md § D35](decisions.md) (build) + [§ D36](decisions.md) (UI consolidation + bug fixes + operational learnings)
+**Status:** **production, D40 unified architecture (2026-06-06).** Pre-D40 backfill state: 282 deep_dive rows across 7 runs (HP runs 1–4 + rescue runs 5–7). Run #6 covered the full 224-call rescue feed at 93% parse rate (14 of 15 errors are HARD-RULE-#8 catching stale BPC catalysts — real signal, not noise). 100% Claude-resolved-date coverage on rescue dispatches. **518 tests passing** (D40 added 0 new tests on top of D39's 11; D39's tests cover the coverage-gate that wraps both batches now).
+
+**Spec date:** 2026-05-29 (initial D35) — updated 2026-06-06 (D40 unification).
+**Decisions:** [decisions.md § D35](decisions.md) (initial M8 build) + [§ D36](decisions.md) (UI consolidation + bug fixes) + [§ D38](decisions.md) (ack-gate) + [§ D39](decisions.md) (coverage-gate) + [§ D40](decisions.md) (D40 unification + numerical-order renumbering).
 
 ---
 
@@ -72,13 +94,15 @@ framework for them. Only `Regulatory Decision` (PDUFA) + NULL
 `deep_dive_runs.mode` continues to accept `'sync'` or `'batch'`; M8 runs
 are tagged via `gate_config_json.dispatch_kind = 'm8_rescue'`.
 
-### 3.2 Code layout
+### 3.2 Code layout (D40 unified)
 
 ```
 src/module_8/
 ├─ __init__.py
 ├─ rescue_filter.py     — classify_catalyst(), classify_rows()
 ├─ config.py            — Module8Config (subclasses Module7Config)
+├─ coverage.py          — D39 ticker-coverage gate (tickers_with_existing_dispatch,
+│                         apply_coverage_gate)
 └─ prompt.py            — load_rescue_prefix()
 
 config/
@@ -86,25 +110,65 @@ config/
 └─ module_8_system_prompt_prefix.md           — date-retrieval preamble
 
 scripts/
-├─ 3_8_compute_rescue.py                      — populates catalyst_scores.rescued
-├─ 3_8_estimate_cost.py                       — cost preview (no spend)
-└─ 3_8_rescue_dispatch.py                     — Claude API call (BILLED)
+├─ 3_7_compute_eligibility.py                 — D40 — rescue classification
+│                                                (was scripts/3_8_compute_rescue.py
+│                                                pre-D40; renamed for numerical
+│                                                execution order). Populates
+│                                                catalyst_scores.rescued +
+│                                                rescue_class. Free.
+├─ 3_8_estimate_cost.py                       — D40 — UNIFIED cost preview
+│                                                (HP subtotal + RES subtotal +
+│                                                combined total). Single
+│                                                Outputs/m8_cost_estimate.html.
+└─ 3_8_claude_dispatch.py                     — D40 — UNIFIED Claude dispatcher.
+                                                Fans out TWO parallel Anthropic
+                                                batches via
+                                                ThreadPoolExecutor(max_workers=2):
+                                                  • HP feed → m7-v2 prompt
+                                                  • RES feed → m8-rescue-v1 prompt
+                                                ONE combined [y/N] gate; ONE
+                                                combined cost ceiling check
+                                                (max of cfg_m7 / cfg_m8).
+                                                --resume-run N auto-routes by
+                                                prompt_version. New flags:
+                                                --skip-hard-pass, --skip-rescue.
 
 src/module_7/context_pack.py                  — adds fetch_rescue_candidates()
                                               + augment_pack_for_rescue()
 src/module_7/parsing.py                       — accepts optional
                                               claude_resolved_catalyst_date
                                               + catalyst_date_source fields
-scripts/3_6_render_scores.py                  — new "Rescued" tab + rescue
-                                              chip + date 📅 indicator
-scripts/3_7_serve_selection.py                — live-price allowlist now
-                                              hard_pass=1 OR rescued=1
-run_3_Biopharmcatalyst_parser.bat             — calls 3_8_compute_rescue +
-                                              gated 3_8_rescue_dispatch
+src/module_7/gate.py                          — D38 acknowledged-ticker gate
+                                              (apply_ticker_gate,
+                                              load_acknowledged_tickers,
+                                              collapse_to_one_per_ticker)
+scripts/3_6_render_scores.py                  — Catalyst tab (D36a merge);
+                                              rescue chip + date 📅 indicator;
+                                              D39 covered_tickers payload;
+                                              D40-aware (no longer prints
+                                              "M7 deep-dive" labels — both
+                                              feeds appear under one "deep_dive"
+                                              block in expand panels)
+scripts/3_7_serve_selection.py                — live-price allowlist
+                                              hard_pass=1 OR rescued=1;
+                                              D39 #1 --render flag (single-process
+                                              render + serve)
+run_3_Biopharmcatalyst_parser.bat             — D40 strict numerical order:
+                                              ... → M6 → M6.5 → M7 (free) →
+                                              M8 (BILLED, one [y/N]) →
+                                              D37 prune → D40 #2 auto-call to
+                                              run_3_Biopharm_render.bat
+
+# DELETED 2026-06-06 (D40):
+#   scripts/3_7_deep_dive.py         (functionality merged into 3_8_claude_dispatch.py)
+#   scripts/3_7_estimate_cost.py     (functionality merged into 3_8_estimate_cost.py)
+#   scripts/3_8_compute_rescue.py    (renamed to 3_7_compute_eligibility.py)
+#   scripts/3_8_rescue_dispatch.py   (functionality merged into 3_8_claude_dispatch.py)
 
 tests/
 ├─ test_module8_rescue_filter.py              — 18 tests on classification
-└─ test_module8_parsing_extension.py          — 5 tests on D35 fields
+├─ test_module8_parsing_extension.py          — 5 tests on D35 fields
+└─ test_module8_coverage.py                   — 11 tests on D39 coverage gate
 ```
 
 ### 3.3 Reused M7 machinery (D35 design rule: M8 ⊂ M7)
@@ -246,37 +310,58 @@ Shown only on the Catalyst tab. Explains the rescue chips, the H-gate eligibilit
 
 ---
 
-## 6. Run flow
+## 6. Run flow (D40 unified)
 
 ```bash
-# Free — populate rescued/rescue_class on catalyst_scores
-PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_compute_rescue.py
+# === M7 (free) — populate rescued/rescue_class on catalyst_scores ===
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_7_compute_eligibility.py
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_7_compute_eligibility.py --dry-run
 
-# Free — preview cost before dispatching
+# === M8 cost preview (free) — UNIFIED HP + RES + combined ===
 PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_estimate_cost.py
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_estimate_cost.py --tickers TCRX,KURA
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_estimate_cost.py --classes A,B    # rescue feed filter only
 
-# BILLED — gated by mandatory [y/N] (per D19; --yes bypasses)
-PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_rescue_dispatch.py
+# === M8 dispatch — BILLED, gated by ONE mandatory [y/N] ===
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py
+# under the hood: ThreadPoolExecutor(max_workers=2) submits HP + RES batches in parallel;
+# user sees one [y/N] gate with HP subtotal + RES subtotal + combined total.
 
-# Filter to one class:
-PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_rescue_dispatch.py --classes A
+# === D40 new flags — replay one feed in isolation ===
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --skip-rescue    # HP only
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --skip-hard-pass # RES only
 
-# Single ticker:
-PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_rescue_dispatch.py --tickers EVMN --yes
+# Single ticker (applies to BOTH feeds — useful for one-off re-dispatches):
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --tickers EVMN --yes
 
-# Crash-recovery:
-PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_rescue_dispatch.py --resume-run N
+# Crash-recovery — auto-routes by prompt_version (HP vs RES writeback paths):
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --resume-run N
 
-# Re-render the HTML to populate the Rescued tab
+# Override gates (D38 ack-gate / D39 coverage-gate) — applies to BOTH feeds:
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --override-ack-gate
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --override-coverage-gate
+PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_8_claude_dispatch.py --one-drug-per-ticker
+
+# Re-render the HTML (run_3_Biopharm_render.bat does this + opens browser):
 PYTHONPATH=src ../.venv/Scripts/python.exe scripts/3_6_render_scores.py
 ```
 
-`run_3_Biopharmcatalyst_parser.bat` wires this automatically after M7:
-M8.0 compute is unconditional (free); M8.1 dispatch is gated by `[y/N]`.
+`run_3_Biopharmcatalyst_parser.bat` wires this automatically: M7 runs
+unconditionally (free, no gate); M8 has ONE `[y/N]` gate. At end of the
+bat, the orchestrator `call`s `run_3_Biopharm_render.bat` (D40 #2) so
+the server boots and the browser opens to `catalyst_scores.html`
+automatically.
 
 ---
 
 ## 7. Cost model + realized history
+
+> The cost table below is the **pre-D40 rescue-only tally** (runs 5–7,
+> 2026-05-29). Under D40 each `[y/N]` gate covers HP + RES combined, but
+> per-call pricing math is unchanged — the unified dispatcher just sums
+> the two subtotals into one ceiling check. New runs append to the same
+> `deep_dive_runs` table; aggregating by `gate_config_json.dispatch_kind`
+> recovers per-feed totals.
 
 ### Pre-flight estimator (231-catalyst rescue pool, batch mode)
 
@@ -310,9 +395,11 @@ Most rescued catalysts will cache-hit on re-run (the D17 catalyst-identity cache
 
 - **Auto-rerun on BPC refresh.** When M1 ingests a new BPC docx, the
   rescue eligibility for existing catalysts may shift (e.g. a date now
-  parses cleanly, demoting B back to hard_pass). `3_8_compute_rescue.py`
-  is idempotent and the orchestrator bat calls it post-M6, so this is
-  handled automatically.
+  parses cleanly, demoting B back to hard_pass). The D40 rescue
+  classifier `scripts/3_7_compute_eligibility.py` (was
+  `scripts/3_8_compute_rescue.py` pre-D40) is idempotent and the
+  orchestrator bat calls it post-M6.5 as M7, so this is handled
+  automatically.
 - **Cache invalidation on rescue-class shift.** If a catalyst's
   rescue_class changes between runs (A → AB), the deep_dive cache hit
   is still valid because `prompt_version` doesn't depend on
@@ -334,8 +421,16 @@ Most rescued catalysts will cache-hit on re-run (the D17 catalyst-identity cache
 |---|---:|
 | `tests/test_module8_rescue_filter.py` | 18 |
 | `tests/test_module8_parsing_extension.py` | 5 |
-| **M8-specific total** | **23** |
-| Full repo suite | **468 passed**, 4 skipped (no regressions through D35 + D36) |
+| `tests/test_module8_coverage.py` (D39) | 11 |
+| **M8-specific total** | **34** |
+| Full repo suite | **518 passed**, 4 skipped (no regressions through D35 → D36 → D38 → D39 → D40) |
+
+**D40 added 0 new tests.** The unified dispatcher is a thin orchestrator
+over the existing M7 dispatch + writeback layers (which the existing
+suite already covers) and the existing M8 rescue layers; it adds a
+`ThreadPoolExecutor` wrapper around two functions that were already
+tested in isolation. The D40 follow-up #1 (bat parens-escape fix) was
+verified with a hand-rolled CMD test rather than a pytest entry.
 
 One M6 test (`test_score_snapshot_end_to_end`) was updated by [decisions.md § D36 bug fix #1](decisions.md#bug-fix-1-m6--composite_score-was-null-for-hard-fail-rows): the assertion that hard-fail rows have `composite_score IS NULL` is reversed — they now have a non-null composite in [0, 100] so the Rescued half of the merged Catalyst tab can sort/display by composite.
 
@@ -388,13 +483,27 @@ CING is the standout: sub-$5 stock, 66% p_final, 1-week catalyst — exactly the
 
 A separate audit script (`_tmp_audit_competitor.py` + `_tmp_audit_reverse.py`, deleted after use) compared the BPC + M8 stack against a competitor 14-day catalyst list. Result: our DB covers **~4× more small-cap catalysts** in any given 14-day window. The competitor's apparent depth was concentrated in big-pharma assets that the H1 mcap < $2B gate rejects by design. **Conclusion: stay with BPC + M8 for the small-cap tier.** Audit scripts can be recreated for any future competitor evaluation.
 
-### Pre-dispatch gate (D38) — applies to M8 rescue too
+### Pre-dispatch gates (D38 ack + D39 coverage) — apply to BOTH feeds (D40)
 
-Per [decisions.md § D38](decisions.md), `scripts/3_8_rescue_dispatch.py` (and `3_8_estimate_cost.py`) load `data/acknowledged_tickers.json` after `fetch_rescue_candidates()` and DROP any candidate whose ticker the user has marked as reviewed in the HTML. The gate runs case-insensitively on ticker; M8's drug-group D23 dedup happens AFTER the gate, so a ticker with 5 rescue catalysts → 0 dispatches if the user acked any one of them.
+Per [decisions.md § D38](decisions.md) + [§ D39](decisions.md), the D40
+unified dispatcher (`scripts/3_8_claude_dispatch.py`) and unified
+estimator (`scripts/3_8_estimate_cost.py`) apply the same gate stack to
+BOTH the hard-pass feed and the rescue feed before drug-group dedup:
 
-Bypass per-call with `--override-ack-gate`. Empty / missing `data/acknowledged_tickers.json` = no gating.
+1. **D38 ack-gate** — loads `data/acknowledged_tickers.json`, drops any
+   candidate whose ticker the user has marked as reviewed in the HTML.
+   Bypass per-call with `--override-ack-gate`.
+2. **D38 `--one-drug-per-ticker`** (optional) — collapses multi-drug
+   catalysts to one candidate per ticker (deterministic: smallest drug
+   name alphabetically).
+3. **D39 coverage-gate** — drops any candidate whose ticker has at
+   least one prior `deep_dives` row (M7-format or M8-format dispatch
+   counts). Bypass per-call with `--override-coverage-gate`.
 
-The cost preview (`3_8_estimate_cost.py`) honours the gate too so the estimate reflects what would actually dispatch. Pass `--override-ack-gate` to the estimator to see the un-gated cost.
+Gates run case-insensitively on ticker. D23 drug-group dedup happens
+AFTER the gates. A ticker with 5 catalysts in either feed → 0
+dispatches if any gate hit it. The cost estimator mirrors the same
+gate stack so the preview reflects what would actually dispatch.
 
 ### Retention interaction with M8 data (D37)
 

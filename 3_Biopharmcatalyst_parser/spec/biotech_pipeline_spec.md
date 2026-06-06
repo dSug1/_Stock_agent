@@ -52,10 +52,22 @@ Module 6  (Scoring & ranking) — joins catalyst_snapshots + catalyst_timing
             + v_executive_open_market_trades; consumes config/scoring.yaml
             (depends on Modules 1, 2, 4, 5)
 
-Downstream (NOT in this spec):
-  Module 7 (Claude API deep-dive)     — user-selected subset of Module 6 output
-  Module 8 (Rescue + re-dispatch)     — re-admits H1/H3/H5-excluded catalysts (D35)
-  Module 9 (Dashboard)                — renders M6+M7+M8 output (formerly numbered M8)
+Downstream (NOT fully specified in this document — see module_7_spec.md,
+module_8_spec.md, decisions.md § D40):
+  Module 6.5 (FDSC enrichment)        — SEC XBRL + capital-raises + yfinance →
+                                        data/fundamentals.db (M6.5)
+  Module 7  (Rescue eligibility)      — D40: free pre-step; classifies
+                                        hard_pass=0 catalysts into rescue
+                                        classes A/B/C (was M8.0 pre-D40).
+                                        Script: scripts/3_7_compute_eligibility.py
+  Module 8  (UNIFIED Claude dispatch) — D40: ONE billed step combining the
+                                        pre-D40 M7 (hard-pass) and M8.1
+                                        (rescue) dispatchers via two parallel
+                                        Anthropic batches (m7-v2 + m8-rescue-v1
+                                        prompts) under ONE [y/N] gate.
+                                        Script: scripts/3_8_claude_dispatch.py
+  Module 9  (iOS dashboard)           — renders M6+M8 output (formerly
+                                        numbered M8 pre-D35). Not built yet.
 
 Utility:
   scripts/3_prune_old_data.py         — quarterly DB retention (D37): keep top-3
@@ -89,7 +101,15 @@ Cross-cutting rules that govern how the pipeline is invoked, where files live, a
   ```
 - **Top-level script naming carve-out:** scripts under `3_Biopharmcatalyst_parser/scripts/` are prefixed `3_<module>_<verb>.py` — e.g. `3_0_init_db.py`, `3_1_ingest_catalysts.py`, `3_2_ingest_edgar_form4.py`, `3_3_ingest_edgar_13dg.py`, `3_4_ingest_bpc_insider.py`, `3_5_compute_timing.py`. This mirrors `2_Funds_parser`'s `2_*` / `4_*` / `4c_*` convention.
 - **Python package naming rule:** packages under `src/` **cannot** start with a digit. Use `src/module_0/`, `src/module_1/`, … `src/module_5/`. (Same carve-out as `2_Funds_parser/src/module_4c/`, `src/module_7/`.)
-- **Pipeline orchestrator:** `run_3_Biopharmcatalyst_parser.bat` chains M0 → M1 → M5 → M4 → M2 → M3 with y/N gates per step. Mirrors `2_Funds_parser/run_2_Funds_parser.bat`. Updated at every script-completion milestone (per repo memory `feedback_update_daily_runner`).
+- **Pipeline orchestrator:** `run_3_Biopharmcatalyst_parser.bat` chains the full pipeline with `[y/N]` gates per billed/expensive step. Full D40 chain:
+  ```
+  funds-refresh → M0a (docx→csv) → M0b (db init) → M1 (catalysts)
+    → M5 (timing) → M4 (BPC insider) → M2 (Form 4) → M3 (13D/G)
+    → M6 (scoring) → M6.5 (FDSC enrichment)
+    → M7 (compute_eligibility, free) → M8 (UNIFIED Claude dispatch, BILLED, ONE [y/N])
+    → D37 prune → D40 #2 auto-`call` run_3_Biopharm_render.bat
+  ```
+  Mirrors `2_Funds_parser/run_2_Funds_parser.bat`. Updated at every script-completion milestone (per repo memory `feedback_update_daily_runner`).
 - **`.env`** lives at the repo root and is shared with `2_Funds_parser/`. Provides `EDGAR_USER_AGENT`, `ANTHROPIC_API_KEY`, `EDGAR_RATE_LIMIT_PER_SEC`. Do not duplicate per-project.
 - **Output folder convention** (pipeline-wide, see memory `feedback_output_folder_convention`):
   - `_csv_source/` — user-supplied BPC CSV downloads (input). Past loads are archived under `_csv_source/archive/<snapshot_date>_<original_filename>`.
@@ -1434,9 +1454,14 @@ On the live 2026-05-27 snapshot (572 catalyst rows), an initial-run with the YAM
 
 For architectural context — these are NOT specified yet:
 
-- **Module 7 — Claude API deep-dive:** user-selected subset of `catalyst_scores` rows (where `hard_pass = 1`) → `claude-opus-4-7` with `web_search` enabled. Returns structured JSON per ticker (POS estimate vs base rate, expected move on positive/negative, dilution risk, key risks, sizing rec). Mandatory `[y/N]` cost-approval gate per memory `claude-api`. Heavy reuse from `2_Funds_parser/src/module_6/` (prompt caching + batch API + JSON validation). **User does NOT want an automatic top-N cap** — they pick the slice manually after reviewing Module 6 output.
-- **Module 8 — Catalyst rescue + re-dispatch (D35):** re-admits catalysts that failed H1 (small-cap), H3 (imminent/undated), or H5 (non-standard stage/type) into the Claude deep-dive feed, with a separate prompt-version label (`m8-rescue-v1`) so cache isolation works. B/C rescues prepend a date-retrieval instruction so Claude first resolves the catalyst date from primary sources, then scores normally. Adds a "Rescued" tab to the renderer alongside Hard pass / Excluded.
-- **Module 9 — Dashboard:** dark-themed iOS-optimized HTML, expandable cards per ticker, sortable by composite score + Claude-deep-dive findings. Static file output. (Renumbered from M8 in D35.)
+- **Module 6.5 — FDSC enrichment:** SEC XBRL fetch (shares outstanding) + capital-raise parsing (estimate prefunded-warrants count) + yfinance live price → `data/fundamentals.db` (mirror of `2_Funds_parser/src/module_4c/` schema). Computes `market_cap_fdsc_usd = (basic + PFW) × price`. Free, ~5–7 min wall time on the rolling hard-pass feed. Runs before any Claude dispatch so the pack carries authoritative fundamentals.
+- **Module 7 — Rescue eligibility classification (D40 — was M8.0 pre-D40):** free pre-step that classifies every `hard_pass = 0` rolling-view catalyst as rescue class A (H1-small-cap), B (H3-imminent/undated), C (H5-non-standard), combinations (AB/AC/BC/ABC), or "stays excluded". Writes the result back to `catalyst_scores.rescued` + `catalyst_scores.rescue_class`. Idempotent. Script: `scripts/3_7_compute_eligibility.py`. Always runs in the bat with no `[y/N]` gate.
+- **Module 8 — UNIFIED Claude API dispatch (D40):** the ONE billed Anthropic call in the pipeline. Internally fans out TWO parallel batches via `concurrent.futures.ThreadPoolExecutor(max_workers=2)`:
+  - **Hard-pass batch** → `m7-v2` prompt (standard clinical-science scoring)
+  - **Rescue batch** → `m8-rescue-v1` prompt (date-retrieval preamble + standard scoring)
+
+  User sees ONE combined `[y/N]` gate with HP + RES subtotals + combined total; wall time = max(hp, res) rather than sum. Both prompts share the D17 catalyst-identity cache, D23 drug-group dedup, D38 acknowledged-ticker gate, D39 ticker-coverage gate. Script: `scripts/3_8_claude_dispatch.py`. `--resume-run N` auto-routes by prompt_version; `--skip-hard-pass` / `--skip-rescue` flags replay either feed in isolation.
+- **Module 9 — Dashboard:** dark-themed iOS-optimized HTML, expandable cards per ticker, sortable by composite score + Claude-deep-dive findings. Static file output. (Renumbered from M8 in D35; not built yet.)
 - **DB retention utility (D37):** `scripts/3_prune_old_data.py` bounds long-term growth. Per (snapshot_date, ticker, drug, nct, type) keep top-3 snapshots in `catalyst_snapshots / catalyst_timing / catalyst_scores` (cascade FK-ordered deletes inside a single transaction); per PK keep top-3 in `bpc_insider_supplement`. TTL-drop `web_search_cache` and `deep_dive_errors` rows older than 90 days. Never prune `deep_dives` (durable Claude-analysis audit), `deep_dive_runs`, EDGAR tables (small + useful for backtests), `ticker_cik_map` (bootstrap), or `fundamentals.*` (M6.5 refetches, doesn't accumulate). HTML output already self-limits via the renderer's `date_max >= effective_today` filter — D37 is the matching DB-side bound. Quarterly schedule anchored at Jan 1 / Apr 1 / Jul 1 / Oct 1 (~1.5 months after each 13F filing deadline so the funds DB has settled before reshaping biotech.db).
 
 ---
