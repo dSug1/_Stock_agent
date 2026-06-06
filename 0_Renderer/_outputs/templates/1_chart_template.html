@@ -935,9 +935,15 @@ function renderChart(data) {
   // than a blank/0.00. `first` falls back to `last` so the % math stays sane.
   if (records.length >= 1 && currentPrice != null) {
     const first = records[0];
-    // Baseline is the window's start (or yesterday's close for 1d). It changes
-    // per period; `currentPrice` does not — so only the gain/loss varies. (D19)
-    const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
+    // Baseline = the chart's FIRST PLOTTED POINT so the delta matches what the
+    // chart shows. The price line/candles start at the first bar's CLOSE, so use
+    // first.c (not first.o) for non-1d; `currentPrice` (the canonical headline,
+    // D19) doesn't change per period, so only the gain/loss does. 1d keeps the
+    // prior-session close (today's change vs yesterday); its open is only the
+    // new-install fallback. (D21)
+    const ref   = state.period === "1d"
+      ? (prevClose1d != null ? prevClose1d : first.o)
+      : first.c;
     const chg   = currentPrice - ref;
     const chgPct= ((chg / ref) * 100).toFixed(2);
     const color = chg >= 0 ? "#3fb950" : "#f85149";
@@ -977,7 +983,13 @@ function renderChart(data) {
   // Broadcast price info to parent so the fixed overlay can display it.
   if (window.parent !== window && records.length >= 1 && currentPrice != null) {
     const first = records[0];
-    const ref   = (state.period === "1d" && prevClose1d != null) ? prevClose1d : first.o;
+    // Baseline = the chart's FIRST PLOTTED POINT so the delta matches what the
+    // chart shows. The price line/candles start at the first bar's CLOSE, so use
+    // first.c (not first.o) for non-1d. 1d keeps the prior-session close (today's
+    // change vs yesterday); its open is only the new-install fallback. (D21)
+    const ref   = state.period === "1d"
+      ? (prevClose1d != null ? prevClose1d : first.o)
+      : first.c;
     const chg   = currentPrice - ref;
     const chgPct= ((chg / ref) * 100).toFixed(2);
     try {

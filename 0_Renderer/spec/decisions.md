@@ -4,7 +4,7 @@
 
 **Update discipline.** At the end of any non-trivial change: if something was calibrated, renamed, newly introduced, or deviates from spec, append or revise the relevant entry with a link to the code line of record (`[file:NN](../file#L<n>)`).
 
-**Last updated:** 2026-06-05 (added **D17** — market-closed launch shows the previous close, not 0.00; **D18** — drop NaN bars that crashed 3mo+ charts at market close; **D19** — canonical current price identical across periods; **D20** — coarse chart bars made current via trailing-bar pin + shorter 1wk/1mo TTLs — and re-synced every `2_stock_visualizer.py` / `index.html` / `1_chart_template.html` line anchor against live code; see handoff §7/§11–14). Prior: 2026-04-24 (spec folder bootstrapped; entries D1–D11 captured from existing code and chat history).
+**Last updated:** 2026-06-05 (added **D17** — market-closed launch shows the previous close, not 0.00; **D18** — drop NaN bars that crashed 3mo+ charts at market close; **D19** — canonical current price identical across periods; **D20** — coarse chart bars made current via trailing-bar pin + shorter 1wk/1mo TTLs; **D21** — change baseline is the first bar's close (not open) so the delta matches the chart — and re-synced every `2_stock_visualizer.py` / `index.html` / `1_chart_template.html` line anchor against live code; see handoff §7/§11–15). Prior: 2026-04-24 (spec folder bootstrapped; entries D1–D11 captured from existing code and chat history).
 
 ---
 
@@ -66,7 +66,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 - Filter `records` to only bars with `t >= sessionOpenEpoch` before building candles / line / volume series.
 - % baseline for 1D is `prevClose1d` if available, else `first.o` (new-install fallback).
 
-**Where:** [1_chart_template.html:860-873](../_outputs/templates/1_chart_template.html#L860) (session anchor + filter); [1_chart_template.html:940](../_outputs/templates/1_chart_template.html#L940) (% baseline in on-chart panel); matching block in the price-info broadcast ~line 980. (Note: the displayed price itself now comes from the canonical `last_price`, D19; `prevClose1d` is still the 1d baseline.)
+**Where:** [1_chart_template.html:863-874](../_outputs/templates/1_chart_template.html#L863) (session anchor + filter); [1_chart_template.html:944](../_outputs/templates/1_chart_template.html#L944) (% baseline in on-chart panel); matching block in the price-info broadcast ~line 990. (Note: the displayed price itself now comes from the canonical `last_price`, D19; for 1d the baseline is `prevClose1d`, for other periods the first bar's close, D21.)
 
 **Alternative considered.** Shrink `PERIOD_WINDOW_DAYS["1d"]` to less than 1 day server-side. Rejected: it would fail over weekends and holidays when the most recent session may be ≥2 calendar days old.
 
@@ -140,7 +140,7 @@ This matches the user memory _Apply stale-while-revalidate by default_. The UI i
 
 **Why not a new `sv-target2` message.** A single message guarantees both values are updated atomically; there's no window where target1 is fresh and target2 is stale.
 
-**Where:** broadcast at [index.html:2425](../index.html#L2425) `broadcastTargetPrice()`; consumer at [1_chart_template.html:1087](../_outputs/templates/1_chart_template.html#L1087).
+**Where:** broadcast at [index.html:2425](../index.html#L2425) `broadcastTargetPrice()`; consumer at [1_chart_template.html:1099](../_outputs/templates/1_chart_template.html#L1099).
 
 ---
 
@@ -282,7 +282,7 @@ regardless.
 [2_stock_visualizer.py:499](../2_stock_visualizer.py#L499) `fetch_prices_batch()` fallback;
 [2_stock_visualizer.py:202](../2_stock_visualizer.py#L202) `PERIOD_WINDOW_DAYS["1d"]`;
 [1_chart_template.html:936](../_outputs/templates/1_chart_template.html#L936) and
-[1_chart_template.html:978](../_outputs/templates/1_chart_template.html#L978) (price-panel + broadcast guards).
+[1_chart_template.html:984](../_outputs/templates/1_chart_template.html#L984) (price-panel + broadcast guards).
 
 ---
 
@@ -370,7 +370,7 @@ used everywhere — a future licensed-provider swap needs no special handling he
 `_ensure_price_interval_fresh()`; fresh-path hooks in `get_chart_data` and `get_chart_data_batch`;
 client `currentPrice` at [1_chart_template.html:882](../_outputs/templates/1_chart_template.html#L882),
 used in the price panel ([936](../_outputs/templates/1_chart_template.html#L936)) and broadcast
-([978](../_outputs/templates/1_chart_template.html#L978)).
+([984](../_outputs/templates/1_chart_template.html#L984)).
 
 ---
 
@@ -412,3 +412,35 @@ single in-progress bar and is the expected behaviour of a "current period so far
 **Where:** [2_stock_visualizer.py:75](../2_stock_visualizer.py#L75) `CACHE_TTL` (`1wk`/`1mo` = 1 day);
 [2_stock_visualizer.py:517](../2_stock_visualizer.py#L517) `_build_payload()` trailing-bar pin (the
 `last["t"] > records[-1]["t"]` block).
+
+---
+
+## D21 — Change baseline is the first bar's CLOSE, not its open (2026-06-05)
+
+**Symptom.** For TCRX at 3Mo the header/overlay change read **−$0.11** while the chart clearly ran from about
+**$1.06 down to $0.98** (≈ −$0.08). The delta didn't match what the chart showed.
+
+**Root cause.** The change baseline for non-1d periods was `first.o` — the **open** of the first bar in the
+window (1.09 for TCRX). But the chart's price line/candles start from the first bar's **close** (1.06), and the
+conventional "change over the period" is close-to-close. So `currentPrice − first.o = 0.982 − 1.09 = −0.108`
+disagreed with the chart's visible `0.982 − 1.06 = −0.078`. The first bar's open is typically off from its
+close, so the gap was exactly `first.c − first.o`.
+
+**Decision.** Use the first bar's **close** as the baseline for non-1d periods:
+`ref = period === "1d" ? (prevClose1d ?? first.o) : first.c`. 1d is unchanged — it still measures against the
+prior session's close (today's change vs yesterday), with `first.o` only as the new-install fallback. Applied
+identically in both the on-chart price panel and the parent-overlay broadcast so the two never disagree.
+
+**Result (verified against the cache).** For 3Mo–MAX the header delta now equals the chart's first-close →
+current span exactly (3Mo −0.078, 6Mo −0.048, 1Y −0.518, 2Y −7.428, 5Y −9.518, MAX −8.718). The TCRX 3Mo case
+reads −0.08, matching the chart.
+
+**Note on 1D / 5D / 1Mo.** These can still show a small header-vs-chart gap *with a stale cache*, because the
+canonical `last_price` (daily close) is sourced separately from the intraday (1m/5m/1h) bars the chart draws
+(D19): if the intraday cache is from an older session than the daily close, the chart's last bar ≠ the
+headline. With live data the intraday bars refresh on view (6 s / 30 s / 300 s TTL) and the last bar
+converges to the daily close, so they agree. 1D additionally measures vs the prior close by convention, so its
+delta is intentionally not the intraday open→now span. No code change needed — it self-heals with fresh data.
+
+**Where:** [1_chart_template.html:944](../_outputs/templates/1_chart_template.html#L944) (price panel `ref`)
+and [1_chart_template.html:990](../_outputs/templates/1_chart_template.html#L990) (broadcast `ref`).
