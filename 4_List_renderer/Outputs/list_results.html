@@ -1,14 +1,25 @@
 <!DOCTYPE html>
 <!--
-  list_results.html — 4_List_renderer
-  Stable template (Google-search-style result list). Reads window.LIST_DATA
-  from the list_results_data.js sidecar. Do not bake data into this file:
-  per-run output only rewrites the sidecar.
+  list_results.html — 4_List_renderer  (template v2, M7 / Phase 4)
+  Stable template (Google-search-style result list). Two delivery modes, one
+  data contract (D15):
+    - file://  -> reads window.LIST_DATA from the list_results_data.js sidecar.
+    - http://  -> fetches GET /api/board (the M7 server) and POSTs interactions
+                  (like/hide/dwell/open) to /api/interact.
+  Restyling bumps this version; the data contract (§4.3) never changes. v2 adds
+  interaction hooks + a source panel + PWA bits; it still renders fully over
+  file:// (the regression check), where server-only controls are simply hidden.
 -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1e1f22" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
   <title>Search results</title>
   <style>
     :root {
@@ -23,6 +34,8 @@
       --check: #5bb974;
       --divider: #3c4043;
       --avatar-fallback: #5f6368;
+      --menu-bg: #2a2b2f;
+      --like: #ff79c6;
     }
 
     * { box-sizing: border-box; }
@@ -36,13 +49,14 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ---- Header (logo + search bar) ---- */
+    /* ---- Header (logo + search bar + actions) ---- */
     .topbar {
       display: flex;
       align-items: center;
-      gap: 28px;
+      gap: 18px;
       padding: 18px 22px 22px;
       max-width: 1100px;
+      flex-wrap: wrap;
     }
 
     .brand {
@@ -59,7 +73,8 @@
 
     .searchbar {
       flex: 1;
-      max-width: 880px;
+      min-width: 220px;
+      max-width: 760px;
       display: flex;
       align-items: center;
       gap: 14px;
@@ -77,6 +92,7 @@
       background: transparent;
       color: var(--text);
       font-size: 16px;
+      min-width: 0;
     }
     .searchbar input::placeholder { color: var(--text-mute); }
 
@@ -92,6 +108,22 @@
     }
     .clear-btn:hover { color: #fff; }
 
+    /* ---- Toolbar actions (server mode only) ---- */
+    .actions { display: flex; gap: 10px; }
+    .actions.hidden { display: none; }
+    .act-btn {
+      border: 1px solid var(--divider);
+      background: transparent;
+      color: var(--text-dim);
+      border-radius: 22px;
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      min-height: 40px;
+    }
+    .act-btn:hover { background: var(--bar-bg); color: #fff; }
+
     /* ---- Results ---- */
     .results {
       max-width: 720px;
@@ -102,7 +134,9 @@
       .results { margin: 0 auto; }
     }
 
-    .result { padding: 18px 0; }
+    .result { padding: 18px 0; position: relative; }
+    .result.seen .result-title { color: #6f86b0; }
+    .result.removing { opacity: 0; transition: opacity 0.18s ease; }
 
     .result-head {
       display: flex;
@@ -135,6 +169,19 @@
       font-weight: 600;
       color: var(--text);
       line-height: 1.2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .seen-tag {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--text-mute);
+      border: 1px solid var(--divider);
+      border-radius: 8px;
+      padding: 0 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
     .breadcrumb {
       font-size: 12.5px;
@@ -150,11 +197,12 @@
       cursor: pointer;
       font-size: 18px;
       line-height: 1;
-      padding: 0 4px;
+      padding: 4px 8px;
       letter-spacing: -1px;
       user-select: none;
+      border-radius: 50%;
     }
-    .kebab:hover { color: var(--text-dim); }
+    .kebab:hover { color: var(--text-dim); background: var(--bar-bg); }
 
     .result-title {
       display: inline-flex;
@@ -167,18 +215,15 @@
       margin: 2px 0 6px;
     }
     .result-title:hover { text-decoration: underline; }
-
-    .check {
-      flex: 0 0 16px;
-      width: 16px;
-      height: 16px;
+    .liked .result-title::after {
+      content: "\2665";        /* heart */
+      color: var(--like);
+      font-size: 15px;
     }
 
-    .snippet {
-      font-size: 14px;
-      line-height: 1.55;
-      color: var(--text-dim);
-    }
+    .check { flex: 0 0 16px; width: 16px; height: 16px; }
+
+    .snippet { font-size: 14px; line-height: 1.55; color: var(--text-dim); }
     .snippet b { color: var(--text); font-weight: 700; }
 
     .read-more {
@@ -196,6 +241,104 @@
       color: var(--text-mute);
       font-size: 15px;
     }
+
+    /* ---- Row action menu ---- */
+    .menu {
+      position: absolute;
+      z-index: 40;
+      background: var(--menu-bg);
+      border: 1px solid var(--divider);
+      border-radius: 12px;
+      padding: 6px;
+      min-width: 180px;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+    }
+    .menu button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .menu button:hover { background: var(--bar-bg); }
+
+    /* ---- Source panel (overlay) ---- */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: none;
+      z-index: 60;
+    }
+    .overlay.open { display: block; }
+    .panel {
+      position: absolute;
+      top: 0; right: 0; bottom: 0;
+      width: min(420px, 100%);
+      background: var(--bg);
+      border-left: 1px solid var(--divider);
+      padding: 22px;
+      overflow-y: auto;
+    }
+    .panel h2 { margin: 0 0 4px; font-size: 19px; }
+    .panel .hint { color: var(--text-mute); font-size: 13px; margin: 0 0 16px; }
+    .src-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 4px;
+      border-bottom: 1px solid var(--divider);
+    }
+    .src-row label { flex: 1; cursor: pointer; }
+    .src-row .src-name { font-size: 15px; }
+    .src-row .src-meta { font-size: 12px; color: var(--text-mute); }
+    .src-row input[type=checkbox] { width: 20px; height: 20px; accent-color: #ff5ab0; }
+    .panel-close {
+      position: absolute; top: 16px; right: 16px;
+      border: none; background: transparent; color: var(--text-dim);
+      font-size: 24px; cursor: pointer;
+    }
+    .interest-box { margin-top: 22px; }
+    .interest-box label { display: block; font-size: 14px; margin-bottom: 8px; }
+    .interest-row { display: flex; gap: 8px; }
+    .interest-row input {
+      flex: 1; background: var(--bar-bg); border: none; border-radius: 10px;
+      color: var(--text); padding: 11px 13px; font-size: 14px; outline: none;
+    }
+
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 26px;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--menu-bg);
+      color: var(--text);
+      border: 1px solid var(--divider);
+      border-radius: 10px;
+      padding: 11px 18px;
+      font-size: 14px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 80;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 600px) {
+      .topbar { gap: 12px; padding: 14px 16px 16px; }
+      .brand { font-size: 26px; }
+      .results { padding: 4px 16px 60px; }
+      .result-title { font-size: 18px; }
+      .act-btn { padding: 9px 13px; }
+    }
   </style>
 </head>
 <body>
@@ -206,14 +349,42 @@
              placeholder="Search" aria-label="Search" />
       <button class="clear-btn" id="clear" title="Clear" aria-label="Clear">&times;</button>
     </div>
+    <div class="actions hidden" id="actions">
+      <button class="act-btn" id="refreshBtn" title="Refresh sources">&#x21bb; Refresh</button>
+      <button class="act-btn" id="sourcesBtn" title="Choose sources">&#9776; Sources</button>
+    </div>
   </header>
 
   <main class="results" id="results"></main>
 
+  <!-- Source selection + interest panel (server mode) -->
+  <div class="overlay" id="overlay">
+    <aside class="panel" role="dialog" aria-label="Sources">
+      <button class="panel-close" id="panelClose" aria-label="Close">&times;</button>
+      <h2>Your sources</h2>
+      <p class="hint">Toggle which sources feed your board.</p>
+      <div id="srcList"></div>
+      <div class="interest-box">
+        <label for="interestInput">Add an interest (a topic or site)</label>
+        <div class="interest-row">
+          <input id="interestInput" type="text" placeholder="e.g. semiconductors, or a site URL" />
+          <button class="act-btn" id="interestAdd">Add</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- file:// fallback: sets window.LIST_DATA. In server mode it's overridden
+       by GET /api/board, so a stale sidecar never wins. -->
   <script src="list_results_data.js"></script>
   <script>
     (function () {
       "use strict";
+
+      var SERVED = location.protocol === "http:" || location.protocol === "https:";
+      var byId = function (id) { return document.getElementById(id); };
 
       var GREEN_CHECK =
         '<svg class="check" viewBox="0 0 24 24" aria-label="verified">' +
@@ -228,19 +399,14 @@
           .replace(/>/g, "&gt;");
       }
 
-      // Embolden each bold_term occurrence inside an already-escaped snippet.
       function highlight(snippet, terms) {
         var html = esc(snippet);
         if (!terms || !terms.length) return html;
-        // Longest-first so "Google's" wins over "Google".
-        var sorted = terms.slice().sort(function (a, b) {
-          return b.length - a.length;
-        });
+        var sorted = terms.slice().sort(function (a, b) { return b.length - a.length; });
         sorted.forEach(function (term) {
           if (!term) return;
           var safe = esc(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          var re = new RegExp("(" + safe + ")", "g");
-          html = html.replace(re, "<b>$1</b>");
+          html = html.replace(new RegExp("(" + safe + ")", "g"), "<b>$1</b>");
         });
         return html;
       }
@@ -258,30 +424,38 @@
         return '<div class="favicon letter">' + esc(ch) + "</div>";
       }
 
-      function resultEl(r) {
-        var titleInner =
-          esc(r.title) + (r.verified ? GREEN_CHECK : "");
+      // ---- State ----------------------------------------------------
+      var STATE = { data: {}, seen: {}, liked: {} };
+
+      function resultEl(r, index) {
+        var titleInner = esc(r.title) + (r.verified ? GREEN_CHECK : "");
         var title = r.title_url
-          ? '<a class="result-title" href="' + esc(r.title_url) +
+          ? '<a class="result-title" data-act="open" href="' + esc(r.title_url) +
             '" target="_blank" rel="noopener">' + titleInner + "</a>"
           : '<div class="result-title">' + titleInner + "</div>";
 
         var snippet = highlight(r.snippet, r.bold_terms);
         if (r.read_more_url) {
           snippet +=
-            ' <a class="read-more" href="' + esc(r.read_more_url) +
+            ' <a class="read-more" data-act="read_more" href="' + esc(r.read_more_url) +
             '" target="_blank" rel="noopener">Read more</a>';
         }
 
+        var seen = !!STATE.seen[r.id];
+        var liked = !!STATE.liked[r.id];
+        var cls = "result" + (seen ? " seen" : "") + (liked ? " liked" : "");
+        var seenTag = seen ? '<span class="seen-tag">seen</span>' : "";
+
         return (
-          '<article class="result">' +
+          '<article class="' + cls + '" data-id="' + esc(r.id || "") +
+            '" data-pos="' + index + '">' +
             '<div class="result-head">' +
               faviconEl(r) +
               '<div class="head-text">' +
-                '<div class="site-name">' + esc(r.site_name) + "</div>" +
+                '<div class="site-name">' + esc(r.site_name) + seenTag + "</div>" +
                 '<div class="breadcrumb">' + esc(r.url_breadcrumb) + "</div>" +
               "</div>" +
-              '<div class="kebab" title="More">&#8942;</div>' +
+              '<div class="kebab" data-act="menu" title="More">&#8942;</div>' +
             "</div>" +
             title +
             '<div class="snippet">' + snippet + "</div>" +
@@ -290,32 +464,324 @@
       }
 
       function render() {
-        var data = window.LIST_DATA || {};
-        document.getElementById("brand").textContent = data.brand || "List";
-        document.title = data.query
-          ? data.query + " — Search results"
-          : "Search results";
-
-        var input = document.getElementById("query");
+        var data = STATE.data || {};
+        byId("brand").textContent = data.brand || "List";
+        document.title = data.query ? data.query + " — Search results" : "Search results";
+        var input = byId("query");
         input.value = data.query || "";
 
-        var host = document.getElementById("results");
+        var host = byId("results");
         var results = data.results || [];
         if (!results.length) {
-          host.innerHTML =
-            '<div class="empty">No results to display.</div>';
+          host.innerHTML = '<div class="empty">No results to display.</div>';
           return;
         }
         host.innerHTML = results.map(resultEl).join("");
+        if (SERVED) observeImpressions();
       }
 
-      document.getElementById("clear").addEventListener("click", function () {
-        var input = document.getElementById("query");
-        input.value = "";
-        input.focus();
+      function itemById(id) {
+        return (STATE.data.results || []).filter(function (r) { return r.id === id; })[0];
+      }
+
+      // Verbatim feature/score snapshot for the interaction (D19).
+      function contextFor(r, pos) {
+        if (!r) return {};
+        return {
+          source_id: r.source_id, position: pos,
+          score: r.score, topics: r.topics,
+          published_at: r.published_at, title: r.title, seen: !!STATE.seen[r.id]
+        };
+      }
+
+      // ---- Interaction buffer + flush -------------------------------
+      var PENDING_KEY = "curator_pending_events";
+      var buffer = [];
+      try { buffer = JSON.parse(localStorage.getItem(PENDING_KEY) || "[]") || []; } catch (e) { buffer = []; }
+
+      function persistBuffer() {
+        try { localStorage.setItem(PENDING_KEY, JSON.stringify(buffer)); } catch (e) {}
+      }
+
+      function emit(id, action, extra) {
+        if (!SERVED || !id) return;
+        var el = document.querySelector('.result[data-id="' + cssEsc(id) + '"]');
+        var pos = el ? parseInt(el.getAttribute("data-pos"), 10) : null;
+        var ev = { item_id: id, action: action, context: contextFor(itemById(id), pos) };
+        if (extra) { for (var k in extra) ev[k] = extra[k]; }
+        buffer.push(ev);
+        persistBuffer();
+      }
+
+      function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+
+      function flush(useBeacon) {
+        if (!SERVED || !buffer.length) return;
+        var payload = JSON.stringify({ events: buffer });
+        var sent = buffer.slice();
+        if (useBeacon && navigator.sendBeacon) {
+          var ok = navigator.sendBeacon("/api/interact",
+            new Blob([payload], { type: "application/json" }));
+          if (ok) { buffer = []; persistBuffer(); }
+          return;
+        }
+        fetch("/api/interact", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: true
+        }).then(function (res) {
+          if (res.ok) {
+            // Drop the events we sent; keep any that arrived mid-flight.
+            buffer = buffer.slice(sent.length);
+            persistBuffer();
+          }
+        }).catch(function () { /* keep buffered; retry next tick */ });
+      }
+
+      // ---- Impression + dwell + scroll_past (IntersectionObserver) ---
+      var impressed = {};      // id -> true once emitted
+      var dwellAcc = {};       // id -> accumulated visible ms
+      var visibleSince = {};   // id -> timestamp when it became visible
+      var io = null;
+
+      function observeImpressions() {
+        if (io) io.disconnect();
+        impressed = {}; dwellAcc = {}; visibleSince = {};
+        io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            var el = entry.target;
+            var id = el.getAttribute("data-id");
+            if (!id) return;
+            if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+              if (!visibleSince[id]) visibleSince[id] = Date.now();
+              if (!impressed[id]) {
+                impressed[id] = true;
+                STATE.seen[id] = true;
+                emit(id, "impression");
+              }
+            } else {
+              // Left the viewport: bank dwell; if it left upward after being
+              // seen and never opened, count a weak scroll_past signal.
+              if (visibleSince[id]) {
+                dwellAcc[id] = (dwellAcc[id] || 0) + (Date.now() - visibleSince[id]);
+                visibleSince[id] = 0;
+              }
+              if (impressed[id] && entry.boundingClientRect.bottom < 0 && !opened[id] && !scrolledPast[id]) {
+                scrolledPast[id] = true;
+                emit(id, "scroll_past");
+              }
+            }
+          });
+        }, { threshold: [0, 0.5, 1] });
+        Array.prototype.forEach.call(document.querySelectorAll(".result"), function (el) {
+          io.observe(el);
+        });
+      }
+
+      var opened = {};
+      var scrolledPast = {};
+
+      function bankAllDwell() {
+        var now = Date.now();
+        Object.keys(visibleSince).forEach(function (id) {
+          if (visibleSince[id]) {
+            dwellAcc[id] = (dwellAcc[id] || 0) + (now - visibleSince[id]);
+            visibleSince[id] = now;
+          }
+        });
+        Object.keys(dwellAcc).forEach(function (id) {
+          if (dwellAcc[id] >= 2000) {
+            emit(id, "dwell", { dwell_ms: Math.round(dwellAcc[id]) });
+            dwellAcc[id] = 0;   // reset so we don't double-count
+          }
+        });
+      }
+
+      // ---- Click capture (open / read_more) -------------------------
+      byId("results").addEventListener("click", function (e) {
+        var act = e.target.closest("[data-act]");
+        if (!act) return;
+        var kind = act.getAttribute("data-act");
+        var article = e.target.closest(".result");
+        var id = article && article.getAttribute("data-id");
+        if (kind === "open") { opened[id] = true; emit(id, "open"); }
+        else if (kind === "read_more") { opened[id] = true; emit(id, "read_more"); }
+        else if (kind === "menu") { e.preventDefault(); openMenu(act, id); }
       });
 
-      render();
+      // ---- Row menu (Like / Hide / Open) ----------------------------
+      var openMenuEl = null;
+      function closeMenu() { if (openMenuEl) { openMenuEl.remove(); openMenuEl = null; } }
+      document.addEventListener("click", function (e) {
+        if (openMenuEl && !openMenuEl.contains(e.target) &&
+            !(e.target.getAttribute && e.target.getAttribute("data-act") === "menu")) {
+          closeMenu();
+        }
+      });
+
+      function openMenu(anchor, id) {
+        closeMenu();
+        if (!SERVED) { toast("Start the server to like/hide (run_4_List_server.bat)"); return; }
+        var r = itemById(id);
+        var liked = !!STATE.liked[id];
+        var menu = document.createElement("div");
+        menu.className = "menu";
+        menu.innerHTML =
+          '<button data-m="like">' + (liked ? "♥ Liked" : "♡ Like") + "</button>" +
+          '<button data-m="hide">🚫 Hide this</button>' +
+          (r && r.title_url ? '<button data-m="open">↗ Open in new tab</button>' : "");
+        document.body.appendChild(menu);
+        var rect = anchor.getBoundingClientRect();
+        var top = rect.bottom + window.scrollY + 4;
+        var left = Math.min(rect.left + window.scrollX, window.innerWidth - 200);
+        menu.style.top = top + "px";
+        menu.style.left = Math.max(8, left) + "px";
+        openMenuEl = menu;
+
+        menu.addEventListener("click", function (e) {
+          var m = e.target.closest("[data-m]");
+          if (!m) return;
+          var action = m.getAttribute("data-m");
+          closeMenu();
+          if (action === "like") likeItem(id);
+          else if (action === "hide") hideItem(id);
+          else if (action === "open" && r && r.title_url) {
+            opened[id] = true; emit(id, "open");
+            window.open(r.title_url, "_blank", "noopener");
+          }
+        });
+      }
+
+      // Like is a one-way positive signal (append-only learning log, D6/D19).
+      function likeItem(id) {
+        if (STATE.liked[id]) { toast("Already liked"); return; }
+        STATE.liked[id] = true;
+        var el = document.querySelector('.result[data-id="' + cssEsc(id) + '"]');
+        if (el) el.classList.add("liked");
+        emit(id, "like");
+        flush(false);
+        toast("Liked");
+      }
+
+      function hideItem(id) {
+        emit(id, "hide");
+        flush(false);
+        var el = document.querySelector('.result[data-id="' + cssEsc(id) + '"]');
+        if (el) {
+          el.classList.add("removing");
+          setTimeout(function () { el.remove(); }, 180);
+        }
+        STATE.data.results = (STATE.data.results || []).filter(function (r) { return r.id !== id; });
+        toast("Hidden");
+      }
+
+      // ---- Toast ----------------------------------------------------
+      var toastTimer = null;
+      function toast(msg) {
+        var t = byId("toast");
+        t.textContent = msg;
+        t.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2200);
+      }
+
+      // ---- Board loading --------------------------------------------
+      function applyData(data) {
+        STATE.data = data || {};
+        var meta = STATE.data.meta || {};
+        STATE.seen = {}; STATE.liked = {};
+        (meta.seen || []).forEach(function (id) { STATE.seen[id] = true; });
+        (meta.liked || []).forEach(function (id) { STATE.liked[id] = true; });
+        render();
+      }
+
+      function loadBoard(opts) {
+        opts = opts || {};
+        if (!SERVED) { applyData(window.LIST_DATA || {}); return; }
+        var qs = opts.refresh ? "?refresh=1" : "";
+        fetch("/api/board" + qs)
+          .then(function (res) { return res.ok ? res.json() : Promise.reject(); })
+          .then(applyData)
+          .catch(function () { applyData(window.LIST_DATA || {}); });
+      }
+
+      // ---- Source panel ---------------------------------------------
+      function openPanel() {
+        if (!SERVED) return;
+        fetch("/api/sources").then(function (r) { return r.json(); }).then(function (data) {
+          var host = byId("srcList");
+          host.innerHTML = (data.sources || []).map(function (s) {
+            return (
+              '<div class="src-row">' +
+                '<label for="src_' + esc(s.id) + '">' +
+                  '<div class="src-name">' + esc(s.label || s.name) + "</div>" +
+                  '<div class="src-meta">' + esc(s.kind) + " &middot; " + esc(s.origin) + "</div>" +
+                "</label>" +
+                '<input type="checkbox" id="src_' + esc(s.id) + '" data-sid="' + esc(s.id) + '"' +
+                  (s.on_board ? " checked" : "") + " />" +
+              "</div>"
+            );
+          }).join("") || '<p class="hint">No sources registered.</p>';
+          byId("overlay").classList.add("open");
+        });
+      }
+
+      function closePanel() { byId("overlay").classList.remove("open"); }
+
+      byId("srcList") && byId("srcList").addEventListener("change", function (e) {
+        var cb = e.target;
+        if (cb.type !== "checkbox") return;
+        var sid = cb.getAttribute("data-sid");
+        fetch("/api/sources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_id: sid, enabled: cb.checked })
+        }).then(function () { toast(cb.checked ? "Added to board" : "Removed from board"); });
+      });
+
+      // ---- Wiring ---------------------------------------------------
+      byId("clear").addEventListener("click", function () {
+        var input = byId("query"); input.value = ""; input.focus();
+      });
+
+      if (SERVED) {
+        byId("actions").classList.remove("hidden");
+        byId("refreshBtn").addEventListener("click", function () {
+          toast("Refreshing…"); loadBoard({ refresh: true });
+        });
+        byId("sourcesBtn").addEventListener("click", openPanel);
+        byId("panelClose").addEventListener("click", closePanel);
+        byId("overlay").addEventListener("click", function (e) {
+          if (e.target === byId("overlay")) closePanel();
+        });
+        byId("interestAdd").addEventListener("click", function () {
+          var v = byId("interestInput").value.trim();
+          if (!v) return;
+          var kind = /^https?:\/\//i.test(v) || /\.[a-z]{2,}($|\/)/i.test(v) ? "site" : "topic";
+          fetch("/api/interest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: kind, value: v })
+          }).then(function (r) { return r.json(); }).then(function () {
+            byId("interestInput").value = "";
+            toast("Interest saved — discovery lands in Phase 6");
+          });
+        });
+
+        setInterval(function () { bankAllDwell(); flush(false); }, 5000);
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "hidden") { bankAllDwell(); flush(true); }
+        });
+        window.addEventListener("pagehide", function () { bankAllDwell(); flush(true); });
+
+        // Register the PWA service worker (offline / instant paint).
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.register("service-worker.js").catch(function () {});
+        }
+      }
+
+      loadBoard();
     })();
   </script>
 </body>

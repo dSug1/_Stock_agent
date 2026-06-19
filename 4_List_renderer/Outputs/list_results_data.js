@@ -17,7 +17,13 @@ window.LIST_DATA = {
         "Jun 18, 2026 2:37pm"
       ],
       "read_more_url": "https://www.fiercebiotech.com/biotech/moderna-mflusiva-advisory-committee-fda",
-      "source_id": "news_default"
+      "id": "b01486373b605cd6",
+      "source_id": "news_default",
+      "topics": [
+        "biotech",
+        "markets"
+      ],
+      "score": 2.389181
     },
     {
       "site_name": "FierceBiotech",
@@ -31,7 +37,12 @@ window.LIST_DATA = {
         "Jun 18, 2026 10:00am"
       ],
       "read_more_url": "https://www.fiercebiotech.com/biotech/campfield-harvests-180m-series-advance-oral-ibd-drug-licensed-newsoara",
-      "source_id": "news_default"
+      "id": "92ee9fabfc3f5eb0",
+      "source_id": "news_default",
+      "topics": [
+        "biotech"
+      ],
+      "score": 2.244348
     },
     {
       "site_name": "FierceBiotech",
@@ -45,49 +56,73 @@ window.LIST_DATA = {
         "Jun 18, 2026 7:24am"
       ],
       "read_more_url": "https://www.fiercebiotech.com/medtech/novocure-device-fails-help-brain-cancer-patients-survival-phase-3-test",
-      "source_id": "news_default"
+      "id": "2bac8487d2b09338",
+      "source_id": "news_default",
+      "score": 2.079015
     },
     {
       "site_name": "Le Figaro",
-      "url_breadcrumb": "www.lefigaro.fr › international › en-direct-guerre-moyen-orient-conflit-iran-etats-unis-do",
+      "url_breadcrumb": "www.lefigaro.fr › actualite-france › violee-baillonnee-adn-du-suspect-retrouve-sur-le-corp",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
-      "title": "EN DIRECT - Guerre au Moyen-Orient : 18 morts au Liban et quatre soldats de Tsahal tués, «tout le Liban doit brûler» lance un ministre israélien",
-      "title_url": "https://www.lefigaro.fr/international/en-direct-guerre-moyen-orient-conflit-iran-etats-unis-donald-trump-jd-vance-protocole-accord-pourparlers-liban-israel-detroit-ormuz-petrole-20260619",
+      "title": "Violée, bâillonnée, ADN du suspect retrouvé sur le corps... Ce que révèle l’autopsie de la jeune Lyhanna",
+      "title_url": "https://www.lefigaro.fr/actualite-france/violee-baillonnee-adn-du-suspect-retrouve-sur-le-corps-ce-que-revele-l-autopsie-de-la-jeune-lyhanna-20260619",
       "verified": true,
-      "snippet": "Jun 19, 2026 — Il s’agit du plus lourd bilan publié depuis l’annonce de la conclusion de l’accord lundi, qui prévoit un cessez-le-feu «sur tous les fronts, y compris au Liban».",
+      "snippet": "Jun 19, 2026 — Trois semaines après la découverte du corps de la collégienne dans un silo agricole du Gers, les analyses scientifiques livrent des éléments accablants contre Jérôme Barella, dont les poursuites pourraient être élargies.",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.lefigaro.fr/international/en-direct-guerre-moyen-orient-conflit-iran-etats-unis-donald-trump-jd-vance-protocole-accord-pourparlers-liban-israel-detroit-ormuz-petrole-20260619",
-      "source_id": "news_default"
+      "read_more_url": "https://www.lefigaro.fr/actualite-france/violee-baillonnee-adn-du-suspect-retrouve-sur-le-corps-ce-que-revele-l-autopsie-de-la-jeune-lyhanna-20260619",
+      "id": "b22021f17604e011",
+      "source_id": "news_default",
+      "score": 1.996181
     },
     {
       "site_name": "Le Figaro",
-      "url_breadcrumb": "www.lefigaro.fr › international › guerre-au-moyen-orient-flambee-de-violence-avec-18-morts",
+      "url_breadcrumb": "www.lefigaro.fr › vox › laurence-de-charette-n-abandonnons-pas-la-protection-de-l-enfance-",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
-      "title": "Guerre au Moyen-Orient : flambée de violence avec 18 morts au Liban et 4 soldats de Tsahal tués",
-      "title_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-flambee-de-violence-avec-18-morts-au-liban-et-4-soldats-de-tsahal-tues-20260619",
+      "title": "Laurence de Charette : « N’abandonnons pas la protection de l’enfance aux néoféministes »",
+      "title_url": "https://www.lefigaro.fr/vox/laurence-de-charette-n-abandonnons-pas-la-protection-de-l-enfance-aux-neofeministes-20260619",
       "verified": true,
-      "snippet": "Jun 19, 2026 — Malgré la conclusion de l’accord entre les États-Unis et l’Iran, le Liban est la proie ce vendredi d’une flambée de violence meurtrière.",
+      "snippet": "Jun 19, 2026 — CHRONIQUE - L’affaire Lyhanna montre la nécessité de combattre l’indigence de la chaîne pénale. Mais l’idéologie qui s’obstine à présenter les « violences sexistes et sexuelles » comme le pur produit du patriarcat et des rapports de domi...",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-flambee-de-violence-avec-18-morts-au-liban-et-4-soldats-de-tsahal-tues-20260619",
-      "source_id": "news_default"
+      "read_more_url": "https://www.lefigaro.fr/vox/laurence-de-charette-n-abandonnons-pas-la-protection-de-l-enfance-aux-neofeministes-20260619",
+      "id": "2b588dc99ccb5dd1",
+      "source_id": "news_default",
+      "score": 1.872848
     },
     {
       "site_name": "Le Figaro",
-      "url_breadcrumb": "www.lefigaro.fr › international › guerre-au-moyen-orient-les-negociations-entre-les-etats-",
+      "url_breadcrumb": "www.lefigaro.fr › meteo › en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperature",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
-      "title": "Guerre au Moyen-Orient : les négociations entre les États-Unis et l’Iran prévues ce vendredi en Suisse «reportées»",
-      "title_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-les-negociations-entre-les-etats-unis-et-l-iran-prevues-ce-vendredi-en-suisse-reportees-20260619",
+      "title": "EN DIRECT - Canicule : des départements pourraient passer en vigilance rouge dimanche, 784 établissements scolaires aménagent leurs horaires",
+      "title_url": "https://www.lefigaro.fr/meteo/en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperatures-soleil-orages-vigilance-orange-20260619",
       "verified": true,
-      "snippet": "Jun 19, 2026 — «Les discussions prévues entre les États-Unis, l’Iran, le Qatar et le Pakistan ont été reportées. La Suisse reste disposée à faciliter ces discussions. Les travaux préparatoires correspondants se poursuivent», a annoncé le ministère des...",
+      "snippet": "Jun 19, 2026 — La canicule s’étend vendredi en France, avec désormais 53 départements concernés par la vigilance orange canicule : le long d’un axe allant du Sud-Ouest au Nord-Est.",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-les-negociations-entre-les-etats-unis-et-l-iran-prevues-ce-vendredi-en-suisse-reportees-20260619",
-      "source_id": "news_default"
+      "read_more_url": "https://www.lefigaro.fr/meteo/en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperatures-soleil-orages-vigilance-orange-20260619",
+      "id": "7e00b3a6ad8a467d",
+      "source_id": "news_default",
+      "score": 1.702015
+    },
+    {
+      "site_name": "CNBC",
+      "url_breadcrumb": "www.cnbc.com › 2026 › 06 › 19",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.cnbc.com",
+      "title": "Musk's SpaceX stake is worth over $1 trillion. Here are the other billionaire shareholders",
+      "title_url": "https://www.cnbc.com/2026/06/19/musk-spacex-billionaire-shareholders.html",
+      "verified": true,
+      "snippet": "Jun 19, 2026 — SpaceX shares were up 37% after its historic debut last week, which offered shares at a set price of $135.",
+      "bold_terms": [
+        "Jun 19, 2026"
+      ],
+      "read_more_url": "https://www.cnbc.com/2026/06/19/musk-spacex-billionaire-shareholders.html",
+      "id": "f15ac599fba9082c",
+      "source_id": "news_default",
+      "score": 1.539181
     },
     {
       "site_name": "CNBC",
@@ -101,7 +136,9 @@ window.LIST_DATA = {
         "Jun 19, 2026"
       ],
       "read_more_url": "https://www.cnbc.com/2026/06/19/us-iran-talks-switzerland-canceled-interim-deal-markets.html",
-      "source_id": "news_default"
+      "id": "9b0873c6d7198a46",
+      "source_id": "news_default",
+      "score": 1.402848
     },
     {
       "site_name": "CNBC",
@@ -115,21 +152,12 @@ window.LIST_DATA = {
         "Jun 18, 2026"
       ],
       "read_more_url": "https://www.cnbc.com/2026/06/18/the-average-spacex-buyer-post-ipo-is-almost-under-water-after-two-day-slide.html",
-      "source_id": "news_default"
-    },
-    {
-      "site_name": "CNBC",
-      "url_breadcrumb": "www.cnbc.com › 2026 › 06 › 19",
-      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.cnbc.com",
-      "title": "Russia threatens escalation after Ukraine hits Moscow with largest-ever drone attack",
-      "title_url": "https://www.cnbc.com/2026/06/19/russia-ukraine-moscow-drone-attack-trump.html",
-      "verified": true,
-      "snippet": "Jun 19, 2026 — Russia has pledged to carry out frequent and \"massive group strikes\" against Ukraine shortly after Kyiv launched a barrage of drones on Moscow.",
-      "bold_terms": [
-        "Jun 19, 2026"
+      "id": "bfa0fa5b2a9e55a6",
+      "source_id": "news_default",
+      "topics": [
+        "markets"
       ],
-      "read_more_url": "https://www.cnbc.com/2026/06/19/russia-ukraine-moscow-drone-attack-trump.html",
-      "source_id": "news_default"
+      "score": 1.296515
     }
   ]
 };

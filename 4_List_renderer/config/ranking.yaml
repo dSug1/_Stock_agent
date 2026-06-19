@@ -1,0 +1,47 @@
+# Ranking configuration (M6, Phase 5) — the transparent weighted-feature model (D5).
+#
+# score(item) = Σ  weight_f · feature_f      (a plain weighted sum, no black box)
+# Base weights are here (inspectable + user-tunable, like 2_Funds M6b's modifier).
+# The *learned* part — per-source and per-topic affinity, fit offline from the
+# interactions log — lives in the `ranking_state` table and is layered on top.
+# Deterministic user rules (D21: mute = hard filter, boost = weight bump) and the
+# seen-penalty (D22) apply after scoring. The ranker fails open: any error leaves
+# the board in its unranked source/position order (never blanks).
+
+# --- Feature weights (tune these) -------------------------------------------
+weights:
+  position_prior:  1.2   # cold-start anchor: preserve natural feed order when no
+                         #   other signal exists (also a recency proxy until M4
+                         #   emits published_at). Learned signals override it.
+  recency:         1.0   # newer is better (decayed); neutral 0.5 when no date.
+  source_affinity: 1.5   # learned net engagement with the item's source.
+  interest_match:  2.0   # matches a user-declared interest (site/topic/query).
+  topic_affinity:  1.0   # learned net engagement with the item's topics.
+  length:          0.15  # mild preference for richer snippets.
+  seen_penalty:   -0.8   # D22: de-prioritize items already seen.
+
+# --- Recency decay -----------------------------------------------------------
+recency:
+  half_life_hours: 48    # exp(-ln2 · age_hours / half_life). No date -> 0.5.
+
+# --- Offline learning (4_learn_ranking.py) -----------------------------------
+# Signal weighting (spec §8): the value each action contributes to a source's /
+# topic's net affinity. Computed from interactions.context_json (the D19 snapshot).
+signals:
+  like:         3.0
+  read_more:    2.0
+  open:         1.0
+  dwell_30s:    1.0      # a `dwell` event with dwell_ms >= 30000
+  scroll_past: -0.5
+  hide:        -3.0
+  impression:   0.0      # seen-but-no-engagement is neutral
+
+learn:
+  min_interactions: 15   # data-sufficiency gate; below this, stay cold-start (D5).
+  affinity_scale:   6.0  # affinity = tanh(net_signal / scale)  -> bounded [-1, 1].
+
+# --- Deterministic user rules (D21) ------------------------------------------
+# v1 reads rules from config (a Tier-B `rules` table + management API is deferred).
+rules:
+  mute_keywords: []      # case-insensitive substrings; matching items are dropped.
+  boost_topics:  []      # list of {topic: <str>, weight: <num>} added to score.

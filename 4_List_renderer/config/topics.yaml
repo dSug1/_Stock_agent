@@ -1,0 +1,26 @@
+# Controlled topic vocabulary (M4, D33 layer L2 — keyword tagging).
+#
+# Each topic maps to a list of keywords/phrases; an item is tagged with a topic
+# if any keyword appears (case-insensitive, word-boundary) in its title/snippet.
+# This is the v1 "keyword/entity" tagger: cheap, local, deterministic, and
+# interpretable (so D21 mute/boost rules can name a topic). It is intentionally
+# CONTROLLED-BUT-EVOLVING (D33): seed a small set, add topics over time, and
+# review additions in batches — do not hand-freeze it. Embeddings (D33 L3) are
+# the later, taxonomy-free path for similarity; this is for named-topic rules.
+#
+# Keep keywords specific enough to avoid false positives (prefer multi-word or
+# distinctive terms over common words).
+
+topics:
+  biotech:      [biotech, biopharma, pharma, fda, clinical trial, drug, therapy, oncology, vaccine, gene therapy]
+  ai:           [artificial intelligence, " ai ", machine learning, llm, gpt, neural network, deep learning, openai, anthropic]
+  programming:  [programming, software, developer, open source, javascript, python, rust, compiler, kubernetes, api, database]
+  hardware:     [chip, semiconductor, gpu, processor, nvidia, silicon, quantum]
+  markets:      [stocks, market, earnings, nasdaq, dow, s&p, ipo, fed, inflation, interest rate]
+  business:     [startup, funding, acquisition, merger, venture, ceo, layoffs, revenue]
+  crypto:       [crypto, bitcoin, ethereum, blockchain, web3, stablecoin]
+  politics:     [election, senate, congress, parliament, president, policy, government]
+  climate:      [climate, emissions, renewable, solar, carbon, energy transition]
+  health:       [health, disease, covid, vaccine, mental health, medicine, hospital]
+  science:      [research, study, scientists, physics, space, nasa, telescope, discovery]
+  security:     [security, breach, hack, vulnerability, ransomware, malware, exploit, cve]

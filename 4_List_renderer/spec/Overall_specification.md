@@ -2,7 +2,9 @@
 
 **Working product name:** Curator (a personalized highlights board)
 **Module dir:** `4_List_renderer/`
-**Status:** v0 built (fixed template + 3 demo adapters); this spec defines the v1 target.
+**Status:** Phases 0–5 built (template + adapters + SWR cache + Claude resolver + live server &
+interactions + PWA + learning/ranking) + M4 normalization (attributes L1/L2 + cross-source dedup);
+Phases 6–8 pending. This spec defines the v1 target.
 **Last updated:** 2026-06-19
 
 ---
@@ -333,10 +335,15 @@ batch multiple sources in one run where possible. Resolution never prompts the u
 ambiguous field — it writes a recipe with a `confidence` and an audit row; low-confidence
 recipes are surfaced for optional batched review, not interactive Q&A.
 
-### M4 — Normalization & dedup
+### M4 — Normalization & dedup (✅ built L1/L2 + dedup, D34)
 Maps heterogeneous `RawItem`s to Highlight records, assigns stable `id`s, and dedups across
-sources (same story from two feeds). Light topic tagging here (keyword/entity; optionally
-Claude-assisted in a later version). Output feeds M6.
+sources (same story from two feeds). Also the home of **attribute extraction** that feeds M6
+ranking, staged by cost per **D33**: M4 adds the **L1 structural** attributes (`published_at`,
+domain/section, `language`, length — which light up the dormant `recency` feature) plus **L2
+keyword/entity** topic tagging into a controlled vocabulary (`items.topics_json`). **L3
+embeddings** (the similarity + near-duplicate-dedup engine, a Tier-A per-item enrichment) and
+**L4 optional generative-LLM tagging** (behind the D24 seam, once-per-item cached) are later.
+Output feeds M6.
 
 ### M5 — Interest input & source discovery
 User submits an **area of interest** (a website URL, a topic, a query, a ticker). M5:
@@ -350,7 +357,7 @@ User submits an **area of interest** (a website URL, a topic, a query, a ticker)
 
 Resolution is automatic + audited (no per-item prompting), per the avoid-multiplying memory.
 
-### M6 — Learning & ranking
+### M6 — Learning & ranking (✅ built, Phase 5, D32)
 Computes a per-item **interest score** and orders highlights descending. Design:
 - **Features** per item: source affinity, topic/interest match, entities, recency, length,
   and explicit-interest boosts from M5.
@@ -363,15 +370,21 @@ Computes a per-item **interest score** and orders highlights descending. Design:
   schedule or after each render. Ranking auto-applies to display order (that's the product),
   but the model is fully inspectable and the weights tunable — no black box.
 
-### M7 — Local server & UI interactions
-A local HTTP server (stdlib `http.server`, mirrors `0_Renderer` / `3_Biopharm`) that:
-- Serves `list_results.html` + sidecar and auto-opens the browser.
-- Exposes `/api/*` endpoints: `select_sources`, `add_interest`, `interact` (like/hide/
-  read_more/dwell), `refresh`.
-- Persists durable signals to SQLite; mirrors lightweight UI prefs to localStorage.
-The template gains interaction hooks (impression + dwell tracking via IntersectionObserver,
-like/hide buttons on each row, click capture on titles/Read-more) keyed by Highlight `id` —
-landing in a new hash-versioned template revision.
+### M7 — Local server & UI interactions (✅ built, Phase 4, D31)
+A local HTTP server (stdlib `http.server`, mirrors `0_Renderer` / `3_Biopharm`; bound to
+127.0.0.1, no auth — localhost is trusted) that:
+- Serves `list_results.html` + sidecar + PWA assets and auto-opens the browser.
+- Exposes the `/api/*` contract: `GET/POST /api/sources` (select sources), `POST /api/interest`
+  (capture; discovery=Phase 6), `POST /api/interact` (batched like/hide/open/read_more/dwell/
+  scroll_past/impression), `GET /api/board` (the §13.7 delivery), `GET /api/health`.
+- Persists durable signals append-only to `interactions` with the `context_json` snapshot
+  (D19); mirrors lightweight UI prefs / an offline event buffer to localStorage.
+The template gained interaction hooks (impression + dwell + scroll_past via IntersectionObserver,
+a per-row kebab menu with like/hide, click capture on titles/Read-more) keyed by Highlight `id`,
+a source-selection panel, and PWA bits (manifest + service worker, D26) — a new hash-versioned
+template revision that still renders over `file://` (server-only controls hidden). The local
+server is stdlib, not FastAPI (D25's guardrail is the contract, not the framework; the hosted
+port swaps the impl behind the same `/api/*`).
 
 ### M8 — Render orchestrator
 End-to-end pipeline tying M1→M6 together with SWR: instant cached render, background refresh,
@@ -411,6 +424,11 @@ biopharm,news}`); v1 generalizes it to "render the enabled source set."
 - **Explainability:** each Highlight can carry a `score_breakdown` (optional, behind a
   detail toggle) so the user sees *why* something ranked high — consistent with this repo's
   preference for transparent, inspectable scoring over opaque models.
+- **Features / attributes (D33):** what ranking learns over is extracted in staged layers
+  (structural → keyword/entity → embeddings → optional LLM), with multi-granularity back-off so
+  fine attributes resolve without losing generalization. Embeddings (not an LLM) are the tool for
+  similarity; named topics are for interpretability + rules (D21). Today only structural `source`
+  affinity is active; the rest light up as M4/v2 land — no ranker change required.
 - **Privacy:** all interaction data is local SQLite; nothing leaves the machine.
 
 ---
@@ -462,11 +480,11 @@ biopharm,news}`); v1 generalizes it to "render the enabled source set."
 |---|---|---|
 | **0 (done)** | M0 + 3 demo adapters + CLI + bat | Fixed template renders file/biopharm/news. |
 | **1 (done)** | M1 registry, tiered DB schema (+identity/auth scaffold), M8 registry render | Sources live in SQLite; render = the board's enabled source set. (D28) |
-| **2 — Generic adapters + SWR cache** | M2 (`rss/web/sqlite/http`), `items` cache | Any feed/DB/API addable by config; instant cached render + background refresh. |
-| **3 — Claude resolver** | M3, `recipes` | New/messy sources self-resolve to cached recipes; cost-gated. |
-| **4 — Interactions & server** | M7, `interactions`, template v2 hooks | User can select sources + like/hide/click; signals persist. |
-| **5 — Ranking** | M6, `ranking.yaml`, `ranking_state` | Highlights ordered by learned interest; cold-start by recency+interest. |
-| **6 — Interest input** | M5, `interests` | User adds a site/topic; app discovers + registers sources, boosts ranking. |
+| **2 (done)** | M2 generic `rss/http_api/sqlite` adapters + SWR `items` cache | Any feed/DB/API addable by config; read-through cache + serve-stale. `web` scrape → Phase 3 (needs resolver); dedup → M4. (D29) |
+| **3 (done)** | M3 resolver + `recipes` + LLM runner (D24 seam) + `web` adapter | New/messy sources self-resolve to cached recipes; estimate + `[y/N]` gate; free RSS shortcut. (D30) |
+| **4 (done)** | M7 (stdlib server + `/api/*`), `interactions`, template v2 hooks, PWA | User selects sources + like/hide/click; signals persist append-only; board served live. (D31) |
+| **5 (done)** | M6 `ranking.py` + `ranking.yaml` + `ranking_state`, `4_learn_ranking.py` | Highlights ordered by a transparent weighted-feature model; affinities learned offline from interactions; mute/boost rules (D21) + seen-penalty (D22); fail-open. (D32) |
+| **6 — Interest input** | M5, `interests` | User adds a site/topic; app discovers + registers sources, boosts ranking. (Capture built in P4; discovery here.) |
 | **7 — Polish** | iOS layout, score-explain toggle, scheduler | Mobile board, transparency, auto-refresh. |
 | **8 — Hosted skeleton (BACKLOG, later)** | Next.js/Vercel multi-user shell (see §13 + below) | Multi-user deployment; same modules, swapped backends. |
 
@@ -610,8 +628,11 @@ User-confirmed 2026-06-19 (✅); remaining assumptions take the first option (�
 4. ✅ **Device target = desktop + mobile via one responsive PWA** (D26). Mobile-first responsive
    is now a v1 requirement; service worker (offline + cached paint) lands with the client.
 5. ✅ **Tech stack = Python/FastAPI backend + responsive PWA**, any Python-friendly cloud (D25).
-6. ◻ **Topic tagging method.** Assumed keyword/entity tagging in M4 v1, Claude/embedding
-   tagging later.
+6. ✅ **Topic tagging / attribute extraction method (D33).** Staged by cost: L1 structural
+   (free, now) → L2 keyword/entity controlled-vocab (M4) → L3 embeddings (v2; the similarity +
+   dedup engine, Tier-A per-item enrichment) → L4 generative-LLM tagging (optional, behind D24,
+   once-per-item cached). Structural backbone is sufficient to start; embeddings (not an LLM) are
+   the right tool for similarity; LLM is a targeted quality layer only. See D33.
 7. ◻ **Single vs multi-user.** Assumed single local user (no auth) for v1; multi-user is the
    hosted topology (§13).
 

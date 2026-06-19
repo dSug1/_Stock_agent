@@ -120,7 +120,7 @@ def list_enabled_sources(
     rows = conn.execute(
         """
         SELECT s.id, s.kind, s.adapter, s.name, s.label, s.config_json,
-               sub.position
+               s.recipe_id, sub.position
         FROM subscriptions sub
         JOIN sources s ON s.id = sub.source_id
         WHERE sub.user_id=? AND sub.board_id=? AND sub.enabled=1 AND s.enabled=1

@@ -250,6 +250,24 @@ _MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        5,
+        # --- Phase 2: SWR content cache plumbing ---
+        # items.payload_json holds the renderable Highlight (metadata only, D17);
+        # source_state tracks per-source fetch freshness + NN-2 politeness fields.
+        """
+        ALTER TABLE items ADD COLUMN payload_json TEXT;
+
+        CREATE TABLE IF NOT EXISTS source_state (
+            source_id      TEXT PRIMARY KEY,
+            last_fetch_at  TEXT,
+            last_status    TEXT,
+            n_items        INTEGER,
+            etag           TEXT,                -- NN-2 conditional GET (reserved)
+            last_modified  TEXT                 -- NN-2 conditional GET (reserved)
+        );
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = _MIGRATIONS[-1][0]

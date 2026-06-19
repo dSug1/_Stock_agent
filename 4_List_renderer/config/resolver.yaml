@@ -1,0 +1,30 @@
+# Module 3 — Claude resolver config (Phase 3).
+#
+# The resolver fetches a page and asks Claude how to fetch + extract it,
+# producing a reusable recipe (cached in the `recipes` table). Renders then
+# replay recipes for free; Claude is NOT in the per-render path (D4).
+
+# Model + sampling. Default Opus 4.8 (D4 / claude-api guidance). For a cheaper
+# resolver, switch to claude-sonnet-4-6 ($3/$15) or claude-haiku-4-5 ($1/$5).
+model: claude-opus-4-8
+max_output_tokens: 2000
+effort: medium                 # low | medium | high | max (output_config.effort)
+
+# Pricing per 1M tokens (USD) — claude-api reference, cached 2026-06.
+pricing:
+  claude-opus-4-8:   { input: 5.00, output: 25.00 }
+  claude-sonnet-4-6: { input: 3.00, output: 15.00 }
+  claude-haiku-4-5:  { input: 1.00, output: 5.00 }
+
+# Prompt-cache cost multipliers (claude-api): write 1.25x (5-min TTL), read 0.10x.
+cache_write_multiplier: 1.25
+cache_read_multiplier: 0.10
+
+# Estimator over-reports in the safe direction; tune as real invoices land.
+calibration_factor: 1.0
+
+# Fetch the page HTML up to this many chars before sending to Claude (cost cap).
+max_html_chars: 60000
+
+# Governance seeds (D13 — enforced in hosted mode; advisory locally).
+max_billed_sources_per_run: 25

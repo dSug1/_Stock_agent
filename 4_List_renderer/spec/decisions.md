@@ -457,9 +457,307 @@ biopharm on → 19 items merged; v0 overrides intact; auth scaffold empty; DB gi
 
 ---
 
+## D29 (2026-06-19) — Phase 2 built (generic adapters + SWR cache)
+
+**Built.**
+- **Generic, config-only adapters** (any feed/DB/API addable without code):
+  - `rss` (`adapters/rss.py`) — any RSS/Atom feed by `config.feed_url`.
+  - `http_api` (`adapters/http_api.py`) — any JSON API mapped via dotted-path `fields`
+    (`items_path`, `headers`, ...). Covers the social/forums priority (Reddit/HN JSON, D10).
+  - `sqlite` (`adapters/sqlite_source.py`) — any SQLite DB via `query` + column map.
+  - Shared RSS parsing extracted to `adapters/_rss_parse.py`; `news` refactored to reuse it.
+- **SWR content cache** (`cache.py` + migration 5): `items.payload_json` (renderable Highlight,
+  metadata-only per D17) + `source_state` (freshness + reserved ETag/Last-Modified for NN-2).
+  Read-through with **serve-stale-on-failure**: network sources re-fetch only past TTL
+  (`config.cache_ttl`, default 900s); local sources (file/biopharm/sqlite) read fresh.
+- **Pipeline** dispatches generic + bespoke adapters and applies the cache; CLI gains
+  `--refresh` (force re-fetch) and `--no-fetch` (offline, cache-only).
+- Seeded generic demo sources (`hn_rss`, `hn_api`) in `sources.yaml` (off-board by default).
+
+**Verified.** Generic `rss` (10) + `http_api` (10) + `news` (9) = 29 merged; cold fetch
+populates the cache; warm render = all cache hits (no network); `--no-fetch` serves 29 offline;
+`--refresh` re-fetches; `items`=29, `source_state` all `ok`; generic `sqlite` maps biotech.db.
+
+**Not yet (deferred):** the `web` (HTML scrape) adapter is deferred to **Phase 3** — it needs
+the Claude resolver to infer selectors (a hand-authored selector adapter would be brittle).
+Cross-source **dedup (M4)** is not yet implemented; items merge in source/position order, so the
+same story from two sources can appear twice. True background refresh (vs read-through) lands
+with the M7 server (Phase 4).
+
+**State.** Phase 2 complete. Next: Phase 3 (Claude resolver → cached recipes; the `run_llm_task`
+billing seam from D24) — or Phase 4 (FastAPI server + interactions) if you prefer the UI first.
+
+---
+
+## D30 (2026-06-19) — Phase 3 built (Claude resolver + cost gate + web adapter)
+
+**Built.**
+- **LLM layer** (`src/list_renderer/llm/`) — the D24 seam: `run_llm_task` (single call
+  path: prompt caching on the system prefix, JSON forced via `output_config.format`, adaptive
+  thinking for Opus 4.8) → logs cost + payer to the `llm_tasks` ledger; `BillingContext`
+  (v1 = `self`, key from `.env`); `estimate_cost` / `format_cost_panel` (offline char/4
+  estimate, ASCII-safe panel).
+- **Resolver** (`src/list_renderer/resolver/`) — `prepare` fetches the page HTML + builds the
+  prompt + cost estimate **without** calling Claude; `resolve_source` makes the billed call and
+  returns a recipe; `recipes.py` persists to the `recipes` table (keyed by source_signature,
+  reused forever). Deterministic **free RSS shortcut**: a declared `<link rel=alternate
+  type=application/rss+xml>` yields an `rss` recipe with **no Claude call**.
+- **CLI** `scripts/4_resolve_source.py` — `prepare` → print cost panel → **mandatory `[y/N]`
+  gate** (only `--yes` bypasses; `--estimate-only` never calls; `--force-claude` ignores the
+  free shortcut) → `run_llm_task` → save recipe → optionally `--source-id`/`--add-to-board`.
+- **`web` adapter** (`adapters/web.py`, deferred from Phase 2) — replays a recipe's CSS
+  selectors via BeautifulSoup; pipeline loads the recipe by `source.recipe_id` and feeds
+  `extract_spec` to it (no Claude at render).
+- Config: `config/resolver.yaml` (model=Opus 4.8 default, pricing, cache multipliers,
+  calibration, governance seeds) + `config/module_3_resolver_prompt.md` (cacheable; treats page
+  HTML as untrusted DATA per NN-1 / prompt-injection isolation).
+
+**Cost discipline (the explicit ask).** Estimate is shown BEFORE any call; the `[y/N]` gate is
+mandatory; recipes are cached so renders replay free (D4); the `llm_tasks` ledger records
+`task_type` + `payer` per call (D24). Default model Opus 4.8 ($5/$25 per 1M; cache read 0.1x /
+write 1.25x), switchable to Sonnet 4.6 / Haiku 4.5 in `resolver.yaml`.
+
+**Verified WITHOUT spending.** Cost panel renders (~9,085 tok → ~$0.096/call for a sample page
+on Opus 4.8); `[y/N]` decline aborts with `llm_tasks`=0 / `recipes`=0; the free RSS shortcut
+saves an `rss` recipe at $0.00; a `web` recipe scrapes 5 items via selectors; the registry
+merges news (9) + resolved-rss (10) + scraped-web (5). The billed `run_llm_task` path executes
+only on explicit approval — not exercised in verification.
+
+**State.** Phase 3 complete. `web` adapter now built (closes the Phase 2 deferral). Next:
+Phase 4 (FastAPI server + interactions, M7) or Phase 5 (ranking, M6).
+
+---
+
+## D31 (2026-06-19) — Phase 4 built (local server + interactions + PWA, M7)
+
+**Built.**
+- **Local board server** (`src/list_renderer/server.py` + `scripts/4_serve.py` +
+  `run_4_List_server.bat`) — stdlib `http.server` `ThreadingHTTPServer` bound to
+  **127.0.0.1** only (localhost single-user + trusted → no auth/session, D27 §16.5). Serves
+  the template + the `/api/*` JSON contract; opens the browser; one SQLite connection per
+  request (threads can't share connections). Endpoints:
+  - `GET /api/board` (`?refresh=1`, `?no_fetch=1`) → the same `LIST_DATA` shape as the file
+    sidecar (§13.7 / D15), plus `meta.{mode,seen,liked,n_hidden}`. Also re-writes the on-disk
+    sidecar each call so a later `file://` open shows the same board.
+  - `GET /api/sources` / `POST /api/sources` → list sources + on-board flags / toggle a source
+    on/off the board (the **source-selection UI**, closes the Phase-3 "no toggle UI" gap).
+  - `POST /api/interact` → append a **batch** of buffered signals (D6).
+  - `POST /api/interest` → capture a declared interest (`interests`, `status='pending'`);
+    auto-discovery/registration (M5) stays Phase 6 (D7).
+  - `GET /api/health`, static `/`, `/list_results_data.js`, `/manifest.webmanifest`,
+    `/service-worker.js`, `/icon.svg`.
+- **Interaction capture** (`src/list_renderer/interactions.py`) — append-only writes to
+  `interactions` with the verbatim `context_json` feature/score snapshot at event time (D19).
+  Actions: `impression, open, read_more, like, hide, dwell, scroll_past` (+`unhide`,
+  forward-compat). Derived views: `hidden_item_ids` (filtered out of the board — an immediate
+  deterministic override, the learned version is D21), `seen_item_ids` (D22 dimming),
+  `liked_item_ids`.
+- **Template v2** (`Outputs/list_results.html`, hash-bumped per D1) — **one data contract, two
+  delivery modes**: a loader shim uses `GET /api/board` when served (http) and falls back to the
+  `window.LIST_DATA` sidecar over `file://`. Interaction hooks: `IntersectionObserver`
+  impression + dwell + `scroll_past`; title/Read-more click → `open`/`read_more`; a per-row
+  kebab menu → Like (one-way positive signal) / Hide (removes the row + persists) / Open. Events
+  buffer in `localStorage` and flush batched to `/api/interact` on a timer + `pagehide`
+  (`sendBeacon`). A slide-over **Sources panel** toggles sources and adds an interest. Seen rows
+  dim; liked rows show a heart. **Server-only controls are hidden over `file://`**, so the
+  static sidecar render remains the regression check (still renders fully offline).
+- **PWA** (D26) — `Outputs/manifest.webmanifest` + `service-worker.js` (app-shell cache-first,
+  `GET /api/board` network-first w/ cache fallback) + `icon.svg`; responsive/mobile-first CSS
+  (wrapping toolbar, larger tap targets, ≤600px tuning). SW registers in served mode only.
+- **Pipeline** — every rendered item is now stamped with a stable `id` (`cache.item_id`) even
+  for local sources (file/biopharm/sqlite), so interactions key off it. New `build_board()`
+  wraps the registry render with hide-filtering + seen/liked/meta for the server delivery.
+
+**Framework note (the D25 nuance).** D25 names FastAPI as the backend; M7's spec text specifies
+stdlib `http.server` (mirroring `0_Renderer` / `3_Biopharmcatalyst_parser`). **Local v1 uses
+stdlib** — zero new dependency, repo-consistent. D25's actual guardrail is the *fixed `/api/*`
+HTTP/JSON contract*, not the framework: the hosted port swaps the server impl (FastAPI +
+Postgres + workers, §14) behind the **same contract**, so this is a swap, not a divergence.
+
+**Verified WITHOUT a browser.** Board build stamps `id` on all items; `record_batch` persists;
+`hidden_item_ids` filters the board (9→8, `n_hidden=1`); `seen`/`liked` derive correctly. Server
+boots on 127.0.0.1; `GET /api/health|board|sources` and `POST /api/interact|sources|interest`
+all return correct JSON; live `/api/board` serves SWR cache (9 items) and syncs the sidecar; the
+served template carries the v2 marker + relative asset links; 404s for unknown paths. `file://`
+regression: `4_render_list.py --no-fetch` still writes a valid 9-item sidecar. Test interaction/
+interest rows were cleaned afterward (DB back to 0/0). Full in-browser click-through (impression/
+dwell/menu) not automated (no headless browser available) — JS reviewed; degrades to no-ops over
+`file://`.
+
+**Not yet (deferred):** ranking/order is still source/position order (M6 = Phase 5 consumes this
+log); cross-source **dedup (M4)** still open; `/api/interest` captures but does not yet discover
+sources (M5 = Phase 6); icons are a single SVG (no rasterized 192/512 PNG — fine for local
+install). True background SWR (vs the server's read-through + client SW network-first) is
+adequate for local single-user.
+
+**State.** Phase 4 complete. Next: Phase 5 (ranking, M6) — now has a live `interactions` signal
+to fit against — or Phase 4-lite dedup (M4) first.
+
+---
+
+## D32 (2026-06-19) — Phase 5 built (learning & ranking, M6)
+
+**Built.**
+- **Transparent weighted-feature scorer** (`src/list_renderer/ranking.py`, D5) —
+  `score = Σ weight_f · feature_f` over a small inspectable feature set: `position_prior`
+  (cold-start order anchor / recency proxy), `recency` (exp half-life decay), `source_affinity`
+  (learned), `interest_match` (declared interests, M5), `topic_affinity` (learned),
+  `length`, `seen_penalty` (D22). Base weights live in **`config/ranking.yaml`** (user-tunable,
+  like 2_Funds M6b's modifier); the *learned* per-source / per-topic affinities live in
+  `ranking_state`. **Fails open**: any error serves the unranked source/position order — ranking
+  never blanks the board. Stable sort, so equal scores keep feed order.
+- **Offline re-fit** (`ranking.fit_affinities` + `scripts/4_learn_ranking.py`) — reads the
+  append-only `interactions` log, attributes each signal to the item's source/topics via the
+  **`context_json` snapshot (D19)** — the reason that snapshot exists — using the spec-§8 signal
+  weights (`like +3, read_more +2, open +1, dwell≥30s +1, scroll_past −0.5, hide −3`), and writes
+  `affinity = tanh(net / scale)` ∈ [-1,1] to `ranking_state`. A **data-sufficiency gate**
+  (`learn.min_interactions = 15`, like 2_Funds M7-β/γ) keeps it cold-start until enough signal.
+  Free + offline (no network, no Claude).
+- **Deterministic user rules (D21)** — `config/ranking.yaml::rules`: `mute_keywords` (hard
+  filter, applied pre-score) + `boost_topics` (weight bump, added post-score). v1 reads rules from
+  config; the Tier-B `rules` table + management API is deferred (no migration this phase).
+- **Seen de-prioritization (D22)** — `seen_penalty` lowers already-seen items (seen set derived
+  from `impression/open/read_more` interactions).
+- **Wiring** — `pipeline.build_payload_from_registry` now ranks results descending by default
+  (`rank=True`, `include_breakdown=False`), so both the served board and the file render are
+  ordered; `score` flows through `normalize_result` (already passed through), and an optional
+  `score_breakdown` (D5/§8 explainability) is available when requested (off by default to keep the
+  sidecar lean — a Phase-7 toggle will surface it). The **server auto-re-fits on startup** so each
+  restart applies last session's signals.
+
+**Cold-start deliberately ≈ unranked.** Until signals/interests/dates exist, `position_prior`
+dominates and the board stays in its natural source/feed order — the new ordering only diverges
+as the user acts. This keeps the regression (same items render) intact while making ranking the
+product.
+
+**Dormant-but-wired features.** Adapters don't yet emit `published_at`/`topics` (that's M4
+normalization), so `recency` and `topic_affinity`/topic-`interest_match` contribute neutrally for
+now; the active levers are `source_affinity` (the live learning signal), site-`interest_match`,
+`seen_penalty`, and `length`. When M4 lands, recency/topics light up with no ranker change.
+
+**Verified.** Cold start: scores strictly descending, lead source preserved. 15 synthetic
+interactions (like hn_rss / hide news_default) cross the gate → fit attributes affinity to **only
+the interacted sources** (hn_rss +0.999, news_default −0.995, no spurious sources) → the liked
+source floats to the top of the re-ranked board. Mute keyword drops matching items; bad config
+path fails open to input order; `4_learn_ranking.py` reports cold-start cleanly at 0 interactions;
+the render CLI still emits scored, descending output with no `score_breakdown` leakage. All test
+interactions/ranking_state cleaned; on-board reset to seed intent (news_default only).
+
+**Not yet (deferred):** cross-source **dedup (M4)** still open (same story can double-render);
+graduating the naïve per-feature affinity to a real regression (spec §8 "once enough rows
+exist"); the Tier-B `rules` table + UI; recency/topic features await M4; interest **discovery**
+(M5 = Phase 6) still only captures.
+
+**State.** Phase 5 complete. Next: Phase 6 (interest input/discovery, M5) or Phase 4-lite dedup
+(M4).
+
+---
+
+## D33 (2026-06-19) — Attribute/feature extraction strategy (resolves OD-d topic tagging)
+
+**Decision.** Item attributes (the things ranking learns over, M6) are extracted in **staged
+layers of increasing cost**, deliberately *not* a single fixed set, because attribute granularity
+trades off against generalization (the sparsity / bias–variance problem): coarse attributes are
+dense and generalize but cap resolution; fine attributes resolve but starve of signal and, at the
+limit (the `item_id` itself), cannot generalize across content churn at all.
+
+**Principles.**
+1. **Two kinds of attribute, kept separate.** *Structural* (free, deterministic, dense — `source`,
+   domain, section/path, `language`, recency, length, kind) is the **generalization backbone**;
+   *semantic* (what the item is about — topics, entities, stance) requires extraction and is where
+   cost lives. The structural backbone alone already powers source-affinity (live today) and
+   carries a feed reader far — `source` is a strong taste proxy.
+2. **Similarity ≠ named attributes.** Inferring "more like what I engaged with" does **not** require
+   enumerating attributes; **embeddings** give similarity geometrically (cosine) with no taxonomy
+   and no per-label sparsity. Named, controlled-vocabulary topics are for *interpretability + user
+   rules* (D21 mute/boost must name something); embeddings are for *similarity + dedup*. Curator
+   wants **both**, for different jobs.
+3. **Multi-granularity with back-off, not a single granularity.** Estimate fine attributes but
+   shrink them toward their coarse parent by data volume (`source → section → topic → entity`).
+   The current `affinity = tanh(net / scale)` is a crude shrinkage; a real hierarchy gives fine
+   resolution *and* generalization instead of trading one for the other. (Note: the linear
+   weighted-sum model, D5, cannot represent attribute *interactions* without engineered
+   cross-features — attribute design and model class are coupled.)
+4. **Controlled-but-evolving vocabulary.** Seed a small topic taxonomy; let the tagger propose new
+   topics; review additions in **batches** (`feedback_avoid_multiplying_user_requests`), never
+   interactively. **Prune by decision-relevance** — an attribute that never correlates with any
+   user's signal is dead weight; the data says which attributes earn their place.
+
+**The cost ladder (and where each lands in Curator).**
+- **L1 Structural — free, now.** Already live; `source` does the work.
+- **L2 Keyword / entity tagging — cheap, local, no LLM — lands with M4.** Maps items into a
+  controlled topic vocab; noisy but interpretable; enables D21 rules and lights up the
+  dormant `recency`/`topic` ranking features with **no ranker change**. (The OD-d "keyword/entity
+  v1" assumption, now confirmed as the M4 step.)
+- **L3 Embeddings — medium, local-capable, no generative LLM — v2.** The real similarity engine;
+  computed **once per item as Tier-A enrichment** (O(items), shared — same economics as recipes,
+  D12). Simultaneously solves **cross-source dedup** (near-duplicate detection M4 needs anyway),
+  emergent topic clusters, and a "similarity-to-liked-centroid" ranking feature.
+- **L4 Generative LLM — expensive — optional, later.** Reserved for semantics the cheaper layers
+  cannot infer (stance, novelty/quality, reading level, multilingual topic unification). Viable
+  **only** as batched, cached, **once-per-item** Tier-A enrichment — never per render (D23/D4) —
+  behind the existing `run_llm_task` seam (D24), so it is purely additive.
+
+**Why.** A hard-defined universal *structural* set is sufficient to start and is the necessary
+dense backbone; **embeddings**, not an LLM, are the right and cheaper tool for similarity (and need
+no attribute definitions); a generative LLM is neither necessary nor the first reach — it is a
+targeted quality layer for the few semantic attributes cheap methods miss. Staging by cost keeps
+the per-item economics intact (D12) and each layer ships independently with no rewrite.
+
+**State.** Resolves OD-d. L1 built; **L2 = the M4 build**; L3 (embeddings) is the v2 follow-on
+(also the dedup engine); L4 (LLM tagging) deferred behind D24. No schema change needed for L1/L2
+(`items.topics_json` exists); L3 adds an embedding column/table as Tier-A enrichment.
+
+---
+
+## D34 (2026-06-19) — M4 built (normalization, attributes L1/L2, cross-source dedup)
+
+**Built.** The normalization layer between fetch (M2) and rank (M6), realizing D33 L1+L2 and
+closing the long-standing dedup gap:
+- **L1 structural attributes (free).** Adapters now emit ISO-8601 UTC `published_at`:
+  `_rss_parse.item_date_iso` (RSS `pubDate` / Atom `updated`/`published`) covers `rss`+`news`;
+  `http_api._to_iso` (epoch s/ms or ISO string) covers JSON APIs — wired for HN via
+  `fields.published: created_at_i`. This **lights up the dormant `recency` ranking feature** with
+  no ranker change. (Feeds that omit a date — e.g. FierceBiotech's — fall back to neutral 0.5.)
+- **L2 keyword topic tagging.** `config/topics.yaml` = a **controlled, evolving** vocabulary
+  (12 seed topics → keyword lists); `normalize.tag_topics` does case-insensitive word-boundary
+  matching over title+snippet → `item.topics`. This **lights up `topic_affinity` + topic
+  `interest_match`** and gives D21 mute/boost something to name. Cheap, local, deterministic,
+  interpretable — no LLM (D33).
+- **Cross-source dedup.** `normalize.dedup` collapses the same story from two feeds: exact
+  canonical-URL match (host-normalized, tracking-param-stripped), exact normalized-title match,
+  then a high-threshold (0.85) title-token Jaccard for near-duplicates (guarded by a min-token
+  floor to avoid false merges). First occurrence wins (preserves feed/ranking order); merged
+  sources recorded on `dup_sources`.
+- **Wiring.** `pipeline.build_payload_from_registry` runs `normalize.normalize` on the merged
+  results **after fetch/id-stamp, before ranking**, logging the dedup count. Enrichment mutates
+  only the per-render dicts (cache untouched), so re-tagging is always current with the vocab.
+  `topics` flows through `normalize_result` to the sidecar (and into interaction `context_json`,
+  so `fit_affinities` now learns topic affinity); `domain`/`dup_sources` stay internal.
+- **Fail open.** Any normalization error returns the un-normalized list — never blanks the board.
+
+**Verified.** Tagger returns correct topics with no false positives on generic text; `canonical_url`
+unifies www/case/tracking variants; dedup collapses 4→2 with `dup_sources` recorded; epoch→ISO
+correct; the registry board tags news items (biotech/markets) and recency makes a fresh item
+outrank a 10-day-old one; **live** fetches emit `published_at` (HN, Le Figaro, CNBC). No DB writes
+in verification.
+
+**Not yet (deferred):** per-item `language` detection (NN-3 — adapters pass through; needs a lib,
+deferred); persisting `topics_json`/`domain` to the `items` table (render-time tagging suffices
+for ranking today); **L3 embeddings** (the taxonomy-free similarity + semantic-dedup engine, v2);
+**L4 LLM tagging** (optional, behind D24). The dedup is lexical (URL/title); semantic near-dups
+across very different headlines wait for L3.
+
+**State.** M4 built. Ranking now has live recency + topic signal in addition to source affinity.
+Next: Phase 6 (interest input/discovery, M5) or v2 embeddings (D33 L3).
+
+---
+
 ## Still-open decisions (spec §11)
 
-- **OD-d Topic tagging** — keyword/entity v1 assumed; confirm if embeddings wanted up front.
+- **OD-d Topic tagging** → ✅ **resolved by D33** — staged attribute extraction: structural (L1,
+  now) → keyword/entity controlled-vocab (L2, M4) → embeddings (L3, v2; also dedup + similarity) →
+  LLM tagging (L4, optional, behind D24). No remaining open decisions.
 
 ---
 

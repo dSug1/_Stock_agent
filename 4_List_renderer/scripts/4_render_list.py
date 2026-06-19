@@ -82,6 +82,16 @@ def main(argv: list[str] | None = None) -> int:
         help="[registry] (Re)seed sources from config/sources.yaml before rendering.",
     )
     parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="[registry] Force a re-fetch of network sources (bypass the SWR cache).",
+    )
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="[registry] Render from cache only; no network (offline).",
+    )
+    parser.add_argument(
         "--input",
         type=Path,
         default=DEFAULT_INPUT,
@@ -123,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
                 conn,
                 user_id=listdb.LOCAL_USER_ID,
                 board_id=listdb.DEFAULT_BOARD_ID,
+                refresh=args.refresh,
+                no_fetch=args.no_fetch,
             )
         finally:
             conn.close()

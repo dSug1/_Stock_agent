@@ -36,3 +36,38 @@ sources:
     on_board: false
     config:
       input: data/sample_input.json
+
+  # --- Phase 2: generic, config-only sources (no code needed) ---
+
+  # Generic RSS adapter: any feed by URL. Here: Hacker News front page.
+  - id: hn_rss
+    kind: rss
+    adapter: rss
+    name: Hacker News — front page
+    label: Hacker News
+    on_board: false
+    config:
+      feed_url: https://hnrss.org/frontpage
+      brand: Hacker News
+      max_items: 10
+      cache_ttl: 900
+
+  # Generic JSON-API adapter: map any JSON response via dotted field paths.
+  # Here: Hacker News front page via the Algolia API (single call, no auth).
+  - id: hn_api
+    kind: http_api
+    adapter: http_api
+    name: Hacker News — via Algolia API
+    label: HN (API)
+    on_board: false
+    config:
+      url: https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=10
+      items_path: hits
+      brand: Hacker News
+      max_items: 10
+      cache_ttl: 900
+      fields:
+        title: title
+        url: url
+        snippet: story_text
+        published: created_at_i        # epoch seconds -> recency attribute (D33 L1)
