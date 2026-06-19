@@ -145,13 +145,19 @@ def _fetch_site(site: dict, per_site: int) -> list[dict]:
     return []
 
 
-def build_payload_from_news(per_site: int = 3) -> dict:
-    """Fetch `per_site` articles from each configured site, in order."""
+def fetch_results(per_site: int = 3) -> list[dict]:
+    """Fetch `per_site` articles from each configured site, in order, as a flat
+    list of Highlight dicts. Used by the registry orchestrator (M8)."""
     results: list[dict] = []
     for site in SITES:
         results.extend(_fetch_site(site, per_site))
+    return results
+
+
+def build_payload_from_news(per_site: int = 3) -> dict:
+    """Standalone payload (v0 `--source news` path)."""
     return build_payload(
         query="fiercebiotech, le figaro, cnbc",
         brand="News",
-        results=results,
+        results=fetch_results(per_site),
     )

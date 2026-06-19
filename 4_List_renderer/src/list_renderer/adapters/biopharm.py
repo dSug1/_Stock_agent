@@ -113,8 +113,9 @@ def _result_from_row(row: sqlite3.Row) -> dict:
     }
 
 
-def build_payload_from_biotech_db(db_path: Path, top_n: int = 10) -> dict:
-    """Read biotech.db and return the window.LIST_DATA payload."""
+def fetch_results(db_path: Path, top_n: int = 10) -> list[dict]:
+    """Read biotech.db and return the top-N tickers as Highlight dicts.
+    Used by the registry orchestrator (M8)."""
     db_path = Path(db_path)
     if not db_path.exists():
         raise FileNotFoundError(f"biotech.db not found: {db_path}")
@@ -125,8 +126,12 @@ def build_payload_from_biotech_db(db_path: Path, top_n: int = 10) -> dict:
         rows = conn.execute(_TOP_SQL, (top_n,)).fetchall()
     finally:
         conn.close()
+    return [_result_from_row(r) for r in rows]
 
-    results = [_result_from_row(r) for r in rows]
+
+def build_payload_from_biotech_db(db_path: Path, top_n: int = 10) -> dict:
+    """Standalone payload (v0 `--source biopharm` path)."""
+    results = fetch_results(db_path, top_n)
     return build_payload(
         query=f"top {len(results)} tickers by composite score",
         brand="Biopharm Catalysts",

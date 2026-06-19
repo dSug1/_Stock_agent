@@ -98,6 +98,25 @@ significant ones are formalized in `decisions.md` (D21–D23).
 
 ---
 
+## 1c. Technology stack (decided — D25/D26)
+
+| Layer | Choice | Notes |
+|---|---|---|
+| **Client** | One **responsive PWA** (HTML/CSS/JS) — the existing template, mobile-first, installable on desktop + mobile, offline via service worker | Desktop + mobile from one codebase (D26). Optional later Capacitor/Tauri wrap, no UI rewrite. |
+| **Backend** | **Python / FastAPI** | Reuses the whole `_Stock_agent` Python stack (adapters, ranking, biopharm reader). Serves the `/api/*` contract + the static PWA locally. |
+| **Backend hosting** | Any **Python-friendly cloud** — Render / Railway / Fly / Azure Container Apps | "Vercel" was illustrative (D25). Static PWA can sit on any CDN incl. Vercel. |
+| **Local v1** | The **same FastAPI app on `localhost`** | Local and hosted run identical code; only storage backends differ (§13). |
+| **Storage** | SQLite (local) → Postgres + Redis/KV + object storage (hosted) | Per the three-tier model (§13). |
+| **LLM** | Anthropic Python SDK via the single `run_llm_task` runner (D24) | Prompt caching mandatory; cost-gated. |
+
+**Guardrail (D25):** the backend is reachable only through a fixed **HTTP/JSON contract**
+(`/api/board`, `/api/interact`, `/api/interest`) + the tier interfaces, so the PWA never changes
+if the API language is ever swapped (TS/Next.js fallback exists only if Vercel-native becomes
+mandatory). **C# was rejected** — not a native serverless runtime on Vercel-class hosts, and
+diverges from the repo.
+
+---
+
 ## 2. Design principles (inherited from repo conventions)
 
 These are load-bearing and come from existing user memories / module decisions. Do not
@@ -244,8 +263,14 @@ per-interaction feature snapshot (D19), and per-item `language` (D20/NN-3).
   `item_key` = source-local id; `id` = global hash; `raw_hash` detects change.
 
 **Tier B — per-user profile** (every row carries `user_id`, D16):
-- **`users`** — `(id PK, kind, created_at)`. `kind ∈ {local, account}`; a single `local`
-  default user in local mode.
+- **`users`** — identity/account (D27): `(id PK, kind, email, display_name, role, status,
+  plan, byok_key_ref, created_at, updated_at)`. `kind ∈ {local, account}`; a single `local`
+  default user in local mode. `role ∈ {user, admin}`; `plan`/`byok_key_ref` tie to billing
+  (D24).
+- **`auth_identities`** / **`sessions`** / **`login_audit`** — auth scaffold (D27); created in
+  the v1 schema but **empty** in local single-user mode (localhost is trusted). Populated only
+  in hosted multi-user mode. `sessions` stores `token_hash` (never the raw token) + `ip_hash`
+  (IP is PII → hashed/truncated, D14).
 - **`subscriptions`** — `(user_id, board_id, source_id, position, enabled, created_at)`.
   Which sources a user follows, per board (D18).
 - **`boards`** — `(id PK, user_id, name, config_json, created_at)`. One default board in v1.
@@ -436,7 +461,7 @@ biopharm,news}`); v1 generalizes it to "render the enabled source set."
 | Phase | Modules | Outcome |
 |---|---|---|
 | **0 (done)** | M0 + 3 demo adapters + CLI + bat | Fixed template renders file/biopharm/news. |
-| **1 — Persistence & registry** | M1, DB schema, generalize M8 to "enabled source set" | Sources live in SQLite; render reads the registry, not a hardcoded source. |
+| **1 (done)** | M1 registry, tiered DB schema (+identity/auth scaffold), M8 registry render | Sources live in SQLite; render = the board's enabled source set. (D28) |
 | **2 — Generic adapters + SWR cache** | M2 (`rss/web/sqlite/http`), `items` cache | Any feed/DB/API addable by config; instant cached render + background refresh. |
 | **3 — Claude resolver** | M3, `recipes` | New/messy sources self-resolve to cached recipes; cost-gated. |
 | **4 — Interactions & server** | M7, `interactions`, template v2 hooks | User can select sources + like/hide/click; signals persist. |
@@ -452,36 +477,37 @@ the summary feature itself is deferred.
 
 ---
 
-## 14. Backlog — Hosted Next.js/Vercel skeleton (deferred)
+## 14. Backlog — Hosted multi-user deployment (deferred)
 
 Captured for later; **not** part of the immediate local build. Implements the multi-user
-topology from §13 (D11–D15). The local modules (M0–M8) are reused behind tier interfaces; this
-is a backend + delivery swap, not a rewrite. Concrete skeleton scope when picked up:
+topology from §13 (D11–D15) on the Python stack (D25). Because local v1 *is* a FastAPI app, the
+hosted version is mostly a **storage-backend + auth + worker** addition, not a rewrite. Scope
+when picked up:
 
-- **App shell** — Next.js (App Router) project deployable to Vercel; static template served via
-  edge/CDN; the existing `list_results.html` adapted as the board view with the §13.7 loader
-  shim (`GET /api/board` instead of the file sidecar).
-- **Storage** — hosted Postgres (Neon / Vercel Postgres / Supabase) for Tier A (catalog,
-  recipes, items + enrichment) and Tier B (users, subscriptions, interactions, weights);
-  KV/Redis (Upstash / Vercel KV) for hot caches (per-user sidecar TTL, source-fetch SWR,
-  Claude-budget + rate-limit counters); Blob for raw snapshots. Port the §5 SQLite schema to
-  Postgres migrations, partitioned by tier.
-- **API routes** — `GET /api/board` (join shared items × user model → ranked sidecar),
-  `POST /api/interact` (batched signal ingest), `POST /api/interest` (add area of interest →
-  classify → enqueue resolution), source CRUD. Stateless functions only.
-- **Background workers** — Vercel Cron (+ Upstash QStash for fan-out/long jobs) for: source
-  refresh (run recipes, upsert content cache, SWR), Claude resolution queue (under system
-  budget, D13), and periodic per-user weight re-fit. Never in a request path.
-- **Auth & tenancy** — Auth.js / Clerk; `user_id` row-level isolation; Tier-A writes restricted
-  to system workers (D14); fetched content sanitized before render.
-- **Governance** — system budget counters in KV (daily Claude spend cap, new-domain quota +
+- **App shell** — deploy the existing FastAPI app to a Python-friendly cloud (Render / Railway /
+  Fly / Azure Container Apps); serve the static PWA from a CDN; the board view uses the §13.7
+  delivery (`GET /api/board`) it already uses locally.
+- **Storage** — port the §5 SQLite schema to **Postgres** migrations, partitioned by tier (A:
+  catalog/recipes/items+enrichment; B: users/subscriptions/interactions/weights); **Redis** for
+  hot caches (per-user sidecar TTL, source-fetch SWR, Claude-budget + rate-limit counters);
+  object storage for raw snapshots. Swap the storage layer behind the tier interfaces.
+- **API** — the same FastAPI `/api/board`, `/api/interact`, `/api/interest` (+ source CRUD)
+  endpoints; add multi-user auth + `user_id` scoping.
+- **Background workers** — platform cron + a worker process (or Celery/RQ/Arq, or QStash
+  webhooks) for: source refresh (run recipes, upsert content cache, SWR), Claude resolution
+  queue (system budget, D13), and periodic per-user weight re-fit. Never in a request path.
+- **Auth & tenancy** — FastAPI auth (OAuth/OIDC); `user_id` row-level isolation; Tier-A writes
+  restricted to system workers (D14); fetched content sanitized before render.
+- **Governance** — system budget counters in Redis (daily Claude spend cap, new-domain quota +
   queue, global dedup), allow/deny lists, admin review surface for low-confidence recipes.
 - **Carry-over constraints** — licensed data provider for any finance source before public
   launch (`project_data_provider_switch`); data export + delete; opt-in anonymized popularity
   priors only.
+- **Fallback** — only if Vercel-native becomes mandatory: a TS/Next.js API layer behind the same
+  `/api/*` contract (D25). PWA + storage tiers unchanged.
 
 Prerequisite: Phases 1–6 (local) should be substantially built first so the tier interfaces and
-recipe/ranking logic are proven before porting them to the hosted backend.
+recipe/ranking logic are proven before swapping in the hosted storage backend.
 
 ---
 
@@ -515,6 +541,58 @@ surface.
 
 ---
 
+## 16. Identity, accounts & authentication (D27)
+
+Designed now so the app scales from **one user on `localhost` (v1)** to **many users in the
+cloud** with *no data migration* — every per-user row already carries `user_id` (D16).
+
+### 16.1 Separation of concerns
+
+- **`users`** — the account/identity (id, kind, email, display_name, role, status, plan,
+  byok_key_ref). *Who* the user is.
+- **`auth_identities`** — *how* they sign in. One user → many linked identities
+  (password / Google / GitHub / Apple / magic-link). Passwords hashed with **argon2id**;
+  OAuth stores only `provider` + `provider_subject`.
+- **`sessions`** — active logins: a **hash** of the session token (never the raw token),
+  `ip_hash`, `user_agent`, `created/last_seen/expires`, `revoked`.
+- **`login_audit`** — security/audit trail (success/fail/logout/refresh) with `ip_hash` +
+  `user_agent`, for anomaly detection and rate-limiting.
+
+### 16.2 The scale-up path (localhost → cloud)
+
+| | v1 (localhost, single-user) | Hosted (multi-user) |
+|---|---|---|
+| Users | one implicit `local` user | real accounts (`kind='account'`) |
+| Sign-in | none (trusted localhost) | OAuth/OIDC + magic-link (+ optional password) |
+| Sessions | none | `sessions` rows, cookie/JWT to the PWA |
+| Auth tables | created but **empty** (scaffold) | populated |
+| Storage | SQLite | Postgres (§13) |
+| Data migration | — | **none** — all rows are already `user_id`-scoped |
+
+Turning on multi-user is therefore three additions — enable auth, swap storage, create real
+users — not a rewrite.
+
+### 16.3 IP address & privacy
+
+IP is PII: stored **hashed/truncated** (e.g. /24), short retention, **Tier B only**, included
+in export/delete (D14). Used for security, rate-limiting, and optional geo — never sold or
+shared (cross-user popularity priors stay anonymized + opt-in).
+
+### 16.4 Security baseline (hosted)
+
+HTTPS-only; argon2id password hashing; opaque-random or rotating JWT session tokens with only
+a hash stored; CSRF protection for cookie sessions; rate-limited auth endpoints; **BYOK keys
+encrypted at rest** (D24). `role ∈ {user, admin}` gates the admin recipe-review surface (D13);
+tenant isolation by `user_id` (D14).
+
+### 16.5 v1 behavior
+
+`localhost` is single-user and trusted — **no sign-in, no sessions, no IP capture**. The
+`local` user is implicit; the FastAPI server binds to `127.0.0.1`. The auth tables exist as
+scaffold so the hosted port is purely additive.
+
+---
+
 ## 11. Resolved scope decisions & remaining assumptions
 
 User-confirmed 2026-06-19 (✅); remaining assumptions take the first option (◻).
@@ -529,10 +607,13 @@ User-confirmed 2026-06-19 (✅); remaining assumptions take the first option (�
    News). The repo's own biopharm/finance pipelines stay as *demo* adapters, not a v1
    priority. M2's generic-adapter work therefore prioritizes `rss`/`web` then social-feed
    adapters; M5 interest input targets these kinds first. (Updates D2; see D10.)
-4. ◻ **Device target.** Assumed desktop-first, iOS board later (Phase 7).
-5. ◻ **Topic tagging method.** Assumed keyword/entity tagging in M4 v1, Claude/embedding
+4. ✅ **Device target = desktop + mobile via one responsive PWA** (D26). Mobile-first responsive
+   is now a v1 requirement; service worker (offline + cached paint) lands with the client.
+5. ✅ **Tech stack = Python/FastAPI backend + responsive PWA**, any Python-friendly cloud (D25).
+6. ◻ **Topic tagging method.** Assumed keyword/entity tagging in M4 v1, Claude/embedding
    tagging later.
-6. ◻ **Single vs multi-user.** Assumed single local user (no auth), consistent with the repo.
+7. ◻ **Single vs multi-user.** Assumed single local user (no auth) for v1; multi-user is the
+   hosted topology (§13).
 
 ---
 
@@ -604,21 +685,26 @@ shared Tier-A content with their Tier-B model.
   weight vector) + one ranking join. The shared layer is a public good; the per-user layer
   is thin. This is the economic justification for hosting at all.
 
-### 13.4 Hosted runtime on Vercel (reference mapping)
+### 13.4 Hosted runtime (Python stack — D25)
 
-Serverless has **no long-lived workers and no persistent local disk**, so all
-fetching/resolution/refit is **scheduled, idempotent, and stateless** — never in a user
-request path.
+The backend is **FastAPI on a Python-friendly cloud** (Render / Railway / Fly / Azure
+Container Apps), serving the same code as local v1. The static PWA sits on any CDN. Background
+jobs run as scheduled/worker processes (the platform's cron + a worker dyno, or a queue) —
+**never in a user request path**.
 
-| Concern | Vercel mapping |
+| Concern | Mapping (Python stack) |
 |---|---|
-| Static template + assets | Edge / CDN |
-| API (board fetch, interaction ingest, interest add, source CRUD) | Serverless / edge functions (stateless) |
-| Relational state (catalog, recipes, subscriptions, interactions, weights) | Hosted Postgres (Vercel Postgres / Neon / Supabase) |
-| Hot caches (per-user rendered sidecars w/ short TTL, source-fetch SWR cache, rate-limit + Claude-budget counters) | KV / Redis (Vercel KV / Upstash) |
-| Large raw payloads (raw HTML/JSON for recipe debugging) | Blob storage |
-| Background refresh & Claude resolution (out of request path) | Vercel Cron → functions; queue (Upstash QStash) for fan-out / longer jobs |
-| Auth | Auth.js / Clerk; session cookie / JWT to the browser |
+| Static PWA (template + assets + service worker) | Any CDN (Cloudflare / Netlify / Vercel static / the app's own static mount) |
+| API (board fetch, interaction ingest, interest add, source CRUD) | **FastAPI** service (stateless request handlers) |
+| Relational state (catalog, recipes, subscriptions, interactions, weights) | Managed **Postgres** (Neon / Supabase / RDS / the platform's PG add-on) |
+| Hot caches (per-user sidecars w/ short TTL, source-fetch SWR cache, rate-limit + Claude-budget counters) | **Redis** (Upstash / the platform's Redis add-on) |
+| Large raw payloads (raw HTML/JSON for recipe debugging) | Object storage (S3 / R2 / platform blob) |
+| Background refresh & Claude resolution (out of request path) | Cron + a **worker process** (or a task queue: Celery/RQ/Arq, or Upstash QStash webhooks) |
+| Auth | FastAPI auth (OAuth/OIDC via Authlib, or a managed provider) — session cookie / JWT to the PWA |
+
+> If Vercel-native deployment ever becomes mandatory, the documented fallback (D25) is a
+> TypeScript/Next.js API layer behind the same `/api/*` contract — the PWA and storage tiers
+> are unchanged.
 
 ### 13.5 Data flows (hosted)
 

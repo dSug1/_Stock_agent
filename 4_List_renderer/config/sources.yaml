@@ -1,0 +1,38 @@
+# Seed sources for 4_List_renderer (Phase 1).
+#
+# On first run (or with `--seed`), each entry is upserted into the `sources`
+# table (Tier A) and the local user's default board is subscribed to it
+# (Tier B). `on_board` controls whether it shows on the board by default;
+# the source itself stays registered either way.
+#
+# adapter  = which fetch adapter handles it (file | biopharm | news)
+# kind     = source taxonomy (rss | sqlite | file | web | http_api ...)
+# config   = adapter-specific params
+
+sources:
+  - id: news_default
+    kind: rss
+    adapter: news
+    name: News — FierceBiotech, Le Figaro, CNBC
+    label: News
+    on_board: true
+    config:
+      per_site: 3
+
+  - id: biopharm_top
+    kind: sqlite
+    adapter: biopharm
+    name: Biopharm catalysts — top by composite score
+    label: Biopharm
+    on_board: false
+    config:
+      top_n: 10
+
+  - id: sample_file
+    kind: file
+    adapter: file
+    name: Sample — Google demo
+    label: Sample
+    on_board: false
+    config:
+      input: data/sample_input.json

@@ -343,9 +343,122 @@ sharing must remain opt-in + anonymized per D14.
 
 ---
 
+## D25 (2026-06-19) — Tech stack: Python (FastAPI) backend + responsive PWA client
+
+**Decision (user-confirmed).**
+- **Backend = Python / FastAPI.** The board/interaction/interest API is a FastAPI service that
+  reuses the whole `_Stock_agent` Python stack (v0 adapters, ranking, biopharm reader) and is
+  the natural home for ranking/ML.
+- **Client = one responsive PWA** — the existing template, mobile-first, installable on desktop
+  + mobile, offline via service worker. Optional later native wrap (Capacitor/Tauri) with no UI
+  rewrite.
+- **Hosting = any Python-friendly cloud** (Render / Railway / Fly / Azure Container Apps); the
+  static PWA served from any CDN (Vercel fine for the *static client*). "Vercel" was
+  illustrative, not mandatory (user-confirmed).
+- **Local v1 = the same FastAPI app on `localhost`** (the M7 server). Local and hosted run
+  identical code; only the storage backends differ (§13) — collapsing the local/hosted gap.
+- **C# rejected:** .NET is not a native serverless runtime on Vercel-class platforms and
+  diverges from the repo. **TypeScript/Next.js** is the documented fallback *only if*
+  Vercel-native deployment ever becomes a hard requirement; the contract guardrail below makes
+  that a swap of the API layer, not the client.
+
+**Guardrail.** The backend sits behind a fixed **HTTP/JSON contract** (`/api/board`,
+`/api/interact`, `/api/interest`) + the tier interfaces, so the PWA and data shapes never change
+if the API language is ever swapped.
+
+**Why.** Repo + user are Python-centric; ranking is Python-natural; "such as Vercel" reads as a
+*class* of host. FastAPI deploys cleanly on Python-friendly clouds and runs identically locally.
+
+**State.** Adopt now. FastAPI server is M7; the template is PWA-ized in v1 (responsive is now a
+v1 requirement, D26).
+
+---
+
+## D26 (2026-06-19) — Device target: desktop + mobile via one responsive PWA (was OD-a)
+
+**Decision (user-confirmed).** The app targets **both desktop and mobile** through a single
+**responsive, installable PWA** — not separate native codebases. Consequently **mobile-first
+responsive layout is a v1 requirement** (moved up from Phase-7 polish), and a service worker
+(offline + instant cached paint, Tier C) lands with the client.
+
+**Why.** The template+sidecar architecture already makes the client pure web; a responsive PWA
+covers both targets with one codebase and satisfies the offline/SWR goal. Deferring responsive
+to polish would force a later template reflow.
+
+**State.** Adopt in v1 (template + M7).
+
+---
+
+## D27 (2026-06-19) — Identity, accounts & auth model (forward-compatible from v1)
+
+**Decision.** Design the identity model now so scaling **localhost single-user → cloud
+multi-user is additive, not a migration**. Separation of concerns (spec §16):
+- **`users`** = identity/account: `id, kind(local|account), email, display_name,
+  role(user|admin), status, plan, byok_key_ref`. v1 holds one row — the `local` user
+  (`kind='local'`, no auth).
+- **`auth_identities`** = *how* a user signs in: `provider(password|google|github|apple|
+  magic_link), provider_subject, password_hash`. One user → many linked identities. Empty in
+  v1.
+- **`sessions`** = active logins: `token_hash` (never the raw token), `ip_hash`, `user_agent`,
+  `created/last_seen/expires`, `revoked`. Empty in v1 (localhost is trusted → no session).
+- **`login_audit`** = security/audit log (`event, ip_hash, user_agent, ts`); captures IP for
+  anomaly detection + rate-limiting.
+
+**Scale path.** Because all per-user data already carries `user_id` (D16), going multi-user
+only (a) **turns on auth** (populate `auth_identities`/`sessions`), (b) **swaps SQLite →
+Postgres** (§13), and (c) **replaces the single `local` user with real accounts** — **no
+historical-data migration**.
+
+**Sign-in methods.** Prefer OAuth/OIDC (Google/GitHub/Apple) + email magic-link; optional
+email+password via **argon2id**. `role` gates the admin review surface (D13).
+
+**IP & privacy (D14).** IP is PII → stored **hashed/truncated** (e.g. /24), short retention,
+Tier B only, export/delete honored. Used for security/rate-limit/geo — never sold.
+
+**Security baseline (hosted).** HTTPS-only; argon2id hashing; opaque-random or rotating JWT
+session tokens (store only a hash); CSRF protection for cookie sessions; rate-limited auth
+endpoints; BYOK keys encrypted at rest (D24).
+
+**v1 behavior.** localhost is single-user + trusted: **no sign-in, no sessions**; the `local`
+user is implicit. The auth tables exist as **scaffold** (created in the v1 schema, migration 4)
+but stay empty. Auth enforcement + providers are built in the hosted phase.
+
+**State.** `users` enriched + `auth_identities`/`sessions`/`login_audit` scaffold created in the
+v1 schema (`src/list_renderer/db.py`); unused locally.
+
+---
+
+## D28 (2026-06-19) — Phase 1 built (persistence + source registry)
+
+**Built.**
+- `src/list_renderer/db.py` — SQLite at `data/list_renderer.db`; ordered additive migrations
+  (schema v4); tiered schema (Tier A: sources/recipes/items/fetch_log/llm_tasks; Tier B:
+  users/boards/subscriptions/interests/interactions/ranking_state; auth scaffold:
+  auth_identities/sessions/login_audit). Auto-creates the `local` user + `default` board
+  (D16/D18). Tables beyond Phase-1 needs are created now so later phases are additive.
+- `src/list_renderer/sources.py` — registry: `seed_from_config`, `add_source` (upsert source +
+  subscribe board), `set_on_board`, `list_enabled_sources`. All take `user_id`/`board_id`.
+- `config/sources.yaml` — seeds news (on-board) + biopharm + sample (registered, off-board).
+- `src/list_renderer/adapters/{news,biopharm,file}.py` — each exposes `fetch_results()` →
+  Highlight list; standalone `build_payload_*` (v0 paths) retained.
+- `src/list_renderer/pipeline.py` — `build_payload_from_registry`: loads the board's enabled
+  sources, dispatches by adapter, stamps `source_id`, merges (fail-open), builds the payload.
+  Ranking/dedup are later phases (merges in source/position order for now).
+- `scripts/4_render_list.py` — new default `--source registry` (+ `--seed`, `--list-db`); v0
+  `--source file|biopharm|news` overrides retained. `run_4_List_render.bat` defaults to
+  registry.
+- `render.normalize_result` now passes through optional identity/ranking fields
+  (`id, source_id, published_at, topics, score`) when present.
+
+**Verified.** Fresh DB auto-seeds 3 sources; registry render = news only (9 items); toggling
+biopharm on → 19 items merged; v0 overrides intact; auth scaffold empty; DB gitignored.
+
+**State.** Phase 1 complete. Next: Phase 2 (generic adapters + SWR `items` cache).
+
+---
+
 ## Still-open decisions (spec §11)
 
-- **OD-a Device target** — desktop-first assumed; iOS-first would reorder template work.
 - **OD-d Topic tagging** — keyword/entity v1 assumed; confirm if embeddings wanted up front.
 
 ---

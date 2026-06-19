@@ -2,8 +2,8 @@
  * Do not hand-edit; rerun the renderer (run_4_List_render.bat).
  * Consumed by the stable Outputs/list_results.html template. */
 window.LIST_DATA = {
-  "query": "fiercebiotech, le figaro, cnbc",
-  "brand": "News",
+  "query": "News",
+  "brand": "My board",
   "results": [
     {
       "site_name": "FierceBiotech",
@@ -16,7 +16,8 @@ window.LIST_DATA = {
       "bold_terms": [
         "Jun 18, 2026 2:37pm"
       ],
-      "read_more_url": "https://www.fiercebiotech.com/biotech/moderna-mflusiva-advisory-committee-fda"
+      "read_more_url": "https://www.fiercebiotech.com/biotech/moderna-mflusiva-advisory-committee-fda",
+      "source_id": "news_default"
     },
     {
       "site_name": "FierceBiotech",
@@ -29,7 +30,8 @@ window.LIST_DATA = {
       "bold_terms": [
         "Jun 18, 2026 10:00am"
       ],
-      "read_more_url": "https://www.fiercebiotech.com/biotech/campfield-harvests-180m-series-advance-oral-ibd-drug-licensed-newsoara"
+      "read_more_url": "https://www.fiercebiotech.com/biotech/campfield-harvests-180m-series-advance-oral-ibd-drug-licensed-newsoara",
+      "source_id": "news_default"
     },
     {
       "site_name": "FierceBiotech",
@@ -42,46 +44,50 @@ window.LIST_DATA = {
       "bold_terms": [
         "Jun 18, 2026 7:24am"
       ],
-      "read_more_url": "https://www.fiercebiotech.com/medtech/novocure-device-fails-help-brain-cancer-patients-survival-phase-3-test"
+      "read_more_url": "https://www.fiercebiotech.com/medtech/novocure-device-fails-help-brain-cancer-patients-survival-phase-3-test",
+      "source_id": "news_default"
     },
     {
       "site_name": "Le Figaro",
-      "url_breadcrumb": "www.lefigaro.fr › meteo › en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperature",
+      "url_breadcrumb": "www.lefigaro.fr › international › en-direct-guerre-moyen-orient-conflit-iran-etats-unis-do",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
-      "title": "EN DIRECT - Canicule : plus d’un Français sur deux est concerné par la vigilance orange",
-      "title_url": "https://www.lefigaro.fr/meteo/en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperatures-soleil-orages-vigilance-orange-20260619",
+      "title": "EN DIRECT - Guerre au Moyen-Orient : 18 morts au Liban et quatre soldats de Tsahal tués, «tout le Liban doit brûler» lance un ministre israélien",
+      "title_url": "https://www.lefigaro.fr/international/en-direct-guerre-moyen-orient-conflit-iran-etats-unis-donald-trump-jd-vance-protocole-accord-pourparlers-liban-israel-detroit-ormuz-petrole-20260619",
       "verified": true,
-      "snippet": "Jun 19, 2026 — 53 départements sont concernés par la vigilance orange canicule et 5 autres départements pour les orages. Près de 10 millions de personnes âgées de 60 ans ou plus, dont 3,8 millions de 75 ans ou plus au 1er janvier 2026, pourraient const...",
+      "snippet": "Jun 19, 2026 — Il s’agit du plus lourd bilan publié depuis l’annonce de la conclusion de l’accord lundi, qui prévoit un cessez-le-feu «sur tous les fronts, y compris au Liban».",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.lefigaro.fr/meteo/en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperatures-soleil-orages-vigilance-orange-20260619"
+      "read_more_url": "https://www.lefigaro.fr/international/en-direct-guerre-moyen-orient-conflit-iran-etats-unis-donald-trump-jd-vance-protocole-accord-pourparlers-liban-israel-detroit-ormuz-petrole-20260619",
+      "source_id": "news_default"
     },
     {
       "site_name": "Le Figaro",
-      "url_breadcrumb": "www.lefigaro.fr › jusqu-a-390c-a-l-ombre-visualisez-en-cartes-l-arrivee-de-la-vague-de-cha",
+      "url_breadcrumb": "www.lefigaro.fr › international › guerre-au-moyen-orient-flambee-de-violence-avec-18-morts",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
-      "title": "Jusqu’à 41 °C attendus dimanche : suivez en cartes la progression de la vague de chaleur",
-      "title_url": "https://www.lefigaro.fr/jusqu-a-390c-a-l-ombre-visualisez-en-cartes-l-arrivee-de-la-vague-de-chaleur-20260619",
+      "title": "Guerre au Moyen-Orient : flambée de violence avec 18 morts au Liban et 4 soldats de Tsahal tués",
+      "title_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-flambee-de-violence-avec-18-morts-au-liban-et-4-soldats-de-tsahal-tues-20260619",
       "verified": true,
-      "snippet": "Jun 19, 2026 — EN CARTE - Une intense vague de chaleur s’installe sur la France, avec des températures pouvant dépasser localement les normales de saison de près de 18 °C. Tour d’horizon des prévisions.",
+      "snippet": "Jun 19, 2026 — Malgré la conclusion de l’accord entre les États-Unis et l’Iran, le Liban est la proie ce vendredi d’une flambée de violence meurtrière.",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.lefigaro.fr/jusqu-a-390c-a-l-ombre-visualisez-en-cartes-l-arrivee-de-la-vague-de-chaleur-20260619"
+      "read_more_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-flambee-de-violence-avec-18-morts-au-liban-et-4-soldats-de-tsahal-tues-20260619",
+      "source_id": "news_default"
     },
     {
       "site_name": "Le Figaro",
-      "url_breadcrumb": "www.lefigaro.fr › actualite-france › les-collectivites-locales-doivent-elles-investir-dans",
+      "url_breadcrumb": "www.lefigaro.fr › international › guerre-au-moyen-orient-les-negociations-entre-les-etats-",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
-      "title": "Les collectivités locales doivent-elles investir dans la climatisation des écoles ?",
-      "title_url": "https://www.lefigaro.fr/actualite-france/les-collectivites-locales-doivent-elles-investir-dans-la-climatisation-des-ecoles-20260619",
+      "title": "Guerre au Moyen-Orient : les négociations entre les États-Unis et l’Iran prévues ce vendredi en Suisse «reportées»",
+      "title_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-les-negociations-entre-les-etats-unis-et-l-iran-prevues-ce-vendredi-en-suisse-reportees-20260619",
       "verified": true,
-      "snippet": "Jun 19, 2026",
+      "snippet": "Jun 19, 2026 — «Les discussions prévues entre les États-Unis, l’Iran, le Qatar et le Pakistan ont été reportées. La Suisse reste disposée à faciliter ces discussions. Les travaux préparatoires correspondants se poursuivent», a annoncé le ministère des...",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.lefigaro.fr/actualite-france/les-collectivites-locales-doivent-elles-investir-dans-la-climatisation-des-ecoles-20260619"
+      "read_more_url": "https://www.lefigaro.fr/international/guerre-au-moyen-orient-les-negociations-entre-les-etats-unis-et-l-iran-prevues-ce-vendredi-en-suisse-reportees-20260619",
+      "source_id": "news_default"
     },
     {
       "site_name": "CNBC",
@@ -94,7 +100,8 @@ window.LIST_DATA = {
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.cnbc.com/2026/06/19/us-iran-talks-switzerland-canceled-interim-deal-markets.html"
+      "read_more_url": "https://www.cnbc.com/2026/06/19/us-iran-talks-switzerland-canceled-interim-deal-markets.html",
+      "source_id": "news_default"
     },
     {
       "site_name": "CNBC",
@@ -107,20 +114,22 @@ window.LIST_DATA = {
       "bold_terms": [
         "Jun 18, 2026"
       ],
-      "read_more_url": "https://www.cnbc.com/2026/06/18/the-average-spacex-buyer-post-ipo-is-almost-under-water-after-two-day-slide.html"
+      "read_more_url": "https://www.cnbc.com/2026/06/18/the-average-spacex-buyer-post-ipo-is-almost-under-water-after-two-day-slide.html",
+      "source_id": "news_default"
     },
     {
       "site_name": "CNBC",
       "url_breadcrumb": "www.cnbc.com › 2026 › 06 › 19",
       "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.cnbc.com",
-      "title": "Hormuz relief may not ease the economic toll that's already 'baked in,' analysts warn",
-      "title_url": "https://www.cnbc.com/2026/06/19/hormuz-relief-may-not-ease-the-economic-toll-thats-already-baked-in-analysts-warn.html",
+      "title": "Russia threatens escalation after Ukraine hits Moscow with largest-ever drone attack",
+      "title_url": "https://www.cnbc.com/2026/06/19/russia-ukraine-moscow-drone-attack-trump.html",
       "verified": true,
-      "snippet": "Jun 19, 2026 — Early signs of reopening of the Strait of Hormuz have lifted the most acute threat to global energy supplies but economic damages from the war will take months to unwind.",
+      "snippet": "Jun 19, 2026 — Russia has pledged to carry out frequent and \"massive group strikes\" against Ukraine shortly after Kyiv launched a barrage of drones on Moscow.",
       "bold_terms": [
         "Jun 19, 2026"
       ],
-      "read_more_url": "https://www.cnbc.com/2026/06/19/hormuz-relief-may-not-ease-the-economic-toll-thats-already-baked-in-analysts-warn.html"
+      "read_more_url": "https://www.cnbc.com/2026/06/19/russia-ukraine-moscow-drone-attack-trump.html",
+      "source_id": "news_default"
     }
   ]
 };
