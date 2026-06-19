@@ -1,0 +1,50 @@
+{
+  "query": "google",
+  "brand": "Google",
+  "results": [
+    {
+      "site_name": "Wikipedia",
+      "url_breadcrumb": "https://en.wikipedia.org › wiki › Google",
+      "favicon": "https://en.wikipedia.org/static/favicon/wikipedia.ico",
+      "title": "Google",
+      "title_url": "https://en.wikipedia.org/wiki/Google",
+      "verified": true,
+      "snippet": "Google is the largest provider of search engines, mapping and navigation applications, email services, office suites, online video platforms, photo and cloud ...",
+      "bold_terms": ["Google"],
+      "read_more_url": "https://en.wikipedia.org/wiki/Google"
+    },
+    {
+      "site_name": "About Google",
+      "url_breadcrumb": "https://about.google",
+      "favicon": "https://www.google.com/favicon.ico",
+      "title": "About Google: Our products, technology and company ...",
+      "title_url": "https://about.google",
+      "verified": true,
+      "snippet": "Learn more about Google. Explore our innovative AI products and services, and how we're using technology to help improve lives around the world.",
+      "bold_terms": ["Google"],
+      "read_more_url": null
+    },
+    {
+      "site_name": "blog.google",
+      "url_breadcrumb": "https://blog.google",
+      "favicon": "https://www.google.com/favicon.ico",
+      "title": "The Keyword | Google Product and Technology News and ...",
+      "title_url": "https://blog.google",
+      "verified": true,
+      "snippet": "Get the latest news and stories about Google products, technology and innovation on the Keyword, Google's official blog.",
+      "bold_terms": ["Google", "Google's"],
+      "read_more_url": null
+    },
+    {
+      "site_name": "Apple",
+      "url_breadcrumb": "https://apps.apple.com › app › google",
+      "favicon": "https://www.apple.com/favicon.ico",
+      "title": "Google - App Store",
+      "title_url": "https://apps.apple.com/app/google/id284815942",
+      "verified": true,
+      "snippet": "Download the Google app to stay in the know about things that matter to you. Try AI Overviews, find quick answers, explore your interests, and stay up to date ...",
+      "bold_terms": ["Google"],
+      "read_more_url": "https://apps.apple.com/app/google/id284815942"
+    }
+  ]
+}

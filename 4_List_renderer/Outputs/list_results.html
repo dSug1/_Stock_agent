@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<!--
+  list_results.html — 4_List_renderer
+  Stable template (Google-search-style result list). Reads window.LIST_DATA
+  from the list_results_data.js sidecar. Do not bake data into this file:
+  per-run output only rewrites the sidecar.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Search results</title>
+  <style>
+    :root {
+      --bg: #1e1f22;
+      --bar-bg: #4b4d52;
+      --bar-bg-focus: #5a5c61;
+      --text: #e3e3e3;
+      --text-dim: #bdc1c6;
+      --text-mute: #9aa0a6;
+      --link: #99c3ff;
+      --title: #8ab4f8;
+      --check: #5bb974;
+      --divider: #3c4043;
+      --avatar-fallback: #5f6368;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Roboto, "Segoe UI", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- Header (logo + search bar) ---- */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      padding: 18px 22px 22px;
+      max-width: 1100px;
+    }
+
+    .brand {
+      font-size: 30px;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+      white-space: nowrap;
+      background: linear-gradient(90deg, #c061ff 0%, #ff5ab0 55%, #ff79c6 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      user-select: none;
+    }
+
+    .searchbar {
+      flex: 1;
+      max-width: 880px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--bar-bg);
+      border-radius: 26px;
+      padding: 13px 20px;
+      transition: background 0.15s ease;
+    }
+    .searchbar:focus-within { background: var(--bar-bg-focus); }
+
+    .searchbar input {
+      flex: 1;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 16px;
+    }
+    .searchbar input::placeholder { color: var(--text-mute); }
+
+    .clear-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 50%;
+    }
+    .clear-btn:hover { color: #fff; }
+
+    /* ---- Results ---- */
+    .results {
+      max-width: 720px;
+      margin: 0 auto 0 200px;
+      padding: 8px 22px 60px;
+    }
+    @media (max-width: 980px) {
+      .results { margin: 0 auto; }
+    }
+
+    .result { padding: 18px 0; }
+
+    .result-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+
+    .favicon {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      flex: 0 0 28px;
+      background: #fff;
+      object-fit: cover;
+      display: grid;
+      place-items: center;
+    }
+    .favicon.letter {
+      background: var(--avatar-fallback);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .head-text { min-width: 0; flex: 1; }
+    .site-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .breadcrumb {
+      font-size: 12.5px;
+      color: var(--text-mute);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .kebab {
+      flex: 0 0 auto;
+      color: var(--text-mute);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0 4px;
+      letter-spacing: -1px;
+      user-select: none;
+    }
+    .kebab:hover { color: var(--text-dim); }
+
+    .result-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 20px;
+      line-height: 1.3;
+      color: var(--title);
+      text-decoration: none;
+      margin: 2px 0 6px;
+    }
+    .result-title:hover { text-decoration: underline; }
+
+    .check {
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+    }
+
+    .snippet {
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--text-dim);
+    }
+    .snippet b { color: var(--text); font-weight: 700; }
+
+    .read-more {
+      color: var(--text-dim);
+      text-decoration: underline;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .read-more:hover { color: #fff; }
+
+    .empty {
+      max-width: 720px;
+      margin: 40px auto;
+      padding: 0 22px;
+      color: var(--text-mute);
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" id="brand">List</div>
+    <div class="searchbar">
+      <input id="query" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Search" aria-label="Search" />
+      <button class="clear-btn" id="clear" title="Clear" aria-label="Clear">&times;</button>
+    </div>
+  </header>
+
+  <main class="results" id="results"></main>
+
+  <script src="list_results_data.js"></script>
+  <script>
+    (function () {
+      "use strict";
+
+      var GREEN_CHECK =
+        '<svg class="check" viewBox="0 0 24 24" aria-label="verified">' +
+        '<circle cx="12" cy="12" r="11" fill="#5bb974"/>' +
+        '<path d="M7 12.3l3.2 3.2L17 8.8" fill="none" stroke="#1e1f22" ' +
+        'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+      function esc(s) {
+        return String(s == null ? "" : s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      // Embolden each bold_term occurrence inside an already-escaped snippet.
+      function highlight(snippet, terms) {
+        var html = esc(snippet);
+        if (!terms || !terms.length) return html;
+        // Longest-first so "Google's" wins over "Google".
+        var sorted = terms.slice().sort(function (a, b) {
+          return b.length - a.length;
+        });
+        sorted.forEach(function (term) {
+          if (!term) return;
+          var safe = esc(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          var re = new RegExp("(" + safe + ")", "g");
+          html = html.replace(re, "<b>$1</b>");
+        });
+        return html;
+      }
+
+      function faviconEl(r) {
+        if (r.favicon) {
+          var letter = (r.site_name || "?").trim().charAt(0);
+          return (
+            '<img class="favicon" src="' + esc(r.favicon) + '" alt="" ' +
+            "onerror=\"this.outerHTML='<div class=\\'favicon letter\\'>" +
+            esc(letter) + "</div>'\" />"
+          );
+        }
+        var ch = (r.site_name || "?").trim().charAt(0);
+        return '<div class="favicon letter">' + esc(ch) + "</div>";
+      }
+
+      function resultEl(r) {
+        var titleInner =
+          esc(r.title) + (r.verified ? GREEN_CHECK : "");
+        var title = r.title_url
+          ? '<a class="result-title" href="' + esc(r.title_url) +
+            '" target="_blank" rel="noopener">' + titleInner + "</a>"
+          : '<div class="result-title">' + titleInner + "</div>";
+
+        var snippet = highlight(r.snippet, r.bold_terms);
+        if (r.read_more_url) {
+          snippet +=
+            ' <a class="read-more" href="' + esc(r.read_more_url) +
+            '" target="_blank" rel="noopener">Read more</a>';
+        }
+
+        return (
+          '<article class="result">' +
+            '<div class="result-head">' +
+              faviconEl(r) +
+              '<div class="head-text">' +
+                '<div class="site-name">' + esc(r.site_name) + "</div>" +
+                '<div class="breadcrumb">' + esc(r.url_breadcrumb) + "</div>" +
+              "</div>" +
+              '<div class="kebab" title="More">&#8942;</div>' +
+            "</div>" +
+            title +
+            '<div class="snippet">' + snippet + "</div>" +
+          "</article>"
+        );
+      }
+
+      function render() {
+        var data = window.LIST_DATA || {};
+        document.getElementById("brand").textContent = data.brand || "List";
+        document.title = data.query
+          ? data.query + " — Search results"
+          : "Search results";
+
+        var input = document.getElementById("query");
+        input.value = data.query || "";
+
+        var host = document.getElementById("results");
+        var results = data.results || [];
+        if (!results.length) {
+          host.innerHTML =
+            '<div class="empty">No results to display.</div>';
+          return;
+        }
+        host.innerHTML = results.map(resultEl).join("");
+      }
+
+      document.getElementById("clear").addEventListener("click", function () {
+        var input = document.getElementById("query");
+        input.value = "";
+        input.focus();
+      });
+
+      render();
+    })();
+  </script>
+</body>
+</html>
