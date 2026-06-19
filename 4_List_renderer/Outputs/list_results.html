@@ -270,6 +270,31 @@
     }
     .menu button:hover { background: var(--bar-bg); }
 
+    /* ---- "Why ranked here?" breakdown (D5/§8 transparency) ---- */
+    .why {
+      margin: 10px 0 2px;
+      padding: 10px 13px;
+      background: var(--menu-bg);
+      border: 1px solid var(--divider);
+      border-radius: 10px;
+      font-size: 12.5px;
+      max-width: 460px;
+    }
+    .why-total { color: var(--text); font-weight: 600; margin-bottom: 6px; }
+    .why-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 2px 0;
+      color: var(--text-dim);
+    }
+    .why-feat { flex: 0 0 130px; color: var(--text-mute); }
+    .why-bar { flex: 1; height: 6px; border-radius: 3px; background: #3c4043; position: relative; }
+    .why-bar > span { position: absolute; top: 0; height: 6px; border-radius: 3px; }
+    .why-bar > span.pos { background: var(--check); left: 50%; }
+    .why-bar > span.neg { background: #e06c75; right: 50%; }
+    .why-val { flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums; }
+
     /* ---- Source panel (overlay) ---- */
     .overlay {
       position: fixed;
@@ -314,6 +339,26 @@
       color: var(--text); padding: 11px 13px; font-size: 14px; outline: none;
     }
 
+    /* ---- Declared-interest list (Phase 7 pending UX) ---- */
+    .il-head {
+      font-size: 12px; color: var(--text-mute); margin: 22px 0 8px;
+      text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .il-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 4px; border-bottom: 1px solid var(--divider); font-size: 14px;
+    }
+    .il-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .il-kind { font-size: 11.5px; color: var(--text-mute); }
+    .il-row.pending .il-val { color: var(--text-mute); }
+    .il-retry {
+      border: 1px solid var(--divider); background: transparent; color: var(--text-dim);
+      border-radius: 8px; padding: 6px 11px; cursor: pointer; font-size: 12.5px; min-height: 34px;
+    }
+    .il-retry:hover { background: var(--bar-bg); color: #fff; }
+    .il-ok { font-size: 11.5px; color: var(--check); }
+    .il-hint { font-size: 12px; color: var(--text-mute); margin: 6px 4px 0; line-height: 1.5; }
+
     /* ---- Toast ---- */
     .toast {
       position: fixed;
@@ -333,12 +378,36 @@
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+    /* ---- Mobile / iOS pass (D26 mobile-first; Phase 7) ---- */
     @media (max-width: 600px) {
-      .topbar { gap: 12px; padding: 14px 16px 16px; }
-      .brand { font-size: 26px; }
-      .results { padding: 4px 16px 60px; }
+      /* Sticky header so search + Sources/Refresh stay reachable while scrolling. */
+      .topbar {
+        position: sticky; top: 0; z-index: 30;
+        gap: 10px;
+        padding: calc(12px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right))
+                 12px calc(14px + env(safe-area-inset-left));
+        background: var(--bg);
+        border-bottom: 1px solid var(--divider);
+      }
+      .brand { font-size: 24px; }
+      .searchbar { padding: 11px 16px; order: 3; flex-basis: 100%; }   /* search drops to its own row */
+      .actions { order: 2; }
+      .results {
+        padding: 6px calc(16px + env(safe-area-inset-right)) calc(60px + env(safe-area-inset-bottom))
+                 calc(16px + env(safe-area-inset-left));
+      }
+      .result { padding: 16px 0; }
       .result-title { font-size: 18px; }
-      .act-btn { padding: 9px 13px; }
+      .act-btn { padding: 10px 14px; }
+      .kebab { padding: 8px 10px; }                 /* bigger tap target */
+      .menu { min-width: 220px; }
+      .menu button { padding: 13px 14px; }          /* touch-friendly menu rows */
+      .why { max-width: 100%; }
+      .why-feat { flex-basis: 110px; }
+    }
+    /* Honor the notch in standalone PWA mode on larger screens too. */
+    @supports (padding: max(0px)) {
+      .panel { padding-right: max(22px, env(safe-area-inset-right)); }
     }
   </style>
 </head>
@@ -372,6 +441,7 @@
           <button class="act-btn" id="interestAdd">Add</button>
         </div>
       </div>
+      <div id="interestList"></div>
     </aside>
   </div>
 
@@ -384,7 +454,7 @@
     (function () {
       "use strict";
 
-      var BUILD = "2026-06-19d (drop keepalive — fixes Failed-to-fetch under service worker)";
+      var BUILD = "2026-06-19f (Phase 7: scheduler + pending-interest UX + mobile pass)";
       console.log("[curator] page build " + BUILD);
 
       var SERVED = location.protocol === "http:" || location.protocol === "https:";
@@ -431,6 +501,30 @@
       // ---- State ----------------------------------------------------
       var STATE = { data: {}, seen: {}, liked: {} };
 
+      // "Why ranked here?" — render the M6 score_breakdown as feature bars (D5).
+      function whyHtml(bd) {
+        if (!bd || !bd.contributions) return "";
+        var entries = Object.keys(bd.contributions).map(function (k) {
+          return { feat: k, val: bd.contributions[k] };
+        });
+        if (bd.boost) entries.push({ feat: "boost", val: bd.boost });
+        entries = entries.filter(function (e) { return Math.abs(e.val) > 0.0001; })
+                         .sort(function (a, b) { return Math.abs(b.val) - Math.abs(a.val); });
+        var max = entries.reduce(function (m, e) { return Math.max(m, Math.abs(e.val)); }, 0.0001);
+        var rows = entries.map(function (e) {
+          var pct = Math.min(50, (Math.abs(e.val) / max) * 50);
+          var bar = e.val >= 0
+            ? '<span class="pos" style="width:' + pct + '%"></span>'
+            : '<span class="neg" style="width:' + pct + '%"></span>';
+          var sign = e.val >= 0 ? "+" : "−";
+          return '<div class="why-row"><span class="why-feat">' + esc(e.feat) + "</span>" +
+                 '<span class="why-bar">' + bar + "</span>" +
+                 '<span class="why-val">' + sign + Math.abs(e.val).toFixed(2) + "</span></div>";
+        }).join("");
+        var total = (bd.total != null) ? bd.total.toFixed(2) : "";
+        return '<div class="why-total">Why this rank? &nbsp; score ' + total + "</div>" + rows;
+      }
+
       function resultEl(r, index) {
         var titleInner = esc(r.title) + (r.verified ? GREEN_CHECK : "");
         var title = r.title_url
@@ -463,6 +557,7 @@
             "</div>" +
             title +
             '<div class="snippet">' + snippet + "</div>" +
+            (r.score_breakdown ? '<div class="why" hidden>' + whyHtml(r.score_breakdown) + "</div>" : "") +
           "</article>"
         );
       }
@@ -644,7 +739,8 @@
         menu.innerHTML =
           '<button data-m="like">' + (liked ? "♥ Liked" : "♡ Like") + "</button>" +
           '<button data-m="hide">🚫 Hide this</button>' +
-          (r && r.title_url ? '<button data-m="open">↗ Open in new tab</button>' : "");
+          (r && r.title_url ? '<button data-m="open">↗ Open in new tab</button>' : "") +
+          (r && r.score_breakdown ? '<button data-m="why">ℹ Why ranked here?</button>' : "");
         document.body.appendChild(menu);
         var rect = anchor.getBoundingClientRect();
         var top = rect.bottom + window.scrollY + 4;
@@ -660,11 +756,17 @@
           closeMenu();
           if (action === "like") likeItem(id);
           else if (action === "hide") hideItem(id);
+          else if (action === "why") toggleWhy(id);
           else if (action === "open" && r && r.title_url) {
             opened[id] = true; emit(id, "open");
             window.open(r.title_url, "_blank", "noopener");
           }
         });
+      }
+
+      function toggleWhy(id) {
+        var el = document.querySelector('.result[data-id="' + cssEsc(id) + '"] .why');
+        if (el) el.hidden = !el.hidden;
       }
 
       // Like is a one-way positive signal (append-only learning log, D6/D19).
@@ -739,7 +841,48 @@
           }).join("") || '<p class="hint">No sources registered.</p>';
           byId("overlay").classList.add("open");
         });
+        loadInterests();
       }
+
+      function loadInterests() {
+        fetch("/api/interests").then(function (r) { return r.json(); }).then(function (d) {
+          renderInterests(d.interests || []);
+        }).catch(function () {});
+      }
+
+      function renderInterests(list) {
+        var host = byId("interestList");
+        if (!list.length) { host.innerHTML = ""; return; }
+        var anyPending = list.some(function (it) { return it.status === "pending"; });
+        host.innerHTML = '<div class="il-head">Your interests</div>' + list.map(function (it) {
+          var pending = it.status === "pending";
+          return '<div class="il-row' + (pending ? " pending" : "") + '">' +
+            '<span class="il-val">' + esc(it.value) + "</span>" +
+            '<span class="il-kind">' + esc(it.kind) + "</span>" +
+            (pending
+              ? '<button class="il-retry" data-retry="' + esc(it.value) + '">Retry</button>'
+              : '<span class="il-ok">on board</span>') +
+          "</div>";
+        }).join("") + (anyPending
+          ? '<div class="il-hint">Pending = no free RSS feed found. Retry, or resolve a site via ' +
+            '<code>scripts/4_resolve_source.py --url … --add-to-board</code> (gated Claude call).</div>'
+          : "");
+      }
+
+      byId("interestList") && byId("interestList").addEventListener("click", function (e) {
+        var b = e.target.closest("[data-retry]");
+        if (!b) return;
+        var v = b.getAttribute("data-retry");
+        b.textContent = "…";
+        fetch("/api/interest", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: v })
+        }).then(function (r) { return r.json(); }).then(function (res) {
+          loadInterests();
+          if (res.status === "active") { toast("Resolved " + v + " — refreshing"); loadBoard({ refresh: true }); }
+          else { toast("Still no feed for " + v + " (resolve via CLI)"); }
+        }).catch(function () { toast("Retry failed"); loadInterests(); });
+      });
 
       function closePanel() { byId("overlay").classList.remove("open"); }
 
@@ -779,6 +922,7 @@
             body: JSON.stringify({ value: v })
           }).then(function (r) { return r.json(); }).then(function (res) {
             byId("interestInput").value = "";
+            loadInterests();
             if (res.status === "active") {
               toast("Added " + (res.kind || "interest") + " — refreshing board");
               loadBoard({ refresh: true });

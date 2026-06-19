@@ -20,7 +20,29 @@ window.LIST_DATA = {
       "id": "35f351fc95d1250b",
       "source_id": "disc_site_www_biospace_com",
       "published_at": "2026-06-18T07:00:00+00:00",
-      "score": 4.008752
+      "score": 4.007425,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.47368421052631576,
+          "recency": 0.636007735318358,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": 0.0,
+          "length": 0.7166666666666667,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.5684210526315789,
+          "recency": 0.636007735318358,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": 0.0,
+          "length": 0.1075,
+          "seen_penalty": -0.8
+        },
+        "total": 4.0074252411797255,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -37,7 +59,29 @@ window.LIST_DATA = {
       "id": "099a0ab6f9fb8964",
       "source_id": "disc_site_www_biospace_com",
       "published_at": "2026-06-16T13:57:00+00:00",
-      "score": 3.722385
+      "score": 3.721651,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.5263157894736842,
+          "recency": 0.35157585113553186,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": 0.0,
+          "length": 0.2866666666666667,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.631578947368421,
+          "recency": 0.35157585113553186,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": 0.0,
+          "length": 0.043000000000000003,
+          "seen_penalty": -0.8
+        },
+        "total": 3.721651251733742,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -57,7 +101,29 @@ window.LIST_DATA = {
       "topics": [
         "business"
       ],
-      "score": 3.473477
+      "score": 3.47215,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.42105263157894735,
+          "recency": 0.636007735318358,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": -0.46211715726000974,
+          "length": 0.65,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.5052631578947367,
+          "recency": 0.636007735318358,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": -0.46211715726000974,
+          "length": 0.0975,
+          "seen_penalty": -0.8
+        },
+        "total": 3.4721501891828748,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -74,7 +140,29 @@ window.LIST_DATA = {
       "id": "25c6da871907418e",
       "source_id": "disc_site_www_biospace_com",
       "published_at": "2026-06-04T15:37:08+00:00",
-      "score": 3.018109
+      "score": 3.018098,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.15789473684210525,
+          "recency": 0.00562736946658653,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": 0.0,
+          "length": 0.85,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.1894736842105263,
+          "recency": 0.00562736946658653,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": 0.0,
+          "length": 0.1275,
+          "seen_penalty": -0.8
+        },
+        "total": 3.0180975069069014,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -94,7 +182,29 @@ window.LIST_DATA = {
       "topics": [
         "biotech"
       ],
-      "score": 2.930326
+      "score": 2.929,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.3684210526315789,
+          "recency": 0.636007735318358,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": -0.9311096086675776,
+          "length": 0.5766666666666667,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.4421052631578947,
+          "recency": 0.636007735318358,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": -0.9311096086675776,
+          "length": 0.0865,
+          "seen_penalty": -0.8
+        },
+        "total": 2.928999843038464,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "Le Figaro",
@@ -111,7 +221,29 @@ window.LIST_DATA = {
       "id": "5edf35a0ea505766",
       "source_id": "news_default",
       "published_at": "2026-06-19T12:45:53+00:00",
-      "score": 2.664281
+      "score": 2.662242,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.7368421052631579,
+          "recency": 0.9775311606228563,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": 0.0,
+          "length": 0.67,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.8842105263157894,
+          "recency": 0.9775311606228563,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": 0.0,
+          "length": 0.1005,
+          "seen_penalty": -0.8
+        },
+        "total": 2.6622416869386454,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "CNBC",
@@ -128,7 +260,29 @@ window.LIST_DATA = {
       "id": "00fb10c16a1f721b",
       "source_id": "news_default",
       "published_at": "2026-06-19T14:01:47+00:00",
-      "score": 2.598681
+      "score": 2.596605,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.6842105263157895,
+          "recency": 0.995552127778785,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": 0.0,
+          "length": 0.5333333333333333,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.8210526315789474,
+          "recency": 0.995552127778785,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": 0.0,
+          "length": 0.08,
+          "seen_penalty": -0.8
+        },
+        "total": 2.5966047593577324,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -149,7 +303,29 @@ window.LIST_DATA = {
         "biotech",
         "business"
       ],
-      "score": 2.551114
+      "score": 2.550983,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.3157894736842105,
+          "recency": 0.06265303702561696,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": -0.6966133829637937,
+          "length": 0.7366666666666667,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.3789473684210526,
+          "recency": 0.06265303702561696,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": -0.6966133829637937,
+          "length": 0.1105,
+          "seen_penalty": -0.8
+        },
+        "total": 2.5509834757126644,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "CNBC",
@@ -166,7 +342,29 @@ window.LIST_DATA = {
       "id": "f15ac599fba9082c",
       "source_id": "news_default",
       "published_at": "2026-06-19T10:47:57+00:00",
-      "score": 2.470552
+      "score": 2.46857,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.631578947368421,
+          "recency": 0.9501752430826035,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": 0.0,
+          "length": 0.4033333333333333,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.7578947368421052,
+          "recency": 0.9501752430826035,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": 0.0,
+          "length": 0.0605,
+          "seen_penalty": -0.8
+        },
+        "total": 2.468569979924709,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -187,7 +385,29 @@ window.LIST_DATA = {
         "biotech",
         "business"
       ],
-      "score": 2.435348
+      "score": 2.43523,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.21052631578947367,
+          "recency": 0.05621567281633871,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": -0.6966133829637937,
+          "length": 0.85,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.2526315789473684,
+          "recency": 0.05621567281633871,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": -0.6966133829637937,
+          "length": 0.1275,
+          "seen_penalty": -0.8
+        },
+        "total": 2.4352303220297022,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "FierceBiotech",
@@ -205,7 +425,29 @@ window.LIST_DATA = {
         "biotech",
         "programming"
       ],
-      "score": 2.043945
+      "score": 2.043945,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 1.0,
+          "recency": 0.5,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": -0.4655548043337888,
+          "length": 0.73,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 1.2,
+          "recency": 0.5,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": -0.4655548043337888,
+          "length": 0.1095,
+          "seen_penalty": -0.8
+        },
+        "total": 2.043945195666211,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "CNBC",
@@ -225,7 +467,29 @@ window.LIST_DATA = {
       "topics": [
         "business"
       ],
-      "score": 1.97744
+      "score": 1.975423,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.5789473684210527,
+          "recency": 0.9668034041205812,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": -0.46211715726000974,
+          "length": 0.5066666666666667,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.6947368421052632,
+          "recency": 0.9668034041205812,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": -0.46211715726000974,
+          "length": 0.076,
+          "seen_penalty": -0.8
+        },
+        "total": 1.975423088965835,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "www.biospace.com",
@@ -245,7 +509,29 @@ window.LIST_DATA = {
       "topics": [
         "biotech"
       ],
-      "score": 1.938524
+      "score": 1.938514,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.05263157894736842,
+          "recency": 0.004968810432174672,
+          "source_affinity": 0.996997635486526,
+          "interest_match": 1.0,
+          "topic_affinity": -0.9311096086675776,
+          "length": 0.7066666666666667,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 0.0631578947368421,
+          "recency": 0.004968810432174672,
+          "source_affinity": 1.495496453229789,
+          "interest_match": 2.0,
+          "topic_affinity": -0.9311096086675776,
+          "length": 0.106,
+          "seen_penalty": -0.8
+        },
+        "total": 1.9385135497312278,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "FierceBiotech",
@@ -263,7 +549,29 @@ window.LIST_DATA = {
         "biotech",
         "markets"
       ],
-      "score": 1.653213
+      "score": 1.653213,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.9473684210526315,
+          "recency": 0.5,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": -0.7831292805274325,
+          "length": 0.6633333333333333,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 1.1368421052631579,
+          "recency": 0.5,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": -0.7831292805274325,
+          "length": 0.09949999999999999,
+          "seen_penalty": -0.8
+        },
+        "total": 1.6532128247357252,
+        "boost": 0.0
+      }
     },
     {
       "site_name": "FierceBiotech",
@@ -280,11 +588,33 @@ window.LIST_DATA = {
       "topics": [
         "biotech"
       ],
-      "score": 1.430075
+      "score": 1.430075,
+      "score_breakdown": {
+        "features": {
+          "position_prior": 0.8947368421052632,
+          "recency": 0.5,
+          "source_affinity": 1.0,
+          "interest_match": 0.0,
+          "topic_affinity": -0.9311096086675776,
+          "length": 0.5833333333333334,
+          "seen_penalty": 1.0
+        },
+        "contributions": {
+          "position_prior": 1.0736842105263158,
+          "recency": 0.5,
+          "source_affinity": 1.5,
+          "interest_match": 0.0,
+          "topic_affinity": -0.9311096086675776,
+          "length": 0.08750000000000001,
+          "seen_penalty": -0.8
+        },
+        "total": 1.4300746018587376,
+        "boost": 0.0
+      }
     }
   ],
   "meta": {
-    "mode": "fresh",
+    "mode": "swr",
     "seen": [
       "00fb10c16a1f721b",
       "099a0ab6f9fb8964",

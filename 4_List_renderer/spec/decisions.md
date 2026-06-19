@@ -816,6 +816,57 @@ Phase 7 polish (score-explain toggle, iOS layout, scheduler).
 
 ---
 
+## D36 (2026-06-19) — Phase 7 (partial): "Why ranked here?" score-explain
+
+**Built.** The transparency feature the repo flagged as a differentiator (§1b.1 "why am I seeing
+this", D5/§8): each served result can show its **M6 score breakdown** on demand.
+- The served board now carries `score_breakdown` per item — `build_board` calls
+  `build_payload_from_registry(include_breakdown=True)`; the ranker already produced it
+  (`ranking.score_item(breakdown=True)`), and `normalize_result` passes it through. The **file
+  sidecar stays lean** (the CLI render path keeps `include_breakdown=False`).
+- Template (build `2026-06-19e`): a per-row kebab item **"ℹ Why ranked here?"** toggles an inline
+  panel rendering each feature's contribution as a signed bar + value (sorted by magnitude, incl.
+  any D21 boost), with the total score. Hidden by default; no layout cost until opened.
+
+**Why partial.** Phase 7 also includes iOS layout polish, a refresh scheduler, and a `pending`-
+interest UX — not built here. This delivers the highest-value, dependency-free piece first, and is
+timely now that interactions persist (D31 fix) so ranking actually learns.
+
+**Verified.** `include_breakdown=True` attaches a well-formed `score_breakdown` (total +
+per-feature contributions); `False` omits it (file render lean); `build_board` enables it for the
+served board; template wiring present.
+
+**State.** Phase 7 partial. Remaining Phase 7 + v2 embeddings (D33 L3) pending.
+
+---
+
+## D37 (2026-06-19) — Phase 7 complete (scheduler + pending-interest UX + mobile pass)
+
+**Built** the rest of Phase 7 (joins D36 score-explain):
+- **Background refresh scheduler (true background SWR).** `4_serve.py --refresh-interval SECONDS`
+  (0 = off) starts a daemon thread (`server._refresh_loop`) that every interval re-fetches the
+  board's network sources past TTL (warms the `items` cache) and re-fits ranking from accumulated
+  interactions — out of the request path, fail-open, clean-stops on shutdown via a
+  `threading.Event`. This is the "true background SWR" the spec flagged as pending since Phase 2.
+- **Pending-interest UX.** `GET /api/interests` lists declared interests; the Sources panel now
+  shows a "Your interests" section with each interest's kind/status. **Pending** site interests
+  (no free RSS feed found) get a **Retry** button (re-runs the free discovery) and a hint to
+  resolve via the `[y/N]`-gated `4_resolve_source.py` (billed Claude stays gated, D4). Adding an
+  interest refreshes the list.
+- **Mobile / iOS pass (D26 mobile-first).** `@media (max-width:600px)`: sticky header (search drops
+  to its own row; Sources/Refresh stay reachable), **safe-area insets** (`env(safe-area-inset-*)`)
+  for the notch in standalone PWA mode, larger tap targets (kebab, menu rows, buttons), and the
+  score-explain/why panel goes full-width. `viewport-fit=cover` already set.
+
+**Verified.** `--refresh-interval 3` logs `Background refresh scheduler on` + periodic
+`scheduled refresh: cache warmed + ranking re-fit`; `GET /api/interests` returns the list; template
+build `2026-06-19f` with the pending-interest + retry wiring present.
+
+**State.** **Phase 7 complete.** Remaining roadmap: v2 embeddings (D33 L3 — needs the local-vs-
+provider backend decision) and Phase 8 (hosted multi-user + AI summaries/billing, backlog).
+
+---
+
 ## Still-open decisions (spec §11)
 
 - **OD-d Topic tagging** → ✅ **resolved by D33** — staged attribute extraction: structural (L1,

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -117,6 +118,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._get_board()
             if path == "/api/sources":
                 return self._get_sources()
+            if path == "/api/interests":
+                return self._get_interests()
             if path == "/api/debug":
                 return self._get_debug()
             if path in _STATIC:
@@ -230,6 +233,14 @@ class Handler(BaseHTTPRequestHandler):
             ]
         })
 
+    def _get_interests(self) -> None:
+        conn = self._conn()
+        try:
+            rows = interests_mod.list_interests(conn, user_id=self.server.user_id)
+        finally:
+            conn.close()
+        self._send_json({"interests": rows})
+
     # --- POST -----------------------------------------------------------
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -309,6 +320,23 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": report.get("status") != "error", "value": value, **report})
 
 
+def _refresh_loop(db_path, user_id, board_id, interval, stop_event):
+    """Background SWR refresh (Phase 7): every `interval` seconds, re-fetch the
+    board's network sources (warms the cache past TTL) and re-fit ranking from
+    accumulated interactions. Out of the request path; daemon thread."""
+    while not stop_event.wait(interval):
+        try:
+            conn = listdb.connect(db_path)
+            try:
+                build_board(conn, user_id=user_id, board_id=board_id, refresh=True)
+                ranking.fit_affinities(conn, user_id)
+            finally:
+                conn.close()
+            log.info("scheduled refresh: cache warmed + ranking re-fit")
+        except Exception as exc:  # never let the scheduler kill the server
+            log.warning("scheduled refresh failed: %s", exc)
+
+
 def serve(
     db_path: Path | str,
     *,
@@ -318,8 +346,10 @@ def serve(
     board_id: str = listdb.DEFAULT_BOARD_ID,
     seed: bool = False,
     open_browser: bool = True,
+    refresh_interval: int = 0,
 ) -> None:
-    """Start the board server (blocking). Seeds sources on first run."""
+    """Start the board server (blocking). Seeds sources on first run.
+    `refresh_interval` > 0 enables the background SWR refresh scheduler."""
     db_path = Path(db_path)
     conn = listdb.connect(db_path)
     try:
@@ -342,6 +372,15 @@ def serve(
     httpd.user_id = user_id
     httpd.board_id = board_id
 
+    stop_event = threading.Event()
+    if refresh_interval and refresh_interval > 0:
+        threading.Thread(
+            target=_refresh_loop,
+            args=(db_path, user_id, board_id, refresh_interval, stop_event),
+            daemon=True,
+        ).start()
+        log.info("Background refresh scheduler on: every %ds", refresh_interval)
+
     url = f"http://{host}:{port}/"
     log.info("Curator board server -> %s  (Ctrl-C to stop)", url)
     if open_browser:
@@ -351,4 +390,5 @@ def serve(
     except KeyboardInterrupt:
         log.info("Shutting down.")
     finally:
+        stop_event.set()
         httpd.server_close()

@@ -2,9 +2,10 @@
 
 **Working product name:** Curator (a personalized highlights board)
 **Module dir:** `4_List_renderer/`
-**Status:** Phases 0–6 built — the full v1 loop (template + adapters + SWR cache + Claude resolver
-+ live server & interactions + PWA + learning/ranking + M4 normalization + M5 interest discovery).
-Phases 7–8 (polish, hosted) + v2 embeddings pending. This spec defines the v1 target.
+**Status:** Phases 0–7 built — the full v1 loop + polish (template + adapters + SWR cache + Claude
+resolver + live server & interactions + PWA + learning/ranking + M4 normalization + M5 interest
+discovery + score-explain + background refresh + mobile pass). Pending: v2 embeddings + Phase 8
+(hosted, backlog). This spec defines the v1 target.
 **Last updated:** 2026-06-19
 
 ---
@@ -421,9 +422,11 @@ biopharm,news}`); v1 generalizes it to "render the enabled source set."
   derived from signals; clamp to sane bounds; persist deltas to `ranking_state`. Start naïve
   (per-feature empirical lift) and graduate to a small regression once enough rows exist —
   same data-sufficiency gating philosophy as 2_Funds M7-β/γ.
-- **Explainability:** each Highlight can carry a `score_breakdown` (optional, behind a
-  detail toggle) so the user sees *why* something ranked high — consistent with this repo's
-  preference for transparent, inspectable scoring over opaque models.
+- **Explainability (✅ built, D36):** each served Highlight carries a `score_breakdown` (per-feature
+  contribution + total); the template's per-row "Why ranked here?" toggles an inline bar chart so
+  the user sees *why* something ranked high — consistent with this repo's preference for
+  transparent, inspectable scoring over opaque models. The file-render sidecar stays lean (breakdown
+  is server-board only).
 - **Features / attributes (D33):** what ranking learns over is extracted in staged layers
   (structural → keyword/entity → embeddings → optional LLM), with multi-granularity back-off so
   fine attributes resolve without losing generalization. Embeddings (not an LLM) are the tool for
@@ -485,7 +488,7 @@ biopharm,news}`); v1 generalizes it to "render the enabled source set."
 | **4 (done)** | M7 (stdlib server + `/api/*`), `interactions`, template v2 hooks, PWA | User selects sources + like/hide/click; signals persist append-only; board served live. (D31) |
 | **5 (done)** | M6 `ranking.py` + `ranking.yaml` + `ranking_state`, `4_learn_ranking.py` | Highlights ordered by a transparent weighted-feature model; affinities learned offline from interactions; mute/boost rules (D21) + seen-penalty (D22); fail-open. (D32) |
 | **6 (done)** | M5 `interests.py`, `4_add_interest.py`, `/api/interest` | User adds a site/topic/ticker; app classifies + discovers + registers sources (free: RSS-shortcut for sites, Google-News search for topics) and boosts ranking. Billed site resolve deferred to the gated CLI. (D35) |
-| **7 — Polish** | iOS layout, score-explain toggle, scheduler | Mobile board, transparency, auto-refresh. |
+| **7 (done)** | score-explain (D36) + background refresh scheduler + pending-interest UX + mobile/iOS pass (D37) | Transparency, auto-refresh, mobile board all shipped. |
 | **8 — Hosted skeleton (BACKLOG, later)** | Next.js/Vercel multi-user shell (see §13 + below) | Multi-user deployment; same modules, swapped backends. |
 
 Each phase ships independently and leaves the app runnable. **Phase 1 (local single-user) is

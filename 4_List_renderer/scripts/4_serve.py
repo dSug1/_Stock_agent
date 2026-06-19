@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="(Re)seed sources from config/sources.yaml before serving.")
     parser.add_argument("--no-open", action="store_true",
                         help="Do not auto-open the browser.")
+    parser.add_argument("--refresh-interval", type=int, default=0, metavar="SECONDS",
+                        help="Background SWR refresh cadence (0 = off; e.g. 900 = every 15 min).")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -54,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         board_id=listdb.DEFAULT_BOARD_ID,
         seed=args.seed,
         open_browser=not args.no_open,
+        refresh_interval=args.refresh_interval,
     )
     return 0
 

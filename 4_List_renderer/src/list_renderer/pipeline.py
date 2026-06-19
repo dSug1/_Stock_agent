@@ -181,6 +181,7 @@ def build_board(
         board_name=board_name,
         refresh=refresh,
         no_fetch=no_fetch,
+        include_breakdown=True,   # served board carries per-item score_breakdown
     )
     if apply_user_state:
         hidden = interactions.hidden_item_ids(conn, user_id=user_id, board_id=board_id)
