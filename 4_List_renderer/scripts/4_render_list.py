@@ -1,14 +1,21 @@
 """4_render_list — generate the list_results_data.js sidecar, then optionally
 open Outputs/list_results.html in the default browser.
 
+The template is fixed; only the data source changes (adaptive display):
+
+    --source file      read a JSON payload (default: data/sample_input.json)
+    --source biopharm  top-N tickers by composite_score from
+                       3_Biopharmcatalyst_parser/data/biotech.db
+    --source news      N articles each from FierceBiotech / Le Figaro / CNBC
+
 Run with PYTHONPATH=src (the .bat sets this):
 
-    python scripts/4_render_list.py                      # uses data/sample_input.json
-    python scripts/4_render_list.py --input my.json
-    python scripts/4_render_list.py --open-browser
-    python scripts/4_render_list.py --input my.json --open-browser -v
+    python scripts/4_render_list.py --source news --open-browser
+    python scripts/4_render_list.py --source news --top 3
+    python scripts/4_render_list.py --source biopharm --top 10
+    python scripts/4_render_list.py --source file --input my.json
 
-Input JSON shape:
+File-source JSON shape:
     { "query": "...", "brand": "...", "results": [ {..result..}, ... ] }
 See data/sample_input.json for a worked example and the field list.
 """
@@ -23,11 +30,19 @@ import webbrowser
 from pathlib import Path
 
 from list_renderer.render import build_payload, render_sidecar
+from list_renderer.adapters import (
+    build_payload_from_biotech_db,
+    build_payload_from_news,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent
 OUTPUTS = ROOT / "Outputs"
 HTML = OUTPUTS / "list_results.html"
 DEFAULT_INPUT = ROOT / "data" / "sample_input.json"
+DEFAULT_BIOTECH_DB = (
+    REPO_ROOT / "3_Biopharmcatalyst_parser" / "data" / "biotech.db"
+)
 
 log = logging.getLogger("4_render_list")
 
@@ -39,13 +54,31 @@ def load_input(path: Path) -> tuple[str | None, str | None, list[dict]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Render the list_results sidecar from a JSON payload."
+        description="Render the list_results sidecar from a chosen data source."
+    )
+    parser.add_argument(
+        "--source",
+        choices=("file", "biopharm", "news"),
+        default="file",
+        help="Data source (default: file).",
     )
     parser.add_argument(
         "--input",
         type=Path,
         default=DEFAULT_INPUT,
-        help="Input JSON (default: data/sample_input.json).",
+        help="[file] Input JSON (default: data/sample_input.json).",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=DEFAULT_BIOTECH_DB,
+        help="[biopharm] Path to biotech.db.",
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        help="Items to show. Default: [biopharm] 10 top tickers, [news] 3 per site.",
     )
     parser.add_argument(
         "--open-browser",
@@ -60,12 +93,23 @@ def main(argv: list[str] | None = None) -> int:
         format="%(message)s",
     )
 
-    if not args.input.exists():
-        log.error("Input not found: %s", args.input)
-        return 1
+    if args.source == "biopharm":
+        try:
+            payload = build_payload_from_biotech_db(
+                args.db, top_n=args.top or 10
+            )
+        except FileNotFoundError as exc:
+            log.error("%s", exc)
+            return 1
+    elif args.source == "news":
+        payload = build_payload_from_news(per_site=args.top or 3)
+    else:
+        if not args.input.exists():
+            log.error("Input not found: %s", args.input)
+            return 1
+        query, brand, results = load_input(args.input)
+        payload = build_payload(query, brand, results)
 
-    query, brand, results = load_input(args.input)
-    payload = build_payload(query, brand, results)
     target = render_sidecar(payload, OUTPUTS)
     log.info("Wrote %s (%d result(s)).", target, len(payload["results"]))
 

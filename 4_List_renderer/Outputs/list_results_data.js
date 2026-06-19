@@ -2,61 +2,125 @@
  * Do not hand-edit; rerun the renderer (run_4_List_render.bat).
  * Consumed by the stable Outputs/list_results.html template. */
 window.LIST_DATA = {
-  "query": "google",
-  "brand": "Google",
+  "query": "fiercebiotech, le figaro, cnbc",
+  "brand": "News",
   "results": [
     {
-      "site_name": "Wikipedia",
-      "url_breadcrumb": "https://en.wikipedia.org › wiki › Google",
-      "favicon": "https://en.wikipedia.org/static/favicon/wikipedia.ico",
-      "title": "Google",
-      "title_url": "https://en.wikipedia.org/wiki/Google",
+      "site_name": "FierceBiotech",
+      "url_breadcrumb": "www.fiercebiotech.com › biotech › moderna-mflusiva-advisory-committee-fda",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.fiercebiotech.com",
+      "title": "Moderna’s flu candidate sails through FDA advisory committee in unanimous votes",
+      "title_url": "https://www.fiercebiotech.com/biotech/moderna-mflusiva-advisory-committee-fda",
       "verified": true,
-      "snippet": "Google is the largest provider of search engines, mapping and navigation applications, email services, office suites, online video platforms, photo and cloud ...",
+      "snippet": "Jun 18, 2026 2:37pm — As Moderna reshapes itself in the wake of the pandemic, the company on Thursday passed a key milestone in its bid to expand the reach of its mRNA platform to the massive influenza vaccination market.",
       "bold_terms": [
-        "Google"
+        "Jun 18, 2026 2:37pm"
       ],
-      "read_more_url": "https://en.wikipedia.org/wiki/Google"
+      "read_more_url": "https://www.fiercebiotech.com/biotech/moderna-mflusiva-advisory-committee-fda"
     },
     {
-      "site_name": "About Google",
-      "url_breadcrumb": "https://about.google",
-      "favicon": "https://www.google.com/favicon.ico",
-      "title": "About Google: Our products, technology and company ...",
-      "title_url": "https://about.google",
+      "site_name": "FierceBiotech",
+      "url_breadcrumb": "www.fiercebiotech.com › biotech › campfield-harvests-180m-series-advance-oral-ibd-drug-lic",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.fiercebiotech.com",
+      "title": "cAMPfield harvests $180M series A to advance oral IBD drug licensed from Newsoara",
+      "title_url": "https://www.fiercebiotech.com/biotech/campfield-harvests-180m-series-advance-oral-ibd-drug-licensed-newsoara",
       "verified": true,
-      "snippet": "Learn more about Google. Explore our innovative AI products and services, and how we're using technology to help improve lives around the world.",
+      "snippet": "Jun 18, 2026 10:00am — In another biotech born out of China’s “NewCo” model, cAMPfield Therapeutics has launched with a $180 million series A and a focus on oral medicines for inflammatory diseases.",
       "bold_terms": [
-        "Google"
+        "Jun 18, 2026 10:00am"
       ],
-      "read_more_url": null
+      "read_more_url": "https://www.fiercebiotech.com/biotech/campfield-harvests-180m-series-advance-oral-ibd-drug-licensed-newsoara"
     },
     {
-      "site_name": "blog.google",
-      "url_breadcrumb": "https://blog.google",
-      "favicon": "https://www.google.com/favicon.ico",
-      "title": "The Keyword | Google Product and Technology News and ...",
-      "title_url": "https://blog.google",
+      "site_name": "FierceBiotech",
+      "url_breadcrumb": "www.fiercebiotech.com › medtech › novocure-device-fails-help-brain-cancer-patients-surviva",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.fiercebiotech.com",
+      "title": "Novocure device fails to improve brain cancer patients’ survival in phase 3 test",
+      "title_url": "https://www.fiercebiotech.com/medtech/novocure-device-fails-help-brain-cancer-patients-survival-phase-3-test",
       "verified": true,
-      "snippet": "Get the latest news and stories about Google products, technology and innovation on the Keyword, Google's official blog.",
+      "snippet": "Jun 18, 2026 7:24am — Novocure’s tumor-treating electric fields device missed its primary endpoint in a late-stage glioblastoma trial.",
       "bold_terms": [
-        "Google",
-        "Google's"
+        "Jun 18, 2026 7:24am"
       ],
-      "read_more_url": null
+      "read_more_url": "https://www.fiercebiotech.com/medtech/novocure-device-fails-help-brain-cancer-patients-survival-phase-3-test"
     },
     {
-      "site_name": "Apple",
-      "url_breadcrumb": "https://apps.apple.com › app › google",
-      "favicon": "https://www.apple.com/favicon.ico",
-      "title": "Google - App Store",
-      "title_url": "https://apps.apple.com/app/google/id284815942",
+      "site_name": "Le Figaro",
+      "url_breadcrumb": "www.lefigaro.fr › meteo › en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperature",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
+      "title": "EN DIRECT - Canicule : plus d’un Français sur deux est concerné par la vigilance orange",
+      "title_url": "https://www.lefigaro.fr/meteo/en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperatures-soleil-orages-vigilance-orange-20260619",
       "verified": true,
-      "snippet": "Download the Google app to stay in the know about things that matter to you. Try AI Overviews, find quick answers, explore your interests, and stay up to date ...",
+      "snippet": "Jun 19, 2026 — 53 départements sont concernés par la vigilance orange canicule et 5 autres départements pour les orages. Près de 10 millions de personnes âgées de 60 ans ou plus, dont 3,8 millions de 75 ans ou plus au 1er janvier 2026, pourraient const...",
       "bold_terms": [
-        "Google"
+        "Jun 19, 2026"
       ],
-      "read_more_url": "https://apps.apple.com/app/google/id284815942"
+      "read_more_url": "https://www.lefigaro.fr/meteo/en-direct-chaine-meteo-canicule-vague-chaleur-alerte-temperatures-soleil-orages-vigilance-orange-20260619"
+    },
+    {
+      "site_name": "Le Figaro",
+      "url_breadcrumb": "www.lefigaro.fr › jusqu-a-390c-a-l-ombre-visualisez-en-cartes-l-arrivee-de-la-vague-de-cha",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
+      "title": "Jusqu’à 41 °C attendus dimanche : suivez en cartes la progression de la vague de chaleur",
+      "title_url": "https://www.lefigaro.fr/jusqu-a-390c-a-l-ombre-visualisez-en-cartes-l-arrivee-de-la-vague-de-chaleur-20260619",
+      "verified": true,
+      "snippet": "Jun 19, 2026 — EN CARTE - Une intense vague de chaleur s’installe sur la France, avec des températures pouvant dépasser localement les normales de saison de près de 18 °C. Tour d’horizon des prévisions.",
+      "bold_terms": [
+        "Jun 19, 2026"
+      ],
+      "read_more_url": "https://www.lefigaro.fr/jusqu-a-390c-a-l-ombre-visualisez-en-cartes-l-arrivee-de-la-vague-de-chaleur-20260619"
+    },
+    {
+      "site_name": "Le Figaro",
+      "url_breadcrumb": "www.lefigaro.fr › actualite-france › les-collectivites-locales-doivent-elles-investir-dans",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.lefigaro.fr",
+      "title": "Les collectivités locales doivent-elles investir dans la climatisation des écoles ?",
+      "title_url": "https://www.lefigaro.fr/actualite-france/les-collectivites-locales-doivent-elles-investir-dans-la-climatisation-des-ecoles-20260619",
+      "verified": true,
+      "snippet": "Jun 19, 2026",
+      "bold_terms": [
+        "Jun 19, 2026"
+      ],
+      "read_more_url": "https://www.lefigaro.fr/actualite-france/les-collectivites-locales-doivent-elles-investir-dans-la-climatisation-des-ecoles-20260619"
+    },
+    {
+      "site_name": "CNBC",
+      "url_breadcrumb": "www.cnbc.com › 2026 › 06 › 19",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.cnbc.com",
+      "title": "U.S.-Iran accord hits early snag after Swiss talks fail to proceed as planned",
+      "title_url": "https://www.cnbc.com/2026/06/19/us-iran-talks-switzerland-canceled-interim-deal-markets.html",
+      "verified": true,
+      "snippet": "Jun 19, 2026 — Analysts reckon a lasting resolution to the Middle East conflict will take some time to materialize.",
+      "bold_terms": [
+        "Jun 19, 2026"
+      ],
+      "read_more_url": "https://www.cnbc.com/2026/06/19/us-iran-talks-switzerland-canceled-interim-deal-markets.html"
+    },
+    {
+      "site_name": "CNBC",
+      "url_breadcrumb": "www.cnbc.com › 2026 › 06 › 18",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.cnbc.com",
+      "title": "The average SpaceX buyer post-IPO is almost under water after two-day slide",
+      "title_url": "https://www.cnbc.com/2026/06/18/the-average-spacex-buyer-post-ipo-is-almost-under-water-after-two-day-slide.html",
+      "verified": true,
+      "snippet": "Jun 18, 2026 — Shares of SpaceX fell as much as 7% Thursday to $178, leaving the stock trading roughly in line with its volume-weighted average price of just under $180.",
+      "bold_terms": [
+        "Jun 18, 2026"
+      ],
+      "read_more_url": "https://www.cnbc.com/2026/06/18/the-average-spacex-buyer-post-ipo-is-almost-under-water-after-two-day-slide.html"
+    },
+    {
+      "site_name": "CNBC",
+      "url_breadcrumb": "www.cnbc.com › 2026 › 06 › 19",
+      "favicon": "https://www.google.com/s2/favicons?sz=64&domain=www.cnbc.com",
+      "title": "Hormuz relief may not ease the economic toll that's already 'baked in,' analysts warn",
+      "title_url": "https://www.cnbc.com/2026/06/19/hormuz-relief-may-not-ease-the-economic-toll-thats-already-baked-in-analysts-warn.html",
+      "verified": true,
+      "snippet": "Jun 19, 2026 — Early signs of reopening of the Strait of Hormuz have lifted the most acute threat to global energy supplies but economic damages from the war will take months to unwind.",
+      "bold_terms": [
+        "Jun 19, 2026"
+      ],
+      "read_more_url": "https://www.cnbc.com/2026/06/19/hormuz-relief-may-not-ease-the-economic-toll-thats-already-baked-in-analysts-warn.html"
     }
   ]
 };
