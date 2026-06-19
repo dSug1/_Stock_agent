@@ -593,6 +593,23 @@ adequate for local single-user.
 **State.** Phase 4 complete. Next: Phase 5 (ranking, M6) — now has a live `interactions` signal
 to fit against — or Phase 4-lite dedup (M4) first.
 
+**Fix (2026-06-19) — interactions never persisted from the UI.** Two client bugs (server was
+verified correct throughout — likes record, `meta.liked` returns them):
+1. **Root cause: `fetch(..., {keepalive: true})` fails under a service worker.** The interaction
+   flush used `keepalive: true`; with the PWA service worker controlling the page, Chrome throws
+   `TypeError: Failed to fetch` on keepalive POSTs — so every like/hide/dwell flush silently
+   failed (the empty `.catch` hid it). A plain `fetch` (no keepalive) succeeds. Fixed by removing
+   `keepalive` from the normal flush; the page-unload path keeps `navigator.sendBeacon`. Also
+   surfaced flush failures (console + toast) instead of swallowing them, and added a `BUILD`
+   console marker to detect stale pages.
+2. **Contributing: cache-first service worker pinned a stale template.** The SW cached the app
+   shell cache-first with a fixed `CACHE_VERSION`, so template edits didn't reach the browser.
+   Changed to **network-first for the HTML shell + `GET /api/board`** (cache fallback offline),
+   cache-first for icon/manifest, bumped `CACHE_VERSION` → `curator-v2`.
+
+**Lesson:** never let an interaction-flush `.catch` be silent, and avoid `keepalive` on non-unload
+fetches when a service worker is present.
+
 ---
 
 ## D32 (2026-06-19) — Phase 5 built (learning & ranking, M6)
@@ -750,6 +767,52 @@ across very different headlines wait for L3.
 
 **State.** M4 built. Ranking now has live recency + topic signal in addition to source affinity.
 Next: Phase 6 (interest input/discovery, M5) or v2 embeddings (D33 L3).
+
+---
+
+## D35 (2026-06-19) — Phase 6 built (interest input & source discovery, M5)
+
+**Built.** `POST /api/interest` (and `scripts/4_add_interest.py`) now *resolve + register*
+sources instead of only capturing — `src/list_renderer/interests.py`:
+- **Classify** (`classify`): a URL/domain → `site`; explicit `$TICK` or 3–5 uppercase letters →
+  `ticker`; else `topic`. (`query` folds into `topic` for ranking.)
+- **topic / ticker → free Google News RSS search source.** `google_news_feed(q)` builds a
+  `news.google.com/rss/search?q=…` URL; registered as a generic `rss` source
+  (`origin='discovered'`, on board), so the board immediately surfaces items for the interest —
+  **no Claude, no new adapter code**. Ticker queries append "stock".
+- **site → free RSS discovery.** `discover_site_feed` returns the URL itself if it looks like a
+  feed, else the page's declared `<link rel=alternate type=application/rss+xml>` (reuses the M3
+  resolver's deterministic shortcut — **no Claude call**). Discovered feed → registered `rss`
+  source on board.
+- **Billed site resolution stays gated + deferred.** A site that declares no feed is stored
+  `pending`; the report points the user at the `[y/N]`-gated `scripts/4_resolve_source.py`
+  (D4 — the server has no terminal, so it never calls Claude itself; M5 stays non-interactive,
+  D7).
+- **Store + feed ranking.** Every interest is written to `interests` (`active` when a source was
+  registered, else `pending`); duplicates are de-duped (case-insensitive on kind+value). The
+  interest immediately feeds the M6 `interest_match` feature (topic match) — verified a matching
+  item outscores a non-matching one.
+- **Audited, not interactive (D7).** Resolution is automatic with an `interests` row + a
+  `discovered` source; no per-item prompting (`feedback_avoid_multiplying_user_requests`).
+- **Fail open.** Any network/discovery failure stores the interest `pending` and reports why,
+  never raises. Server logs the discovered source; the template's add-interest box refreshes the
+  board (which also re-fits ranking) on a successful add.
+
+**Verified.** Classification correct; a topic interest registers an on-board Google News source +
+an active interest row and makes a matching item outrank a non-matching one; idempotent re-add
+doesn't duplicate; an unreachable site fails open to `pending`. **Live**: the Google News search
+feed returns dated items via the `rss` adapter; site RSS discovery finds feeds for theverge.com
+and techcrunch.com (free, no Claude). All on a throwaway DB copy — the real DB / interactions log
+untouched.
+
+**Not yet (deferred):** deeper **ticker → finance binding** (v1 uses a news search; binding to the
+biopharm/finance pipeline is later); a query-as-saved-search distinct from topic; surfacing/UX for
+`pending` site interests (today they're reported inline + via `4_add_interest.py --list`);
+auto-running the billed resolver for pending sites (kept manual + gated per D4).
+
+**State.** Phase 6 complete — the full v1 loop is built (sources → resolve → fetch → normalize →
+rank → interact → learn → declare interests → discover sources). Next: v2 embeddings (D33 L3) or
+Phase 7 polish (score-explain toggle, iOS layout, scheduler).
 
 ---
 

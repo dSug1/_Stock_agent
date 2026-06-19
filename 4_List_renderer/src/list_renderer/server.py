@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import db as listdb
 from . import interactions
+from . import interests as interests_mod
 from . import ranking
 from .pipeline import build_board
 from .render import render_sidecar
@@ -285,26 +286,27 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "updated": len(selections)})
 
     def _post_interest(self, body: dict) -> None:
-        # Phase-4 capture only: store the declared interest. Auto-discovery +
-        # source registration (M5) is Phase 6 (D7) — recorded here as 'pending'.
+        # M5 (Phase 6): classify -> resolve -> register a discovered source, then
+        # store the interest. Non-interactive + free: site feeds are discovered via
+        # the free RSS shortcut; topics/tickers become a Google-News search source.
+        # A site with no declared feed is stored 'pending' (billed Claude resolution
+        # is deferred to the gated 4_resolve_source.py CLI, D4). Optional explicit
+        # `kind` overrides classification.
         value = (body.get("value") or "").strip()
-        kind = (body.get("kind") or "topic").strip()
+        kind = (body.get("kind") or "").strip() or None
         if not value:
             return self._send_json({"error": "value required"}, 400)
         conn = self._conn()
         try:
-            conn.execute(
-                "INSERT INTO interests (user_id, kind, value, weight, status, created_at) "
-                "VALUES (?, ?, ?, 1.0, 'pending', ?)",
-                (self.server.user_id, kind, value, listdb.now_iso()),
+            report = interests_mod.add_interest(
+                conn, value, kind=kind,
+                user_id=self.server.user_id, board_id=self.server.board_id,
             )
-            conn.commit()
         finally:
             conn.close()
-        self._send_json({
-            "ok": True, "kind": kind, "value": value,
-            "note": "stored; source discovery lands in Phase 6 (M5)",
-        })
+        if report.get("source_id"):
+            log.info("interest %r -> %s source %s", value, report["status"], report["source_id"])
+        self._send_json({"ok": report.get("status") != "error", "value": value, **report})
 
 
 def serve(

@@ -15,6 +15,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#1e1f22" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="manifest.webmanifest" />
@@ -383,6 +384,9 @@
     (function () {
       "use strict";
 
+      var BUILD = "2026-06-19d (drop keepalive — fixes Failed-to-fetch under service worker)";
+      console.log("[curator] page build " + BUILD);
+
       var SERVED = location.protocol === "http:" || location.protocol === "https:";
       var byId = function (id) { return document.getElementById(id); };
 
@@ -525,18 +529,28 @@
           if (ok) { buffer = []; persistBuffer(); }
           return;
         }
+        // NOTE: no `keepalive: true` here. With a service worker controlling the
+        // page, keepalive POSTs fail with "TypeError: Failed to fetch" in Chrome.
+        // The unload path uses navigator.sendBeacon above instead.
         fetch("/api/interact", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: payload,
-          keepalive: true
+          body: payload
         }).then(function (res) {
           if (res.ok) {
             // Drop the events we sent; keep any that arrived mid-flight.
             buffer = buffer.slice(sent.length);
             persistBuffer();
+            console.log("[curator] saved " + sent.length + " event(s)");
+          } else {
+            console.warn("[curator] /api/interact HTTP " + res.status);
+            toast("Save failed: HTTP " + res.status);
           }
-        }).catch(function () { /* keep buffered; retry next tick */ });
+        }).catch(function (err) {
+          // Surface the failure instead of silently retrying forever.
+          console.warn("[curator] /api/interact failed:", err);
+          toast("Save failed (not reaching the server?)");
+        });
       }
 
       // ---- Impression + dwell + scroll_past (IntersectionObserver) ---
@@ -758,15 +772,22 @@
         byId("interestAdd").addEventListener("click", function () {
           var v = byId("interestInput").value.trim();
           if (!v) return;
-          var kind = /^https?:\/\//i.test(v) || /\.[a-z]{2,}($|\/)/i.test(v) ? "site" : "topic";
+          // Let the server classify (site / ticker / topic) and discover sources.
           fetch("/api/interest", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ kind: kind, value: v })
-          }).then(function (r) { return r.json(); }).then(function () {
+            body: JSON.stringify({ value: v })
+          }).then(function (r) { return r.json(); }).then(function (res) {
             byId("interestInput").value = "";
-            toast("Interest saved — discovery lands in Phase 6");
-          });
+            if (res.status === "active") {
+              toast("Added " + (res.kind || "interest") + " — refreshing board");
+              loadBoard({ refresh: true });
+            } else if (res.status === "pending") {
+              toast("Saved (needs resolving): " + (res.note || ""));
+            } else {
+              toast("Could not add interest");
+            }
+          }).catch(function () { toast("Could not add interest"); });
         });
 
         setInterval(function () { bankAllDwell(); flush(false); }, 5000);
