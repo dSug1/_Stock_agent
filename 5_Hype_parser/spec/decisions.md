@@ -583,6 +583,70 @@ verdict, and it does so with $0 / clean licensing by reusing existing repo infra
 
 ---
 
+## D17 (2026-06-26) — Stage A built: PIT first-print fundamentals from SEC EDGAR companyfacts
+
+Built the point-in-time fundamentals layer the `m_share` label needs. `src/hype_parser/
+fundamentals.py` + schema **v7** (`company_facts` + `company_facts_log`) + `scripts/5_fundamentals.py`
++ `tests/test_fundamentals.py` (8 offline tests; **105 total pass**).
+
+**Reuse reconciliation (refines D16's "reuse the module_4c client"):** module_4c's `fetch_companyfacts`
+returns only the **8 most-recent** periods and **drops the per-fact `filed` date**, and it hard-imports
+`layer_1.*` — none of which fits a PIT panel back to 2017 or 5_Hype's standalone architecture (D3). So
+we reused module_4c's **GAAP-concept knowledge** (concept aliases + the TTM cumulative-YTD logic) and
+**added the `Revenues` tags**, but implemented a **5_Hype-local, stdlib-only, injectable, fail-open**
+extractor (house style) that stores **every reported period with its `filed` date**.
+
+- **`fundamentals_as_of(ticker, date)`** picks the latest period **FILED ≤ date** → first-print,
+  leak-free (Protocol §1); survivorship-free because filings persist post-delisting. Revenue = latest
+  annual (10-K / ~365d) else a quarterly-derived TTM; shares = latest-ended filed value. `pre_revenue`
+  is True when no positive revenue is derivable yet → Stage B sets `m_share=1` (D16).
+- **Validated live:** NTLA as-of 2018-01 = pre_revenue ✓, as-of 2023-06 = $52M revenue ✓ (the as-of
+  evolves PIT); NTAP 2020-10 = $5.41B TTM / $24.38 rev-per-share (matches NetApp's actual FY2020);
+  the restatement unit test confirms a later 10-K/A is invisible before its filing date.
+- **Stage-B flag (not fixed here):** CRSP shows $3.1M as-of 2020-01 — *collaboration/milestone*
+  revenue, not product sales — so it reads "revenue-bearing" though its P/S is astronomical and
+  `m_share≈1` regardless. Stage B should apply a small **revenue (or revenue-per-share) floor** so
+  milestone-only names are treated as effectively pre-revenue. Recorded for Stage B.
+
+**Next — Stage B:** the `m_share` decomposition (combine these PIT fundamentals with PIT price/shares
+to split `[t0,t0+H]` return into Δmultiple vs Δfundamental; `m_share=1` for pre-revenue + sub-floor
+names) → becomes the real panel label.
+
+---
+
+## D18 (2026-06-26) — Stage B built: m_share decomposition is now the real panel label
+
+`src/hype_parser/mshare.py` (pure) + `crude.m_share*` config + wired into `build_crude` + 10 tests
+(**115 total pass**). The price-only label is replaced by the hype-vs-value-realization label
+Protocol §2.1 requires.
+
+- **Decomposition (per-share identity):** `price = M × F` with `F = revenue_ttm/shares` (per-share
+  fundamental) and `M = price/F` (P/S multiple), so `log(price_H/price_0) = log(M_H/M_0) +
+  log(F_H/F_0)` exactly, and **`m_share = log(M_H/M_0)/log(price_H/price_0)`** — the re-rating's share
+  of the run. Uses the same adjusted prices as the forward return, so it's an exact identity in the
+  inputs; dilution shows up in `F` via the share count. Endpoints come from `fundamentals_as_of`
+  (Stage A) at `t0` and `t0+H`.
+- **Pre-revenue + materiality floor ⇒ `m_share=1`** (D16 + the D17 flag): `min_revenue_usd=25M` so
+  milestone/collaboration revenue (CRSP's $3M) is treated as no real fundamental.
+- **Label:** positive ⇔ forward return ≥ `hit_return` **AND** (where decomposable) `m_share ≥
+  m_share_min=0.50`; falls back to price-only when fundamentals aren't loaded (graceful).
+- **Live 57-row rebuild:** modes **22 decomposed / 32 pre_revenue / 3 no_fundamentals**. All 4
+  doublers had `m_share ≥ 0.5` (re-rating-driven), so the clause is **non-binding on this small
+  panel** — an honest finding: every nascent-theme name that doubled here did so via re-rating, not
+  revenue growth. It is tested-discriminating (4 decomposed names sit `<0.5` and would be demoted if
+  they doubled), and will bite at n≥100 when revenue-bearing doublers appear. The **kill-switch read
+  is unchanged (`narrative_t=−0.67`)** — expected, because it regresses *continuous* forward return;
+  m_share only sharpens the positive/hard_negative split (for the quota + eventual Module fitting).
+- **Known artifact (Stage-C flag):** `m_share` is unstable when `|total return|≈0` (decomposed tail
+  −3.23…+12.86 among small-return names); harmless now since it only gates *large*-return positives
+  (stable denominator), but **winsorize** if ever used as a continuous feature.
+
+**Next — Stage C:** expand to n≥100 delisted-inclusive + temporal/sector/regime stratification + more
+seed themes (breaks blocker 4). The label + fundamentals plumbing is now real; Stage C is about
+*coverage* (and is where the m_share clause starts doing work).
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

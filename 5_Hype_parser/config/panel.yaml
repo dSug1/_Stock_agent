@@ -39,11 +39,26 @@ crude:
   primary_horizon_weeks: 52  # horizon used for crude labelling + the crude kill-switch
   hit_return: 1.00           # positive label: forward return >= +100% (the anchor bar); the
                              #   kill-switch itself regresses CONTINUOUS return, so this only labels
+  # m_share label clause (Stage B, D18): split the run into re-rating vs fundamental growth. A
+  # positive must clear hit_return AND (where decomposable) be re-rating-driven. Needs SEC EDGAR
+  # fundamentals fetched first (scripts/5_fundamentals.py --fetch); falls back to price-only otherwise.
+  use_mshare: true
+  m_share_min: 0.50          # >=50% of the run must come from multiple expansion to count as "hype"
+  min_revenue_usd: 25000000  # materiality floor: <=$25M revenue => treat as pre-revenue (m_share=1)
+                             #   so milestone/collaboration revenue (e.g. CRSP $3M) isn't a fundamental
   max_per_theme: 40          # cap candidates per theme (keeps the yfinance fetch bounded)
   price_start: "2014-01-01"  # earliest daily price fetch (covers the panel eras + drawdown lookback)
   # time_to_catalyst is intentionally absent: no PIT catalyst calendar exists yet, so the crude
   # control set drops it (the full panel restores it).
   controls: [free_float, drawdown, sector, era]
+
+# --- Stratification targets (Protocol 2.3) — Stage C representativeness check (D19) -------------
+strata:
+  min_n: 100                   # n >= 100 labeled episodes
+  min_positive: 50             # >= 50 positive
+  max_temporal_positive_share: 0.50   # <=50% of positives in any rolling 12-month window
+  min_sectors: 2               # spread across >= this many sectors (rises as more themes are seeded)
+  required_regimes: [A, B]     # both discrete-catalyst (A) and continuous (B) present
 
 # yfinance is LOCAL-PERSONAL ONLY until a licensed provider is swapped (repo memory
 # project_data_provider_switch). The prices.fetch function is the swap point.

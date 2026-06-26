@@ -15,11 +15,13 @@ import argparse
 import logging
 import math
 import sys
+from collections import Counter
 from datetime import date
 
 import yaml
 
-from hype_parser import db, killswitch, panel, panel_builder, prices, themes
+from hype_parser import (db, fundamentals, killswitch, mshare, panel, panel_builder, panel_strata,
+                         prices, themes)
 
 DEFAULT_DB = "data/hype.db"
 ANCHORS_CFG = "config/panel_anchors.yaml"
@@ -57,6 +59,11 @@ def _default_fetch_float(ticker):
     except Exception as exc:
         log.info("float lookup failed for %s: %s", ticker, exc)
     return None
+
+
+def _has_facts(conn, ticker):
+    return conn.execute("SELECT 1 FROM company_facts WHERE ticker=? LIMIT 1",
+                        (ticker.upper(),)).fetchone() is not None
 
 
 def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter=None,
@@ -138,14 +145,31 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
                 return [(d, p) for d, p in _daily if start <= d < end]
 
             rr = prices.forward_returns(ticker, t0_date, horizons, fetch=_slice, today=today)
-            fwd_prim = rr.get(prim, {}).get("fwd_return")
-            label = panel_builder.crude_label(fwd_prim, hit_return=cr["hit_return"])
-            if label is None:
+            prim_stats = rr.get(prim, {})
+            fwd_prim = prim_stats.get("fwd_return")
+            if fwd_prim is None:
                 skips.append((ticker, tid, f"t0={t0m} too recent for {prim}w horizon"))
                 continue
 
+            # m_share label clause (Stage B): split the run into re-rating vs fundamental growth,
+            # using PIT fundamentals at t0 and t0+H. Falls back to price-only when no fundamentals
+            # are loaded for this ticker (run scripts/5_fundamentals.py --fetch to enable).
+            ms = {"m_share": None, "mode": "no_fundamentals"}
+            if cr.get("use_mshare", True) and _has_facts(conn, ticker):
+                tH = prices._add_weeks(t0_date, prim)
+                f0 = fundamentals.fundamentals_as_of(conn, ticker, t0_date)
+                fH = fundamentals.fundamentals_as_of(conn, ticker, tH)
+                ms = mshare.decompose_mshare(
+                    prim_stats.get("start_price"), prim_stats.get("end_price"),
+                    f0["revenue_ttm"], f0["shares"], fH["revenue_ttm"], fH["shares"],
+                    min_revenue=cr.get("min_revenue_usd", 25_000_000))
+            label = mshare.mshare_label(fwd_prim, ms["m_share"], hit_return=cr["hit_return"],
+                                        m_share_min=cr.get("m_share_min", 0.50))
+
             feats = panel_builder.pit_features(tid, sig)
             feats["era"] = panel_builder.era_feature(t0m)
+            if ms["m_share"] is not None:
+                feats["m_share"] = ms["m_share"]
             ff = None
             try:
                 ff = fetch_float(ticker)
@@ -157,7 +181,7 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
                 "name": ticker, "ticker": ticker, "t0_date": t0_date,
                 "regime": panel_builder.theme_regime(tid), "theme": tid,
                 "mispricing_mode": "value", "label": label, "label_source": "crude_derived",
-                "notes": f"crude mechanical t0 month={t0m}; dd={sig['drawdown']:+.0%}"})
+                "notes": f"crude t0={t0m}; dd={sig['drawdown']:+.0%}; mshare={ms['mode']}"})
             for h, st in rr.items():
                 panel.write_returns(conn, pid, h, st)
             for k, v in feats.items():
@@ -165,7 +189,8 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
                     panel.set_feature(conn, pid, k, v)
             rows_built.append({"pid": pid, "ticker": ticker, "theme": tid, "t0": t0_date,
                                "label": label, "fwd": fwd_prim, "narrative": feats["narrative"],
-                               "free_float": feats["free_float"]})
+                               "free_float": feats["free_float"], "m_share": ms["m_share"],
+                               "ms_mode": ms["mode"]})
 
     # Impute missing free_float with the panel median so those rows aren't dropped from the crude
     # regression (current-float lookups are flaky; this is a crude control anyway).
@@ -243,11 +268,14 @@ def main(argv=None) -> int:
             print(f"\nCRUDE PANEL built: {len(rows)} rows  ({len(skips)} candidates skipped)")
             n_pos = sum(1 for r in rows if r["label"] == "positive")
             print(f"  labels: {n_pos} positive / {len(rows) - n_pos} hard_negative")
+            modes = Counter(r["ms_mode"] for r in rows)
+            print(f"  m_share modes: {dict(modes)}")
             for r in sorted(rows, key=lambda r: (r["theme"], r["ticker"])):
                 fwd = f"{r['fwd']*100:+.0f}%" if r["fwd"] is not None else "n/a"
+                ms = f"{r['m_share']:+.2f}" if r["m_share"] is not None else "  -  "
                 print(f"  {r['ticker']:6} {r['theme']:20} t0={r['t0']} {r['label']:13} "
                       f"{cfg['crude']['primary_horizon_weeks']}w={fwd:>6}  "
-                      f"narrative={r['narrative']:+.3f}")
+                      f"narrative={r['narrative']:+.3f}  m_share={ms}")
             if args.verbose and skips:
                 print("\n  skipped:")
                 for tk, th, why in skips:

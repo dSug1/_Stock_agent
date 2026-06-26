@@ -18,7 +18,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def now_iso() -> str:
@@ -246,9 +246,44 @@ def _migration_6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_7(conn: sqlite3.Connection) -> None:
+    # Stage A (D17) of the rigorous-panel escalation: point-in-time first-print fundamentals from SEC
+    # EDGAR companyfacts (D16), for m_share labelling. Stores EVERY reported period per concept with
+    # its `filed` date, so an as-of-t0 lookup can pick the latest period FILED <= t0 (leak-free, the
+    # Protocol 1 cardinal rule) — and survivorship-free, since filings persist after a delisting.
+    conn.executescript(
+        """
+        CREATE TABLE company_facts (
+            ticker       TEXT NOT NULL,
+            cik          TEXT,
+            concept      TEXT NOT NULL,        -- 'revenue' | 'shares'
+            unit         TEXT,                 -- 'USD' | 'shares'
+            period_start TEXT,                 -- YYYY-MM-DD (None for instantaneous facts)
+            period_end   TEXT NOT NULL,        -- YYYY-MM-DD
+            val          REAL,
+            filed        TEXT NOT NULL,        -- YYYY-MM-DD the value was first reported (PIT key)
+            form         TEXT,                 -- 10-K / 10-Q / ...
+            fy           INTEGER,
+            fp           TEXT,
+            PRIMARY KEY (ticker, concept, period_end, filed)
+        );
+        CREATE INDEX idx_cf_lookup ON company_facts (ticker, concept, filed);
+
+        CREATE TABLE company_facts_log (
+            ticker      TEXT PRIMARY KEY,
+            cik         TEXT,
+            status      TEXT,                  -- ok | partial | failed | no_cik
+            error       TEXT,
+            n_rows      INTEGER,
+            fetched_at  TEXT
+        );
+        """
+    )
+
+
 # Ordered list; index + 1 is the target user_version.
 _MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5,
-               _migration_6]
+               _migration_6, _migration_7]
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
