@@ -647,6 +647,308 @@ seed themes (breaks blocker 4). The label + fundamentals plumbing is now real; S
 
 ---
 
+## D19 (2026-06-26) — Stage C scaffolding: panel stratification diagnostics (Protocol 2.3)
+
+Built the representativeness meter that guides (and gates) the n≥100 expansion, before committing to
+the heavy coverage work. `src/hype_parser/panel_strata.py` (pure) + `config/panel.yaml::strata` +
+`scripts/5_panel.py --strata` + `tests/test_panel_strata.py` (5 tests; **120 total pass**).
+
+`evaluate_strata` reports n, positive/hard-negative counts + ratio, the **max share of positives in
+any rolling 12-month window** (the temporal-clustering metric, blocker 3), and the sector/regime/
+theme/era distributions — emitting a `flags` list of Protocol §2.3 violations (empty ⇒ stratified_ok).
+
+**Live read on the current panel (the Stage-C to-do list, quantified):**
+- **VIOLATIONS:** `n=57 < 100`; **`n_positive=4 < 50`** — the two binding constraints.
+- Already OK: sectors balanced (bio 28 / tech 29), regimes balanced (A 28 / B 29).
+- Weak: only **3 effective themes** (rag 29 / crispr 26 / mkras 2; ssm 0 — no EDGAR tickers) ⇒ the
+  4-theme collinearity (blocker 4); era spread is wide but rag-heavy in 2023.
+So the expansion must **~2× the names and ~12× the positives** → a much broader, delisted-inclusive
+universe + more seed themes. (With only 4 positives the temporal metric (0.50) is too noisy to trust
+yet — it becomes meaningful once positives grow.)
+
+**Why now:** turns "expand the panel" from a vibe into a measured target, and the same `--strata`
+check is the §2.3 gate the finished panel must pass before the kill-switch verdict counts. The two
+remaining Stage-C judgment calls (delisted **price source**; **universe/theme breadth**) are now teed
+up for the user — they were deliberately not picked unilaterally.
+
+---
+
+## D20 (2026-06-26) — Stage C coverage decisions + constituent-broadening built
+
+**User decisions (the two teed-up Stage-C forks):**
+1. **Price source = accept yfinance survivorship bias for now (free).** Proceed to a bigger panel on
+   yfinance; the kill-switch read stays explicitly **INDICATIVE** (delisted names drop out → failures/
+   hard-negatives under-counted → positive rate biased up). A survivorship-free price provider
+   (Sharadar/Norgate/EODHD) is the later swap for a *powered* verdict — same swap point as the
+   `project_data_provider_switch` memory. **The verdict tier is capped at INDICATIVE until then —
+   carry this caveat forward.**
+2. **Universe = more themes + broaden constituents** (the most rigorous option): seed ~10 more
+   cross-sector sub-themes AND harvest more constituents per theme, not just the top EDGAR-FTS hits.
+
+**Built now (the decision-free infra for #2):** EDGAR FTS **pagination** — `edgar_fts.fetch_yearly`
+gained `ticker_pages` (config `diffusion.yaml::ingest.edgar_ticker_pages=5`), paging hits via `from`
+to harvest ~50 filers/year/theme instead of ~10 (best-effort; stops past `total`). +2 tests (**122
+pass**). This broadens constituents for both new and existing themes on the next ingest.
+
+**Proposed ~10 new sub-themes (cross-sector, to break the 2-AI/2-bio collinearity — for sign-off
+before ingest):** bio/health — `glp1_obesity`, `radiopharma`, `adc_oncology`; energy/climate —
+`solid_state_battery`, `green_hydrogen`, `smr_nuclear`; deep-tech/semis — `quantum_computing`,
+`silicon_photonics`; AI/software — `ai_agents`; mobility — `evtol_uam`. (Spread: bio×3 / energy×3 /
+semis-quantum×2 / AI×1 / mobility×1.)
+
+**Next (the heavy coverage run, multi-step):** seed those themes into `themes_seed.yaml` (full query
+fields) → re-ingest all themes (diffusion engine; network-heavy, GDELT/SBIR 429-flaky but fail-open)
+→ `5_fundamentals.py --fetch` the new tickers → `--build-crude --rebuild` → `--strata` (must clear
+§2.3) → `--killswitch`. Expected to lift n past 100 and positives toward 50, at which point the
+m_share clause starts binding and the kill-switch finally yields an (indicative) read.
+
+---
+
+## D21 (2026-06-26) — Course-correction: hand-seeding themes is rejected; build theme DISCOVERY instead
+
+**Supersedes the "seed ~10 hand-picked themes" half of D20.** The user flagged that hand-populating
+the theme list **defeats the project's whole purpose** — early identification of *emerging* themes.
+Picking known themes is look-ahead: `glp1_obesity / adc_oncology / ai_agents` are "ship has sailed"
+(already mainstream), and `quantum_computing / green_hydrogen` have unproven/likely-unprofitable
+business models. Seeding any of these biases the panel toward already-hyped narratives — the opposite
+of "specialist slope rising while mainstream is still low."
+
+- **Confirmed state:** there is **no discovery module**. Themes enter only via the hand-written
+  `config/themes_seed.yaml` (loaded by `scripts/5_radar.py`). The Features §1.1 discovery engine
+  (cluster emergent docs → label) was **specced but never built**; "hand-seeded" has been a silent
+  carried gap.
+- **Correct path (to build):** **theme discovery** — a **broad, untargeted** document ingest (by
+  arXiv/bioRxiv *category*, not by theme keyword) → local embeddings → **clustering (HDBSCAN-style,
+  zero-Claude)** → the existing **diffusion nascency gate** (`β_spec` rising, `p_main` low) ranks the
+  emergent clusters → optional one-call Claude labelling of survivors. This makes the theme list an
+  *output*, not an input.
+- **Structural prerequisite (why it's non-trivial):** the current ~7,200-doc corpus was ingested with
+  **per-theme queries**, so it contains only the 4 seeded themes — there are no unknown themes in it
+  to discover. Discovery needs a **new broad category-based ingest mode**.
+- **`silicon_photonics`:** force-include as a tracked seed (user instruction) even once discovery
+  runs. Caveat: constituent linkage today is **EDGAR (listed filers only)**, so a pre-IPO/unlisted
+  candidate won't surface that way — surfacing unlisted names needs a doc-mined / S-1-pipeline
+  constituent source (folded into the discovery design).
+- **Still valid from D20:** the EDGAR-FTS **constituent pagination** (`edgar_ticker_pages`) — broader
+  constituents are useful regardless of how themes are chosen. The yfinance-bias / INDICATIVE-tier
+  decision also stands.
+
+**OPEN (user deferred — "read and decide later"):** the **discovery corpus scope** —
+(a) arXiv + bioRxiv/medRxiv by category; (b) + Hacker News / patents / grants; (c) cluster the
+existing corpus only (sub-themes, not real discovery). Build of the discovery module waits on this.
+
+---
+
+## D22 (2026-06-26) — Discovery redesigned: expert-jury convergence (couple-MB), not volume-clustering
+
+The v0.1 broad-ingest-and-cluster discovery spec was **rejected** by the user and replaced by
+`discovery_spec_v0.2.md`. This also **closes D21's open "corpus scope" question** — the answer is
+*none of broad-arXiv / +HN-patents / existing-corpus*; discovery uses **curated expert juries**, not a
+document corpus.
+
+User constraints + how v0.2 meets them:
+1. **"Several GB is too big — target a couple of MB."** Juries are sparse + annual → a few thousand
+   short signal rows ≈ **1–3 MB** (embed the *signal texts* only; no corpus). No bulk paper/patent
+   landing.
+2. **"Patents: too broad, too noisy."** **Dropped** from discovery (at most a later targeted
+   confirmation).
+3. **"Best use of insiders' knowledge — awards, recognitions, breakthrough therapies (e.g. the 2001
+   internet award to Louis Pouzin)."** These are **already in the registry** (`config/sources.yaml`,
+   `edge_type: awards`, with `jury_credibility` + `diffusion_position`): **leading** juries FIND
+   nascency (MIT TR-10, R&D 100, Fierce 15, RSA Sandbox, DARPA/IARPA BAAs); **bridge** = FDA BTD;
+   **denominator** = Nobel/Turing/Lasker — the registry already notes these *"can TRIGGER diffusion but
+   do not FIND nascency."* The Pouzin example = a **denominator** signal (recognition arrived; sets the
+   clock, doesn't start it). A theme is discovered from the **convergence of independent leading
+   juries** on the same area (credibility-weighted), not from volume. These juries are **already being
+   snapshotted by the D5 forward archive** — discovery just **parses** the snapshots (no new ingest).
+4. **"Use positions of specialized investment funds (2_Funds_parser)."** Reuse (D3) its
+   `module_3/bridge.py` **`new_positions`** per security; specialist funds' *new* positions are a
+   capital jury alongside the awards.
+5. **"A theme may take years to be broadly recognized — associate a time horizon."** Every discovered
+   theme carries an estimated **runway (years)** from which jury tiers fired + the diffusion curve
+   position (leading-only & low `p_main` → 2–5 yr; bridge → 1–3 yr; denominator/high `p_main` → ~0,
+   too late), calibrated on historical first-leading-jury → mainstream-inflection lags. **Consequence:**
+   the panel's forward-return horizon `H` must become **theme-horizon-aware** (multi-year), not a fixed
+   13/26/52-week / 3–18-month window — a spec change flagged for the panel.
+
+Reuses D4 (registry = the jury catalogue), D5 (forward archive already captures the juries), the
+diffusion engine (measures each promoted theme's curve), and `2_Funds_parser` (D3). Smallest proving
+slice: parse the ~5 leading juries + one specialist-fund feed → embed → show convergence groups for the
+last few years (couple of MB, no Claude). **OPEN:** jury weights / specialist-fund definition / horizon
+calibration (⚙, set at build). Discovery build awaits the user's go on v0.2.
+
+---
+
+## D23 (2026-06-26) — Expanded the LEADING-jury catalogue (web research, broad-industry)
+
+The user asked to "work harder on `diffusion_position: leading`" and parse the web for jury sources
+across more industries (fintech, internet, cybersecurity, semiconductors, social, batteries, sensors,
+opto-electronics, e-commerce, consumer, software, …). Ran **4 parallel research agents** (deep-tech
+hardware / software-cyber-AI / consumer-fintech / cross-industry+gov+bio), each web-verifying sources.
+Added **33 new leading juries to `config/sources.yaml`** (registry now **108 sources, 79 leading**, no
+dupes, YAML validated). Industry coverage now spans every named sector:
+
+- **semis:** EE Times Silicon 100 (best — ~100 private startups, ~40%/yr turnover), SEMI S3, DARPA ERI,
+  Elektra Start-up.
+- **sensors / photonics:** Best of Sensors, SPIE Startup Challenge (pre-revenue), SPIE Prism.
+- **batteries/energy:** BloombergNEF Pioneers, ARPA-E (open CSV).
+- **robotics / quantum / materials:** RBR50, The Quantum Insider, JEC Composites.
+- **fintech / cyber / software-cloud:** Forbes Fintech 50, CB Insights (AI100/Fintech100/RetailTech100/
+  DigitalHealth50), SC Awards Emerging, Black Hat Arsenal, Gartner Cool Vendors, CNCF Sandbox, GitHub
+  Accelerator.
+- **consumer / marketplaces / cross-industry:** a16z Marketplace 100, Product Hunt, WEF Tech Pioneers,
+  Forbes AI 50 / Next-Billion-Dollar, CNBC Disruptor 50, In-Q-Tel, LinkedIn Top Startups, FC Next Big
+  Things.
+- **biotech/medtech + gov:** Endpoints 11, MedTech Innovator, Fierce Medtech, ARPA-H, NSF Convergence
+  Accelerator, EIC Accelerator/Pathfinder.
+
+Key build guidance baked into the rows: **`access_method: api` = machine-readable, build first** (YC
+yc-oss JSON, CNCF `landscape.yml`, ARPA-E data.gov CSV, Product Hunt API, EIC/CORDIS); the rest scrape
+the OD-2 forward-archive snapshots. **Private/unlisted-firm sources flagged** (In-Q-Tel, SEMI S3, SPIE
+Startup Challenge, EIC, Fierce Medtech, MedTech Innovator, Forbes/CB-Insights private-only) — these are
+the `theme_orgs` route to pre-IPO candidates (the silicon_photonics goal). **Denominator/people-prize/
+lagging sources explicitly excluded** (IEEE Internet Award, Internet Hall of Fame, Webby, Deloitte Fast
+500, Inc 5000, Prix Galien core, BIO awards, Rock Health tracker). Access gotchas recorded in the row
+notes (Forbes/WEF/FC 403 bot-blocks → VC mirrors; CB Insights / Gartner / Cleantech 100 full lists
+gated → reconstruct from PRs; Best-of-Sensors overwrites → Wayback).
+
+Registry is still frozen at v1 (D4) — these are catalogue additions; re-seed + re-freeze a new version
+when the discovery parsers are built. Refines `discovery_spec_v0.2.md` §2 (jury set).
+
+---
+
+## D24 (2026-06-26) — Discovery output split: LISTED (investable) vs PRIVATE (watchlist)
+
+User requirement: discovery must **categorize public-listed vs private companies** so listed names can
+be invested and private ones tracked. Added to `discovery_spec_v0.2.md` (§4a + §7 schema):
+
+- Every surfaced `org_name` is resolved against the SEC ticker map (`company_tickers.json`, already in
+  `fundamentals.py`) → `listing_status ∈ {listed, private, unknown}`.
+- **Track A — INVESTABLE (listed):** carries ticker/cik → feeds the diffusion/panel/screener.
+- **Track B — WATCHLIST (private):** no ticker → `listing_watch=1`, monitored on EDGAR for
+  **S-1/F-1/424B/S-4**; first filing flips it private→listed (`became_listed_at`) and into Track A —
+  the IPO itself is often the re-rating catalyst, so the flip is a signal. (The silicon_photonics case.)
+- `unknown` = low-confidence name match → queued for manual/Claude resolution.
+- `theme_orgs` schema updated accordingly. Also rewrote the **handoff brief** to a clean,
+  comprehensive D1–D23 state + the two workstreams (panel escalation; discovery) so a fresh session can
+  continue from it.
+
+---
+
+## D25 (2026-06-26) — First-run 10-yr awardee backfill + specialist-fund cross-reference
+
+Two user requirements for the discovery module; both specced in `discovery_spec_v0.2.md`.
+
+**(1) Historical awardee backfill (first run, last ~10 years)** — seeds the sub-theme DB with a
+`β_spec`/`p_main` *history* to gate nascency. Per-source route (spec §3a), cheap + tiny: (a) the jury's
+own **multi-year "past winners" archive** (URL-pattern-per-year scrape — SPIE Prism 2008→, BNEF
+Pioneers 2010→, Fierce 15 / Endpoints 11 per-year, Forbes/CB-Insights slugs, RBR50…); (b) **Wikidata
+SPARQL** (one query → all years, for prizes with a Wikidata item); (c) **Wayback Machine CDX** for
+sources that overwrite each year (Best of Sensors) — enumerate past annual snapshots + parse each;
+(d) **machine-readable APIs with full history** (YC yc-oss 2005→, ARPA-E data.gov, CNCF landscape git,
+Nobel, CORDIS, Product Hunt). Output `jury_signals` tagged by year (~low-thousands of rows total); the
+forward archive then takes over. `history_availability` flags which route.
+
+**(2) Specialist-fund list per theme + cross-reference module** — the analogue of the 21 biotech
+specialist funds curated in `2_Funds_parser` (its `funds` table: Baker Bros, RA Capital, Perceptive,
+OrbiMed, Avoro, BVF, Cormorant, Deerfield, EcoR1, RTW, Redmile, Boxer, …). Built
+**`config/specialist_funds.yaml`** (via 2 web-research agents) covering software/AI, semis, cyber,
+fintech, energy/cleantech, consumer/internet, space/defense/deep-tech, materials/mobility. **Research
+finding:** dedicated-specialist 13F filers are thick only in **biotech + software/growth** (Whale Rock,
+Altimeter, Coatue, Tiger, Light Street, Sylebra, Dragoneer, Durable); in semis/cyber/fintech/energy/
+space/materials most specialists are **private VCs that file no 13F** → those sectors fall back to
+**thematic-ETF holdings** (semis SMH/XSD, cyber CIBR/BUG, fintech Ribbit+FINX, batteries LIT/BATT, space
+UFO/ARKX/XAR, materials REMX/XME/URNM). Cross-reference module (spec §4b): reuse `2_Funds_parser/
+module_3 new_positions` (D3) and intersect {specialist new buys ∪ ETF additions} with a theme's Track-A
+(listed) tickers → **capital-jury confirmation** while the theme is early. 13F caveat: US-listed,
+quarterly, ~45-day-lagged, longs-only, crossover private books invisible → confirmation on *listed*
+names, not private discovery (private comes from the award juries → Track B). CIKs in the config are
+web-research best-effort → **verify on EDGAR at build**.
+
+---
+
+## D26 (2026-06-26) — Self-contained fund list + weekly release calendar (cache-max)
+
+- **Inlined the 21 biotech specialist funds** (names + CIKs from `2_Funds_parser`'s `funds` table) into
+  `config/specialist_funds.yaml` so it is one self-contained list (44 funds across 9 sectors). The
+  cross-ref still reuses 2_Funds' 13F holdings/`new_positions` pipeline (D3); CIKs flagged to
+  EDGAR-verify at build.
+- **Weekly-run efficiency / "don't parse every award every week" (`config/discovery_calendar.yaml` +
+  spec §5a):** the weekly run fetches a source only when **DUE** = publication window open AND this
+  period's edition not yet captured (per-source watermark). Most juries are **annual**, so they are a
+  no-op ~50 weeks/year; a typical week polls only the **continuous** feeds (YC/Product Hunt/CNCF/ARPA-E,
+  incrementally), any **award currently in its publish window**, and the **fund cross-ref only after a
+  13F deadline** (Feb/May/Aug/Nov). `annual_publish` lists best-effort publication months per jury that
+  self-correct as editions are captured.
+- **Caching is maximized (already-built mechanisms, reused):** diffusion SWR (`cache_ttl_days=7`,
+  `--no-fetch` = zero-network recompute), non-destructive-on-failure, content-hash forward archive
+  (writes only on change), conditional-GET (ETag/304) in the SEC client, foundational embedding/CIK
+  caches never cleared, and a **one-time** 10-yr backfill. `data/hype.db` is the source of truth; the
+  weekly run is mostly DB reads + a few due-this-week fetches.
+
+---
+
+## D27 (2026-06-26) — Theme discovery BUILT: jury-convergence smallest proving slice (schema v8)
+
+Workstream 2 leaves "specced, awaiting go" and becomes real. Built the end-to-end jury-convergence
+pipeline of `discovery_spec_v0.2.md` §9's "smallest first slice" — zero Claude, tiny footprint,
+fully tested. **140 tests pass** (was 122; +18). DB schema **v8** (additive).
+
+**What was built:**
+- **Schema v8 (`db.py::_migration_8`):** `jury_signals` (one embedded expert recognition),
+  `theme_convergence` (which signals back a discovered theme), `theme_orgs` (constituent roster,
+  `listing_status ∈ {listed,private,unknown}` + `listing_watch` + `became_listed_at`), and three
+  `themes` columns (`horizon_years`, `horizon_confidence`, `discovered_from`). All per spec §7.
+- **`src/hype_parser/discovery/`** package:
+  - `parsers.py` — **build-first machine-readable feeds**: `parse_yc`/`fetch_yc` (yc-oss JSON; a
+    *leading* startup jury naming private firms; batch→year) and `parse_nobel`/`fetch_nobel`
+    (a *denominator* jury). Parse-split-from-fetch + injectable-HTTP + fail-open. Plus
+    `parse_snapshot_source` — the framework that parses the OD-2 forward-archive snapshots of the
+    **scrape** juries (MIT-TR10 etc.) with a **labelled-crude** generic HTML extractor (per-source
+    extractors are the spec §8 follow-up). `API_FETCHERS` registry keys the clean feeds.
+  - `signals.py` — `jury_signals` upsert (dedup on `source_id+year+item_hash`), `annotate_from_registry`
+    (backfill position/credibility from `sources`), local embedding (`embed_pending`, reuses the
+    MiniLM encoder), `load_embedded_signals`.
+  - `convergence.py` — **the novel core.** Greedy cosine clustering (`tau_converge`), score by
+    `Σ_source credibility_weight × position_weight` over **distinct** sources (independence), promote
+    eligible groups (≥`min_signals` AND ≥`min_leading_juries` distinct *leading* sources) to `themes`
+    + `theme_convergence`. Horizon from which tiers fired (§5 heuristic). Denominator juries add **0**
+    to discovery score — they only move the horizon (the Pouzin nuance, encoded).
+  - `resolve.py` — listed/private classification via the SEC `company_tickers.json` name index
+    (reuses `fundamentals.py`); exact-normalized match (suffix-stripped) ⇒ listed, else token-Jaccard
+    ≥ `match_min_confidence` ⇒ listed, else private (Track B, `listing_watch=1`). `mark_listed` flips
+    private→listed on a registration filing. **Only `entity_type='company'` is rostered** — the crude
+    snapshot extractor's `unknown` entities (e.g. MIT-TR *headlines*) are NOT mislabelled as watchlist
+    firms (a real fix found in the live run).
+  - `funds.py` — specialist-fund cross-reference (reads `specialist_funds.yaml`; pure `cross_reference`
+    scorer weighting specialists above crossover/ETF). The 13F new-position *data* sourcing
+    (2_Funds reuse / EDGAR / ETF deltas) is the wiring follow-up; the scorer is provider-agnostic.
+- **`scripts/5_discovery.py`** — CLI: `--ingest` (+`--no-fetch`, `--since-year`), `--converge`,
+  `--list`, `--watch`. **`config/discovery.yaml`** holds every ⚙ knob (all unfit until the §9-step-5
+  back-test).
+- **Live proof (the slice working):** ingested 4 891 signals across **3 juries** (YC 4 583 leading +
+  Nobel 102 denominator + MIT-TR 103 leading, semantic-embedded), and convergence produced **5
+  discovered themes** where YC startups converge with MIT-TR breakthrough topics (each backed by 2
+  independent *leading* juries), horizon ≈3.5 yr; org resolution split **1 listed (Track A) / 489
+  private (Track B)** — correct, since YC firms are private. With only the single MIT-TR snapshot
+  source, convergence correctly **promotes nothing** (needs ≥2 independent leading juries) — the
+  honest underpowered state, mirroring the panel kill-switch discipline.
+
+**Two build bugs found + fixed in the live run (kept as a caution):** (1) `promote` suffixed theme_ids
+against *pre-existing* DB themes, so each re-run spawned `…-2` duplicates — fixed to dedup **within the
+run only** (stable slug ⇒ same theme_id ⇒ ON CONFLICT refresh; verified idempotent at 5). (2) the
+crude `unknown`-typed snapshot entities were polluting the listing-watch — fixed by rostering only
+`company`-typed entities.
+
+**OPEN / next (unchanged priorities):** `tau_converge` is unfit (at 0.55 the AI startups collapse into
+one 379-signal mega-cluster — the §8 calibration ⚙); per-source snapshot parsers (tag real companies +
+years) so the scrape juries contribute orgs; wire the historical backfill (§3a) and the specialist-fund
+13F provider (§4b); then feed discovered themes into the diffusion engine + panel and back-test against
+the hand-seeded baseline (§9 step 5). Horizon calibration (§5) still heuristic. Walkthrough:
+`spec/discovery_explained.md`.
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

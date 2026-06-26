@@ -28,6 +28,8 @@ ingest:
   ctgov_pause_s: 0
   hn_max_per_year: 200         # Wave 3: Hacker News builder-mindshare docs (feeds N_spec)
   edgar_pause_s: 0.12          # Wave 3: SEC EDGAR FTS rate limit (<=10 req/s)
+  edgar_ticker_pages: 5        # Stage C (D20): paginate EDGAR FTS hits per year to broaden the
+                               #   constituent harvest (1 = top page only; 5 = ~50 filers/year)
   grants_max_per_year: 100     # Wave 4: per-year cap for NIH/NSF/SBIR/PatentsView docs
   wiki_start:  "2015010100"
   cache_ttl_days: 7           # SWR: skip refetch if the theme's series was computed within this window

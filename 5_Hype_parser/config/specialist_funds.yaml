@@ -1,0 +1,103 @@
+# Specialist / sector-tilted 13F funds + thematic-ETF fallbacks, per theme-sector (decision D25).
+#
+# Analogous to the 21 biotech specialist funds curated in 2_Funds_parser (its `funds` table). Purpose:
+# cross these managers' 13F **new positions** (reuse 2_Funds_parser module_3 `new_positions`, D3)
+# against emerging-theme stock candidates (the discovery `theme_orgs` Track-A / `theme_tickers`) =
+# **smart-money confirmation** on a hype theme — a capital jury that fires while a theme is still early.
+#
+# type:
+#   specialist — pure-play / strongly sector-dedicated 13F filer (cleanest new-position signal)
+#   crossover  — tech/growth-tilted multi-sector 13F (useful but carries non-theme noise)
+#   etf        — read the ETF's HOLDINGS (N-PORT/daily file), not a discretionary 13F
+#
+# KEY FINDING (research, D25): outside biotech + software/growth, dedicated specialist 13F filers are
+# SPARSE — most sector specialists are PRIVATE VCs that file no 13F. So those sectors fall back to
+# thematic-ETF holdings deltas as the constituent/weight proxy. CIKs are best-effort from web research
+# -> VERIFY on EDGAR before hard-coding (blanks = to resolve).
+
+biotech_healthcare:
+  # Inlined from 2_Funds_parser `funds` table (self-contained per D26). The cross-ref still REUSES
+  # 2_Funds' 13F holdings/new_positions pipeline (D3) for these names; CIKs are from that DB.
+  funds:
+    - {name: Baker Brothers Advisors,     cik: "0001263508", type: specialist}
+    - {name: RA Capital Management,        cik: "0001346824", type: specialist}
+    - {name: Perceptive Advisors,         cik: "0001224962", type: specialist}
+    - {name: OrbiMed Advisors,            cik: "0001055951", type: specialist}
+    - {name: Avoro Capital Advisors,      cik: "0001633313", type: specialist}
+    - {name: BVF Partners,                cik: "0001056807", type: specialist}
+    - {name: Cormorant Asset Management,  cik: "0001583977", type: specialist}
+    - {name: Deerfield Management,        cik: "0001009258", type: specialist}
+    - {name: EcoR1 Capital,               cik: "0001587114", type: specialist}
+    - {name: RTW Investments,             cik: "0001493215", type: specialist}
+    - {name: Redmile Group,               cik: "0001425738", type: specialist}
+    - {name: Boxer Capital,               cik: "0002018299", type: specialist}
+    - {name: PFM Health Sciences,         cik: "0001442756", type: specialist}
+    - {name: SIO Capital Management,      cik: "0001482416", type: specialist}
+    - {name: Sofinnova Investments,       cik: "0001631134", type: specialist}
+    - {name: Janus Henderson (Biotech Fund), cik: "0001274173", type: crossover,    note: "group CIK"}
+    - {name: 5AM Ventures,                cik: "0001799883", type: vc}
+    - {name: ARCH Venture Partners,       cik: "0001274403", type: vc}
+    - {name: Atlas Venture,               cik: "0001924953", type: vc}
+    - {name: Versant Ventures,            cik: "0000908551", type: vc,            note: "CIK maps oddly in 2_Funds DB; verify on EDGAR"}
+    - {name: Athos (Struengmann Family Office), cik: "0001681662", type: family_office}
+  etf_fallback: [XBI, IBB, ARKG]
+
+software_ai_cloud:
+  funds:
+    - {name: Whale Rock Capital,   cik: "0001387322", type: specialist, note: "purest tech L/S; runs an AI flagship"}
+    - {name: Altimeter Capital,    cik: "",           type: specialist, note: "concentrated cloud/SaaS/AI"}
+    - {name: Light Street Capital, cik: "0001569049", type: specialist, note: "tech with semis/AI tilt"}
+    - {name: Sylebra Capital,      cik: "",           type: specialist, note: "mid-cap TMT, low-net L/S"}
+    - {name: Coatue Management,    cik: "0001135730", type: crossover,  note: "TMT; large private sleeve off-13F"}
+    - {name: Tiger Global,         cik: "0001167483", type: crossover,  note: "tech/internet; heavy venture book"}
+    - {name: Dragoneer,            cik: "0001602189", type: crossover,  note: "software/SaaS/fintech crossover"}
+    - {name: Durable Capital,      cik: "",           type: crossover,  note: "SMID-cap growth = good emerging overlap"}
+  etf_fallback: [IGV, WCLD, SKYY, ARKK]
+
+semiconductors:
+  funds:
+    - {name: Light Street Capital, cik: "0001569049", type: crossover, note: "semis-heavy but diversified"}
+  note: "NO pure-play semiconductor 13F fund exists -> ETF fallback is the PRIMARY read"
+  etf_fallback: [SMH, SOXX, XSD]   # XSD equal-weight = small/mid-cap breadth (best for diffusion screening)
+
+cybersecurity:
+  funds: []
+  note: "every cyber specialist is a PRIVATE VC (AllegisCyber/NightDragon/Ten Eleven/ForgePoint) -> ETF-only"
+  etf_fallback: [CIBR, BUG]        # BUG = purer pure-play; CIBR = universe/weight reference
+
+fintech:
+  funds:
+    - {name: Ribbit Capital, cik: "", type: specialist, note: "ONLY true fintech-specialist 13F; holds public graduates (Nubank/Robinhood/Coinbase)"}
+  etf_fallback: [FINX, ARKF]
+
+energy_cleantech_batteries:
+  funds:
+    - {name: Electron Capital Partners,  cik: "",           type: specialist, note: "BEST pure-play power/energy-transition L/S"}
+    - {name: Encompass Capital,          cik: "0001541901", type: specialist, note: "energy incl. transition sleeve"}
+    - {name: Cushing AM / NXG,           cik: "0001280965", type: specialist, note: "midstream + power/AI-energy crossover new-buys"}
+    - {name: Zimmer Partners,            cik: "0001565854", type: crossover,  note: "utility-tilted multi-sector"}
+    - {name: Clean Energy Transition LLP, cik: "",          type: specialist, note: "UK; US-listed longs only (partial view)"}
+  note: "13F layer here = power/utilities/transition; for batteries/solar/storage sub-themes use ETFs"
+  etf_fallback: [ICLN, TAN, LIT, BATT, QCLN]
+
+consumer_internet_ecommerce_social:
+  funds:
+    - {name: Whale Rock Capital, cik: "0001387322", type: specialist, note: "best consumer/internet new-buy signal (NFLX/Sea/Coupang adds)"}
+    - {name: Durable Capital,    cik: "",           type: crossover,  note: "SMID consumer-discretionary tilt"}
+    - {name: Lone Pine Capital,  cik: "0001084150", type: crossover,  note: "growth generalist, consumer names"}
+  etf_fallback: [XRT, IBUY, ONLN, SOCL, FDN]
+
+space_defense_robotics_deeptech:
+  funds:
+    - {name: ARK Invest,      cik: "0001697748", type: etf,       note: "ARKX/ARKQ roll into its 13F; BEST single deep-tech/space source (not legacy CIK 894031)"}
+    - {name: Baillie Gifford, cik: "0001088875", type: crossover, note: "long-horizon growth incl. space; US-listed only"}
+  note: "mostly private VC (Founders Fund/Lux/DCVC file no 13F) -> ETF-heavy"
+  etf_fallback: [UFO, ARKX, SHLD, XAR, BOTZ, ROBO]   # XAR/ROBO equal-weight surface emerging mid/small-caps
+
+materials_mining_mobility:
+  funds:
+    - {name: SailingStone Capital, cik: "0001608904", type: specialist, note: "only true natural-resources-equity 13F; tiny (~$0.4B), energy-skewed"}
+    - {name: Paulson & Co,         cik: "0001035674", type: specialist, note: "junior-gold/critical-minerals developers (Perpetua, NovaGold)"}
+    - {name: Sprott AM,            cik: "0001277006", type: etf,        note: "uranium/critical materials, mostly via ETFs (URNM/URNJ)"}
+  note: "no pure EV/mobility 13F specialist -> ETF-only for that sub-cluster"
+  etf_fallback: [REMX, XME, COPX, URNM, LIT, DRIV, KARS]

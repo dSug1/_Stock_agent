@@ -228,6 +228,8 @@ def main(argv=None) -> int:
                    help="build the crude indicative panel (mechanical t0 + PIT proxies; D14)")
     p.add_argument("--theme", action="append", help="limit --build-crude to theme id(s)")
     p.add_argument("--rebuild", action="store_true", help="clear prior crude_derived rows first")
+    p.add_argument("--strata", action="store_true",
+                   help="report panel stratification vs Protocol 2.3 targets")
     p.add_argument("--list", action="store_true")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
@@ -285,6 +287,25 @@ def main(argv=None) -> int:
                 print(f"  {k}: {v}")
             if verdict.get("underpowered"):
                 print("  -> NOT a verdict (crude/indicative). Escalate to n>=100 + m_share for power.")
+            acted = True
+
+        if args.strata:
+            st = cfg.get("strata", {})
+            rep = panel_strata.strata_from_panel(
+                conn, min_n=st.get("min_n", 100), min_positive=st.get("min_positive", 50),
+                max_temporal_share=st.get("max_temporal_positive_share", 0.50),
+                min_sectors=st.get("min_sectors", 2),
+                required_regimes=tuple(st.get("required_regimes", ("A", "B"))))
+            print("PANEL STRATIFICATION (Protocol 2.3):")
+            for k in ("n", "n_positive", "n_hard_negative", "n_easy_negative", "pos_neg_ratio",
+                      "temporal_positive_share", "eras", "sectors", "regimes", "themes"):
+                print(f"  {k}: {rep[k]}")
+            if rep["flags"]:
+                print("  VIOLATIONS (Stage C must fix):")
+                for f in rep["flags"]:
+                    print(f"    - {f}")
+            else:
+                print("  -> stratified OK (Protocol 2.3 satisfied)")
             acted = True
 
         if args.killswitch:

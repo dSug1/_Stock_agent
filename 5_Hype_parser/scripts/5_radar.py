@@ -181,7 +181,8 @@ def _process_theme(conn, t, *, embedder, params, ing, do_fetch):
         if t.get("edgar_query"):
             edgar_yearly, edgar_tickers = edgar_fts.fetch_yearly(
                 t["edgar_query"], start_year=ing["arxiv_start_year"], end_year=end_year,
-                sleep_s=ing.get("edgar_pause_s", edgar_fts.RATE_LIMIT_SLEEP))
+                sleep_s=ing.get("edgar_pause_s", edgar_fts.RATE_LIMIT_SLEEP),
+                ticker_pages=ing.get("edgar_ticker_pages", 1))
             if edgar_yearly:
                 T.write_theme_edgar(conn, tid, edgar_yearly)
             if edgar_tickers:

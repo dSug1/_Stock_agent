@@ -1,0 +1,48 @@
+# Theme-discovery (jury-convergence) parameters — decisions D22-D26; spec/discovery_spec_v0.2.md.
+#
+# Every value here is an OPEN PARAMETER (⚙) — set by principle, NOT yet fitted. Convergence and
+# horizon calibration are unfit until the discovery back-test against the hand-seeded baseline
+# (spec §9 step 5). Frozen per registry version once chosen, like the diffusion knobs.
+
+# --- convergence clustering (spec §4) -----------------------------------------
+convergence:
+  tau_converge: 0.55          # cosine ≥ this links two jury signals into the same group (MiniLM scale;
+                              #   diffusion uses 0.45 for membership — convergence is stricter so distinct
+                              #   themes don't merge). ⚙ to tune on the back-test.
+  min_signals: 3              # a group needs ≥ this many signals to be a candidate theme
+  min_leading_juries: 2       # ...AND ≥ this many DISTINCT *leading* sources (independence; denominator
+                              #   juries do not count toward promotion — they only set the horizon, §5)
+  top_k_themes: 40            # promote at most this many top-scoring groups per run
+
+# --- jury weighting (spec §4 step 3) ------------------------------------------
+# score = Σ over distinct sources in the group of  credibility_weight × position_weight.
+# Independence is by DISTINCT source_id (one jury naming N entities in a group counts once).
+credibility_weight:           # from sources.jury_credibility
+  high:   1.0
+  medium: 0.6
+  low:    0.3
+  na:     0.5                 # science/agency feeds with no explicit jury grade
+position_weight:              # from sources.diffusion_position — denominator adds 0 to DISCOVERY score
+  leading:     1.0
+  bridge:      0.5
+  denominator: 0.0
+
+# --- time horizon / runway (spec §5) ------------------------------------------
+# Heuristic tiers from which jury positions fired (calibration against p_main inflection = TODO, §5).
+# Each theme gets horizon_years + a confidence band; confidence stays 'heuristic' until calibrated.
+horizon:
+  leading_only:  {years: 3.5, band: [2.0, 5.0]}   # early, long runway — enter + hold long
+  bridge_fired:  {years: 2.0, band: [1.0, 3.0]}   # mid-diffusion
+  denominator_fired: {years: 0.5, band: [0.0, 1.0]}  # recognition arrived — likely too late, flag it
+  confidence: heuristic
+
+# --- listed/private resolution (spec §4a) -------------------------------------
+resolve:
+  match_min_confidence: 0.90  # SEC ticker-map name match ≥ this ⇒ listed (carry ticker); else private/
+                              #   unknown. Conservative: a wrong ticker is worse than a missed one.
+  listing_watch_forms: [S-1, F-1, 424B4, S-4]   # private→listed flip triggers (EDGAR watch, Track B)
+
+# --- specialist-fund cross-reference (spec §4b; config/specialist_funds.yaml) --
+funds:
+  crossover_weight: 0.5       # crossover/VC funds carry non-theme noise → weight below pure specialists
+  specialist_weight: 1.0

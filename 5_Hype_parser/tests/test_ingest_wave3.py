@@ -81,6 +81,39 @@ def test_edgar_fetch_yearly_aggregates():
     assert tickers["NTLA"] == 4 and tickers["CRSP"] == 4
 
 
+def test_edgar_fetch_yearly_paginates_to_broaden_constituents():
+    # Stage C (D20): ticker_pages>1 pages through hits via `from`, harvesting MORE filers per year.
+    PAGES = {
+        0: '{"hits":{"total":{"value":42},"hits":[{"_source":{"display_names":["A Co (AAA) (CIK 1)"]}}]}}',
+        10: '{"hits":{"total":{"value":42},"hits":[{"_source":{"display_names":["B Co (BBB) (CIK 2)"]}}]}}',
+        20: '{"hits":{"total":{"value":42},"hits":[{"_source":{"display_names":["C Co (CCC) (CIK 3)"]}}]}}',
+    }
+
+    def get(url):
+        frm = 0
+        if "from=" in url:
+            frm = int(url.split("from=")[1].split("&")[0])
+        return PAGES[frm]
+
+    yearly, tickers = edgar_fts.fetch_yearly(
+        "q", start_year=2022, end_year=2022, http_get=get, sleep_s=0, ticker_pages=3)
+    assert yearly == {2022: 42}
+    assert set(tickers) == {"AAA", "BBB", "CCC"}          # all three pages harvested
+
+
+def test_edgar_fetch_yearly_paging_stops_past_total():
+    # total=5 < page size 10 -> no extra page requests even with ticker_pages=5
+    calls = {"n": 0}
+
+    def get(url):
+        calls["n"] += 1
+        return '{"hits":{"total":{"value":5},"hits":[{"_source":{"display_names":["X (XXX) (CIK 1)"]}}]}}'
+
+    edgar_fts.fetch_yearly("q", start_year=2022, end_year=2022, http_get=get, sleep_s=0,
+                           ticker_pages=5)
+    assert calls["n"] == 1                                # only page 0 (total < page size)
+
+
 def test_edgar_fetch_yearly_failopen():
     def boom(url):
         raise ConnectionError("down")

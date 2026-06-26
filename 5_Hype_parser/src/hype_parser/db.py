@@ -9,6 +9,9 @@ Tables (schema v1):
                         the OD-2 split: can the panel era be reconstructed PIT?)
   registry_versions   — immutable frozen snapshots of the registry for PIT pinning
                         (Protocol 1: a run pins to a registry version frozen <= t).
+
+Schema grows by additive migrations only (v1..v8); see each ``_migration_N`` for the table
+it adds. v8 adds the theme-discovery jury-convergence tables.
 """
 
 import logging
@@ -18,7 +21,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def now_iso() -> str:
@@ -281,9 +284,80 @@ def _migration_7(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_8(conn: sqlite3.Connection) -> None:
+    # Theme discovery — jury-convergence model (D22-D26; spec/discovery_spec_v0.2.md). Additive,
+    # tiny (a couple of MB target). The expert juries are ALREADY in `sources` (edge_type=awards,
+    # tagged diffusion_position + jury_credibility) and ALREADY snapshotted by the OD-2 forward
+    # archive — discovery PARSES those snapshots (+ a few clean APIs) into structured recognitions:
+    #
+    #   jury_signals      — one expert recognition (an award/finalist/designation/RFS), embedded
+    #                       locally so convergence is cosine geometry, not volume.
+    #   theme_convergence — which signals back a discovered theme (the convergence group membership).
+    #   theme_orgs        — the constituent roster, classified listed vs private (Track A investable /
+    #                       Track B watchlist + EDGAR listing-watch, D24). Listed rows carry ticker/cik.
+    #   themes (+cols)    — horizon_years/confidence (the multi-year runway, D22 §5) and discovered_from
+    #                       (jury_convergence vs hand-seeded), so discovered themes are distinguishable.
+    conn.executescript(
+        """
+        CREATE TABLE jury_signals (
+            signal_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id          TEXT NOT NULL,
+            diffusion_position TEXT,                 -- leading | bridge | denominator (from sources)
+            jury_credibility   TEXT,                 -- high | medium | low | na (from sources)
+            year               INTEGER,              -- edition year of the recognition
+            item_text          TEXT NOT NULL,        -- short text embedded for convergence
+            entity             TEXT,                 -- the recognized company/technology/therapy
+            entity_type        TEXT,                 -- company | technology | person | unknown
+            url                TEXT,
+            item_hash          TEXT NOT NULL,        -- dedup key within (source_id, year)
+            embedding          BLOB,
+            embed_model        TEXT,
+            embed_dim          INTEGER,
+            ingested_at        TEXT NOT NULL,
+            UNIQUE (source_id, year, item_hash)
+        );
+        CREATE INDEX idx_jsig_source ON jury_signals (source_id, year);
+        CREATE INDEX idx_jsig_pos    ON jury_signals (diffusion_position);
+
+        CREATE TABLE theme_convergence (
+            theme_id   TEXT NOT NULL,
+            signal_id  INTEGER NOT NULL,
+            similarity REAL,
+            PRIMARY KEY (theme_id, signal_id),
+            FOREIGN KEY (theme_id)  REFERENCES themes (theme_id),
+            FOREIGN KEY (signal_id) REFERENCES jury_signals (signal_id)
+        );
+
+        CREATE TABLE theme_orgs (
+            org_id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            theme_id              TEXT NOT NULL,
+            org_name              TEXT NOT NULL,
+            source_id             TEXT,
+            listing_status        TEXT CHECK (listing_status IN ('listed','private','unknown')),
+            ticker                TEXT,
+            cik                   TEXT,
+            country               TEXT,
+            resolution_confidence REAL,
+            listing_watch         INTEGER NOT NULL DEFAULT 0,   -- 1 = private, monitor EDGAR for S-1
+            first_seen            TEXT,
+            last_seen             TEXT,
+            became_listed_at      TEXT,                          -- stamps the private->listed flip
+            UNIQUE (theme_id, org_name),
+            FOREIGN KEY (theme_id) REFERENCES themes (theme_id)
+        );
+        CREATE INDEX idx_torgs_theme  ON theme_orgs (theme_id);
+        CREATE INDEX idx_torgs_status ON theme_orgs (listing_status);
+
+        ALTER TABLE themes ADD COLUMN horizon_years      REAL;
+        ALTER TABLE themes ADD COLUMN horizon_confidence TEXT;
+        ALTER TABLE themes ADD COLUMN discovered_from    TEXT;
+        """
+    )
+
+
 # Ordered list; index + 1 is the target user_version.
 _MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5,
-               _migration_6, _migration_7]
+               _migration_6, _migration_7, _migration_8]
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

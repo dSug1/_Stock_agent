@@ -1,0 +1,73 @@
+# Release calendar for the weekly discovery run (decision D26).
+#
+# PROBLEM: most juries publish ONCE A YEAR — re-scraping all of them every week is wasteful and
+# risks rate-limits/bans. SOLUTION: the weekly run fetches a source only when it is "DUE":
+#   - its publication window is open for the current period, AND
+#   - we have NOT yet captured that period's edition (tracked by a per-source watermark).
+# Otherwise it serves the cached jury_signals — no network. Annual sources are thus a no-op for ~50
+# weeks/year; only continuous feeds + the just-published award + the post-13F-deadline funds run.
+#
+# Months below are BEST-EFFORT (1=Jan..12=Dec) and self-correct: once a year's edition is captured the
+# watermark advances and the real publish date is learned, so the window can be tightened over time.
+
+cadence_rules:                 # default behavior per source `cadence` (from sources.yaml)
+  continuous: poll_weekly_incremental      # watermark + conditional-GET; YC, Product Hunt, CNCF, ARPA-E, SAM.gov
+  daily:      poll_weekly_incremental
+  weekly:     poll_weekly
+  quarterly:  due_after_13f_deadline        # specialist funds (13F)
+  annual:     due_in_publish_window_until_captured
+
+# 13F lands ~45 days after quarter end — the ONLY weeks fund positions change. The fund cross-reference
+# (specialist_funds.yaml) runs only in these windows; biotech reuses 2_Funds_parser's already-fetched data.
+quarterly_13f_due_from:        # MM-DD the quarter's 13Fs start arriving
+  - {quarter_end: "03-31", due_from: "05-15"}
+  - {quarter_end: "06-30", due_from: "08-14"}
+  - {quarter_end: "09-30", due_from: "11-14"}
+  - {quarter_end: "12-31", due_from: "02-14"}
+
+# Per-source publication month(s) for ANNUAL juries. "Due" from the first listed month until that
+# year's edition is captured (then skip until next year). Sources not listed here default to
+# check_monthly_until_captured (cheap conditional-GET once/month).
+annual_publish:
+  global_cleantech_100:     [1]
+  spie_prism:               [1]      # Photonics West
+  spie_startup_challenge:   [1]
+  producthunt_golden_kitty: [1]
+  forbes_fintech_50:        [2]
+  fast_company_mic:         [3]
+  fc_next_big_things:       [10]
+  turing_award:             [3]
+  jec_composites:           [3]
+  cbinsights_lists:         [3, 10, 12]   # AI ~spring / fintech ~fall / digital-health ~Dec (staggered)
+  forbes_ai_50:             [4]
+  bnef_pioneers:            [4]
+  rbr50:                    [4]
+  a16z_marketplace_100:     [4]
+  cnbc_disruptor_50:        [5]
+  rsa_innovation_sandbox:   [5]      # at RSA Conference
+  sc_awards_emerging:       [5]      # at RSA
+  fierce_15:                [6]
+  best_of_sensors:          [6]
+  wef_tech_pioneers:        [6]
+  forbes_next_bn:           [6]
+  forbes_cloud_100_rising:  [8]
+  mit_tr35:                 [9]
+  endpoints_11:             [9]
+  breakthrough_prize:       [9]
+  lasker_award:             [9]
+  quantum_insider_lists:    [9]
+  linkedin_top_startups:    [9]
+  time_best_inventions:     [10]
+  nobel_prize:              [10]
+  fierce_medtech_15:        [10]
+  medtech_innovator:        [10]
+  ces_innovation_awards:    [11]     # honorees announced Nov (show in Jan)
+  rd_100:                   [11]
+  eetimes_silicon_100:      [11]
+  elektra_startup:          [11]
+  gp_bullhound_titans:      [11]
+  energy_storage_awards:    [11]
+  mit_tr_10_breakthrough:   [1, 2]   # late-Jan / Feb
+  # rolling (continuous) — NOT here: yc_batch_rfs, producthunt(top), cncf_sandbox, arpae_projects,
+  #   arpa_h, nsf_convergence, eic_accelerator, eic_pathfinder, darpa_eri, sam_gov, github_accelerator
+  # episodic — check monthly: xprize_healthspan
