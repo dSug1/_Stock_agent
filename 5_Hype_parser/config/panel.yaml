@@ -1,0 +1,49 @@
+# Panel + kill-switch configuration (Protocol sections 2-4).
+
+horizons_weeks: [13, 26, 52]      # forward-return windows (~3, 6, 12 months)
+
+# Kill-switch pass condition — PRE-REGISTERED before looking at any result (Protocol section 4).
+kill_switch:
+  narrative_key: narrative        # the Legibility x ThematicHeat composite (a PIT feature)
+  controls: [free_float, time_to_catalyst, drawdown, sector, era]
+  narrative_coef_sign: positive   # the narrative composite must POSITIVELY predict forward return
+  t_threshold: 2.0                # |t| >= 2 (~p<0.05) after controls
+  min_n: 100                      # below this the test is underpowered and is NOT a verdict (2.3)
+  primary_horizon_weeks: 52
+
+# --- Crude indicative panel (decision D14, "start crude, escalate") -----------------------------
+# Builds a small price-only panel with MECHANICAL t0 + PIT feature proxies to validate the pipeline
+# end-to-end. This is NOT the powered verdict (that needs n>=100 + m_share + PIT fundamentals). Every
+# value below is unfit and several gates are deliberately relaxed — see panel_builder.py's docstring.
+crude:
+  L: 12                       # trailing months for the beta_spec slope (same as diffusion.yaml)
+  beta_min: 0.0              # nascency: specialist slope must be STRICTLY above this (theme growing)
+  min_n_spec_level: 5        # nascency: >=5 specialist docs at t0 — the theme must actually EXIST
+                             #   (D15 fix for blocker 2: strict beta>0 + corpus floor kill the
+                             #   "narrative~0 at theme birth" t0-clustering)
+  use_p_main_gate: false     # GDELT N_main coverage is uneven (nonzero for crispr, 0 for the rest);
+  p_max: 0.50               #   so p_main is RECORDED as a feature but NOT gated in crude
+  min_history_months: 6      # estimability guard: no t0 until the theme has >=6 contiguous months
+                             #   of series (a slope on a left-edge near-empty series is meaningless)
+  # Mispricing gate (D15 fix for blocker 1): prefer BENCHMARK-RELATIVE cheapness so t0 captures
+  # idiosyncratic weakness, not market-wide selloffs (COVID-2020 dragged everything down at once).
+  use_relative_drawdown: true
+  relative_cheap: 0.10       # name must be >=10pp BELOW its sector benchmark's drawdown to qualify
+  benchmarks:                # theme -> sector ETF (the "is it just the whole sector falling?" control)
+    crispr_gene_editing: XBI
+    mkras_vaccine: XBI
+    rag: QQQ
+    ssm_mamba: QQQ
+  cheap_drawdown: 0.25       # absolute fallback when a benchmark series is unavailable
+  dd_lookback_months: 12     # trailing window for the drawdown
+  primary_horizon_weeks: 52  # horizon used for crude labelling + the crude kill-switch
+  hit_return: 1.00           # positive label: forward return >= +100% (the anchor bar); the
+                             #   kill-switch itself regresses CONTINUOUS return, so this only labels
+  max_per_theme: 40          # cap candidates per theme (keeps the yfinance fetch bounded)
+  price_start: "2014-01-01"  # earliest daily price fetch (covers the panel eras + drawdown lookback)
+  # time_to_catalyst is intentionally absent: no PIT catalyst calendar exists yet, so the crude
+  # control set drops it (the full panel restores it).
+  controls: [free_float, drawdown, sector, era]
+
+# yfinance is LOCAL-PERSONAL ONLY until a licensed provider is swapped (repo memory
+# project_data_provider_switch). The prices.fetch function is the swap point.

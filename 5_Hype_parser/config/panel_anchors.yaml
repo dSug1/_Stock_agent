@@ -1,0 +1,20 @@
+# Pre-registered calibration anchors for the labeled panel (Protocol section 2.4).
+# These are SANITY RAILS, not the training set (n=7 is overfitting per section 11). Verdicts are
+# pre-registered; forward returns are then computed to check the labelling premise holds on them.
+# t0_date = an approximate "base of the curve" entry week per the framework calibration cases.
+
+anchors:
+  - {name: "Elicio Therapeutics", ticker: ELTX, t0_date: "2024-06-03", regime: A,
+     theme: "mKRAS off-the-shelf cancer vaccine", mispricing_mode: value, label: positive}
+  - {name: "Roku", ticker: ROKU, t0_date: "2019-01-02", regime: B,
+     theme: "CTV advertising", mispricing_mode: rerating, label: positive}
+  - {name: "Cloudflare", ticker: NET, t0_date: "2020-01-02", regime: B,
+     theme: "edge compute / zero-trust", mispricing_mode: rerating, label: positive}
+  - {name: "Snap", ticker: SNAP, t0_date: "2020-06-01", regime: B,
+     theme: "digital-ad recovery + AR", mispricing_mode: value, label: positive}
+  - {name: "SoFi", ticker: SOFI, t0_date: "2021-06-01", regime: "A+B",
+     theme: "fintech / neobank", mispricing_mode: value, label: positive}
+  - {name: "CRISPR Therapeutics (cohort proxy)", ticker: CRSP, t0_date: "2020-01-02", regime: "A+B",
+     theme: "gene editing", mispricing_mode: rerating, label: positive}
+  - {name: "TScan Therapeutics", ticker: TCRX, t0_date: "2025-12-01", regime: A,
+     theme: "in-vivo TCR-T", mispricing_mode: value, label: hard_negative}

@@ -1,0 +1,9 @@
+# 5_Hype_parser extra dependencies (beyond the shared repo venv at ../.venv).
+# Install into the shared venv:  ../.venv/Scripts/python.exe -m pip install -r requirements.txt
+#
+# The diffusion engine's semantic embedder (D13). Pulls torch + transformers (large).
+# Without it, the engine falls back to a lexical hashing embedder (runnable but not semantic).
+sentence-transformers>=5.0
+
+# Already provided by the shared venv (listed for clarity): numpy, pandas, pyyaml,
+# feedparser, requests, yfinance.

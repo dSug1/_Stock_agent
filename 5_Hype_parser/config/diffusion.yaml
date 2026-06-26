@@ -1,0 +1,33 @@
+# Diffusion engine parameters (Features v0.2 section 1 + section 5).
+#
+# EVERY value here is a deferred parameter (marked ⚙ in the spec). They are INFORMATIONAL
+# defaults so the engine runs and renders; none is fit. Real values come from the labeled
+# point-in-time panel (Protocol section 3). Do not trust the nascency gate until then.
+
+embed:
+  model: "all-MiniLM-L6-v2"   # semantic sentence-transformer (falls back to hashing if not installed)
+
+membership:
+  tau_member: 0.45       # ⚙ cosine threshold for theme membership (semantic ST model; the lexical
+                         #    hashing fallback used ~0.20). Still ⚙ — validate/fit on the panel.
+
+diffusion:
+  L: 12                  # ⚙ trailing months for the beta_spec slope fit
+  beta_min: 0.0          # ⚙ nascency: specialist slope must exceed this (informational)
+  p_max: 0.50            # ⚙ nascency: mainstream penetration must stay below this (informational)
+
+ingest:
+  arxiv_start_year: 2018      # fetch arXiv per-year window from here -> the numerator gets history
+  arxiv_max_per_year: 120     # cap per year (paged at 100)
+  gdelt_start: "20170101000000"   # GDELT DOC 2.0 coverage starts ~2017
+  gdelt_pause_s: 4            # pause before each GDELT call (its free API rate-limits hard -> 429)
+  gdelt_retries: 3           # retries on 429 (exponential backoff)
+  gdelt_backoff_s: 8         # base backoff seconds (8, 16, 24...)
+  europepmc_max_per_year: 150  # Wave 2: biomedical specialist numerator (bioRxiv/medRxiv/PubMed)
+  ctgov_max_results: 300       # Wave 2: ClinicalTrials.gov trial-registration signal
+  ctgov_pause_s: 0
+  hn_max_per_year: 200         # Wave 3: Hacker News builder-mindshare docs (feeds N_spec)
+  edgar_pause_s: 0.12          # Wave 3: SEC EDGAR FTS rate limit (<=10 req/s)
+  grants_max_per_year: 100     # Wave 4: per-year cap for NIH/NSF/SBIR/PatentsView docs
+  wiki_start:  "2015010100"
+  cache_ttl_days: 7           # SWR: skip refetch if the theme's series was computed within this window

@@ -1,0 +1,67 @@
+# Seed sub-themes for the Wave-1 diffusion radar (Features 3 granularity rule: sub-theme grain).
+#
+# Wave 1 uses arXiv as the specialist numerator (tech/AI). Wave 2 (D9) adds biomedical specialist
+# numerators: europepmc_query (Europe PMC = bioRxiv/medRxiv/PubMed) and ctgov_query
+# (ClinicalTrials.gov registrations). A theme may set any subset of the *_query fields; all matching
+# docs join one corpus and feed N_spec together.
+#
+# Fields: id, label, keywords[], descriptor (centroid text), arxiv_query, gdelt_query, wiki_article,
+#         europepmc_query (Wave 2), ctgov_query (Wave 2),
+#         hn_query (Wave 3, Hacker News -> N_spec), edgar_query (Wave 3, SEC filings series + tickers),
+#         nih_query / nsf_query / sbir_query / patents_query (Wave 4, public capital + IP -> N_spec;
+#         patents needs PATENTSVIEW_API_KEY or it is skipped).
+
+themes:
+  - id: rag
+    label: "Retrieval-augmented generation (RAG)"
+    keywords: ["retrieval augmented generation", "retrieval-augmented generation", "RAG"]
+    descriptor: "Retrieval-augmented generation: language models augmented with external document retrieval to ground answers."
+    arxiv_query: 'all:"retrieval augmented generation" OR all:"retrieval-augmented generation"'
+    gdelt_query: '"retrieval augmented generation"'
+    wiki_article: "Retrieval-augmented generation"
+    hn_query: "retrieval augmented generation"
+    edgar_query: '"retrieval augmented generation"'
+    nsf_query: "retrieval augmented generation"
+    sbir_query: "retrieval augmented generation"
+    patents_query: "retrieval augmented generation"
+
+  - id: ssm_mamba
+    label: "State-space sequence models (Mamba)"
+    keywords: ["state space model", "selective state space", "Mamba", "S4"]
+    descriptor: "State-space sequence models such as S4 and Mamba: selective state-space architectures as an alternative to attention for long-sequence modeling."
+    arxiv_query: 'all:"state space model" OR all:"Mamba" OR all:"selective state space"'
+    gdelt_query: '"state space model" OR "Mamba model"'
+    wiki_article: "Mamba (deep learning architecture)"
+    hn_query: "Mamba state space model"
+    edgar_query: '"state space model"'
+    nsf_query: "state space model deep learning"
+    sbir_query: "state space machine learning"
+    patents_query: "state space sequence model"
+
+  - id: mkras_vaccine
+    label: "mKRAS off-the-shelf cancer vaccine"
+    keywords: ["mutant KRAS vaccine", "KRAS neoantigen", "off-the-shelf cancer vaccine", "amphiphile vaccine"]
+    descriptor: "Mutant-KRAS off-the-shelf therapeutic cancer vaccines targeting shared KRAS neoantigens (the Elicio anchor sub-theme)."
+    arxiv_query: 'all:"KRAS vaccine" OR all:"KRAS neoantigen"'
+    gdelt_query: '"KRAS vaccine" OR "mutant KRAS"'
+    wiki_article: "Cancer vaccine"   # "KRAS" 404s on the pageviews API; this resolves + is on-theme
+    europepmc_query: '("KRAS" AND vaccine) OR "KRAS neoantigen" OR "off-the-shelf cancer vaccine"'
+    ctgov_query: 'KRAS vaccine'
+    edgar_query: '"KRAS vaccine"'
+    nih_query: "KRAS vaccine"
+    sbir_query: "KRAS cancer vaccine"
+    patents_query: "KRAS neoantigen vaccine"
+
+  - id: crispr_gene_editing
+    label: "In vivo CRISPR gene-editing therapeutics"
+    keywords: ["CRISPR", "gene editing", "genome editing", "base editing", "in vivo CRISPR"]
+    descriptor: "In vivo CRISPR/Cas genome-editing therapeutics (the CRSP/NTLA/BEAM gene-editing cohort)."
+    arxiv_query: 'all:"CRISPR" AND (all:"gene editing" OR all:"genome editing")'
+    gdelt_query: '"CRISPR" "gene editing"'
+    wiki_article: "CRISPR gene editing"
+    europepmc_query: '"CRISPR" AND ("genome editing" OR "gene editing") AND (therap* OR "in vivo")'
+    ctgov_query: 'CRISPR gene editing'
+    edgar_query: '"CRISPR"'
+    nih_query: "CRISPR gene editing therapeutic"
+    sbir_query: "CRISPR gene editing"
+    patents_query: "CRISPR gene editing"
