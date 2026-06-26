@@ -1003,6 +1003,36 @@ that ranks them by **how nascent + accelerating** the jury recognition is, read 
 
 ---
 
+## D30 (2026-06-26) — Discovered themes wired into the diffusion engine (spec §4 step 4 / §9 step 5)
+
+Closes the loop: a discovered theme is now **measured by the same diffusion engine** as a hand-seeded
+one, so the §9-step-5 back-test (discovered vs hand-seeded baseline) is unblocked. Promote (D27) leaves
+a theme with a descriptor + entity keywords but **no diffusion queries**, so the radar couldn't ingest
+a corpus for it. `discovery/diffusion_bridge.py` derives them, zero-Claude.
+
+- **`derive_query(label, member_texts)`** — **label-first**: the convergent label IS the curated topic,
+  so the corpus query is built from it; member jury texts (YC blurbs) enrich **only** a content-less
+  label (they *drift* — sector tags like "defense/saas" pull an off-topic corpus). Bigrams rank above
+  unigrams. Also emits a **topic-facing descriptor** (`"{label}. {terms}"`) — the promote() descriptor
+  is the jury blurbs (startup-speak), too far from research abstracts.
+- **`assign_diffusion_queries(conn)`** writes `arxiv_query`/`gdelt_query`/`wiki_article`/`keywords`/
+  `descriptor` onto discovered themes (the columns already exist — no schema change). CLI
+  `5_discovery.py --diffusion-queries [--overwrite-queries]`. **`load_discovered_radar_themes`** shapes
+  them as radar theme-dicts; `5_radar.py --include-discovered` then processes them exactly like seeds.
+- **Live proof + a real finding:** first run gave **0 member-months** — the broad auto-query
+  (`drones OR defense OR industrials`) + a jury-blurb descriptor produced a corpus whose top cosine was
+  0.354, below `tau_member=0.45`. Fixing to a **label-first** query (`all:"drones"`) + topic descriptor:
+  max cosine **0.623**, **17 member-months / 59 N_spec**, top docs all genuine drone papers (UAV swarms,
+  vision-based drones, delivery) → **β_spec = +0.081, nascency_gate = True** (p_main = 0 only because
+  GDELT 429-rate-limited this run). The loop is proven end-to-end on a coherent theme.
+- **Carried limits (⚙, deferred to back-test):** the auto-query is a *labelled-crude* heuristic — good
+  for coherent clusters (drones/nuclear → clean queries), noisy for the `tau`-over-merged "AI in 2026"
+  blob and for short tokens ("ai" is filtered as <3 chars); spec §6 allows one cheap Claude *naming*
+  pass as the quality upgrade. `tau_member` is itself unfit (tuned for hand-crafted descriptors). 152
+  tests (was 147; +5). Walkthrough: `spec/discovery_explained.md` (§ "Measuring discovered themes").
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

@@ -75,6 +75,29 @@ split **1 listed / 489 private** — exactly right, because YC firms are private
 MIT-TR snapshot loaded, convergence **promotes nothing** (it needs ≥2 independent leading juries) — the
 honest underpowered state, the same discipline as the panel kill-switch.
 
+## Measuring discovered themes — the diffusion bridge (D30)
+
+Convergence promotes a theme, but to know *where on the diffusion curve* it sits — the whole point
+("entered early on the diffusion curve") — the diffusion engine has to measure its **β_spec / p_main**
+on real literature. That engine is query-driven, and a promoted theme has no queries. The bridge
+(`diffusion_bridge.py`) fills the gap, zero-Claude:
+
+1. `5_discovery.py --diffusion-queries` derives an `arxiv_query` / `gdelt_query` / `wiki_article` and a
+   topic descriptor for each discovered theme, **label-first** — the convergent label *is* the curated
+   topic, so the query is built from it; the member jury blurbs only enrich a content-less label
+   (they drift — YC sector tags like "defense/saas" pull an off-topic corpus). The columns already
+   exist on `themes`, so no schema change.
+2. `5_radar.py --include-discovered` then processes the discovered themes exactly like hand-seeded
+   ones — fetch corpus → embed → membership → `theme_series` → β_spec / p_main / nascency_gate.
+
+**A real finding from the first run:** it returned **0 member-months**. The broad auto-query
+(`drones OR defense OR industrials`) plus the jury-blurb descriptor gave a corpus whose best cosine was
+0.354 — below `tau_member = 0.45`. Switching to a **label-first** query (`all:"drones"`) and a
+topic-facing descriptor fixed it: max cosine **0.623**, **17 member-months / 59 N_spec**, top docs all
+genuine drone papers → **β_spec = +0.081, nascency_gate = True**. So a *discovered* theme is now
+measured by the same instrument as a hand-seeded one — which is exactly what the §9-step-5 back-test
+compares. (p_main read 0 only because GDELT was rate-limited that run.)
+
 ## What is deliberately unfinished (and why it's safe)
 
 - **`tau_converge` is unfit.** At 0.55 the AI startups collapse into one ~380-signal mega-cluster. The
@@ -100,6 +123,8 @@ src/hype_parser/discovery/
   convergence.py    greedy cluster → convergence score → promote themes + horizon
   resolve.py        listed/private classification (SEC ticker map) + listing-watch
   funds.py          specialist-fund cross-reference (config + scorer + 2_Funds 13F new-buys reader)
+  nascency.py       jury-timeline nascency gate / ranking (see discovery_nascency_explained.md)
+  diffusion_bridge.py  zero-Claude diffusion queries so the radar can measure discovered themes (D30)
 ```
 Schema: `db.py::_migration_8` (`jury_signals`, `theme_convergence`, `theme_orgs`, `themes` +cols).
 Tests: `tests/test_discovery.py` (18).

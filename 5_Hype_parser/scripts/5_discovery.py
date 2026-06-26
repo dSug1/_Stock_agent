@@ -26,7 +26,8 @@ import logging
 import sys
 
 from hype_parser import db
-from hype_parser.discovery import convergence, funds, nascency, parsers, resolve, signals
+from hype_parser.discovery import (convergence, diffusion_bridge, funds, nascency, parsers,
+                                   resolve, signals)
 from hype_parser.embed import get_embedder
 from hype_parser.registry import load_config
 
@@ -123,6 +124,18 @@ def cmd_watch(conn) -> None:
         print(f"  {r['org_name'][:48]:48} theme={r['theme_id']:34} src={r['source_id']}")
 
 
+def cmd_diffusion_queries(conn, args) -> None:
+    """Assign zero-Claude diffusion queries to discovered themes so the radar can measure their
+    corpus β_spec/p_main (spec §4 step 4). Then run: 5_radar.py --include-discovered."""
+    n = diffusion_bridge.assign_diffusion_queries(conn, overwrite=args.overwrite_queries)
+    print(f"assigned diffusion queries to {n} discovered themes "
+          f"({'overwrote existing' if args.overwrite_queries else 'skipped already-set'})")
+    for t in diffusion_bridge.load_discovered_radar_themes(conn):
+        print(f"  {t['id']:42} arxiv_query={t['arxiv_query']}")
+    if n:
+        print("\nnext: PYTHONPATH=src ../.venv/Scripts/python.exe scripts/5_radar.py --include-discovered -v")
+
+
 def cmd_rank(conn, args) -> None:
     """Rank discovered themes by the jury-timeline nascency gate (convergence × acceleration × recency)."""
     cfg = load_config(args.discovery_cfg)
@@ -180,6 +193,9 @@ def main(argv=None) -> int:
     p.add_argument("--persist-horizon", action="store_true", help="--rank: write refined horizon to themes")
     p.add_argument("--ingest", action="store_true", help="parse juries -> jury_signals + embed")
     p.add_argument("--converge", action="store_true", help="cluster -> score -> promote themes + resolve orgs")
+    p.add_argument("--diffusion-queries", action="store_true",
+                   help="assign zero-Claude diffusion queries to discovered themes (then 5_radar --include-discovered)")
+    p.add_argument("--overwrite-queries", action="store_true", help="--diffusion-queries: re-derive even if set")
     p.add_argument("--rank", action="store_true", help="rank discovered themes by the nascency gate (spec 3a)")
     p.add_argument("--funds", action="store_true", help="specialist-fund smart-money confirmation (spec 4b)")
     p.add_argument("--list", action="store_true", help="list discovered themes")
@@ -198,6 +214,8 @@ def main(argv=None) -> int:
             cmd_ingest(conn, args); did = True
         if args.converge:
             cmd_converge(conn, args); did = True
+        if args.diffusion_queries:
+            cmd_diffusion_queries(conn, args); did = True
         if args.rank:
             cmd_rank(conn, args); did = True
         if args.funds:

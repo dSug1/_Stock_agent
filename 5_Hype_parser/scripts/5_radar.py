@@ -30,6 +30,7 @@ import yaml
 
 from hype_parser import db, diffusion as D, embed as E, render_radar
 from hype_parser import themes as T
+from hype_parser.discovery import diffusion_bridge
 from hype_parser.ingest import (arxiv, clinicaltrials, edgar_fts, europepmc, gdelt,
                                 hackernews, nih_reporter, nsf, patentsview, sbir, wikipedia)
 
@@ -266,6 +267,8 @@ def main(argv=None) -> int:
     p.add_argument("--diffusion-config", default=DIFF_CFG)
     p.add_argument("--out", default=OUT)
     p.add_argument("--theme", action="append", help="limit to theme id(s); repeatable")
+    p.add_argument("--include-discovered", action="store_true",
+                   help="also process DISCOVERED themes (jury-convergence) that have diffusion queries (D30)")
     p.add_argument("--refresh", action="store_true", help="force refetch (ignore SWR TTL)")
     p.add_argument("--no-fetch", action="store_true", help="recompute from cache, no network")
     p.add_argument("--render-only", action="store_true", help="re-render stored series only")
@@ -293,6 +296,16 @@ def main(argv=None) -> int:
     conn = db.connect(args.db)
     embedder = None
     try:
+        if args.include_discovered:
+            disc = diffusion_bridge.load_discovered_radar_themes(conn)
+            if args.theme:
+                disc = [t for t in disc if t["id"] in set(args.theme)]
+            themes_cfg = themes_cfg + disc
+            log.info("included %d discovered themes (jury-convergence) with diffusion queries", len(disc))
+            if not disc:
+                log.warning("no discovered themes have diffusion queries yet — run "
+                            "5_discovery.py --diffusion-queries first")
+
         for t in themes_cfg:
             T.upsert_theme(conn, t)
 

@@ -76,9 +76,9 @@ instead of being a flat 3.5y tier default.
   and weights.
 - **It ranks, it does not yet gate.** Nothing is *dropped* for low nascency — that threshold belongs
   with the §9 back-test, alongside `tau`. For now `--rank` orders; it doesn't filter.
-- **Still the jury timeline, not the corpus curve.** Spec §4 step 4 also wants each theme's `β_spec` /
-  `p_main` measured on its *literature* via the diffusion engine — that heavier integration is the next
-  step. The jury timeline is the lighter, already-available nascency proxy.
+- **Jury timeline vs corpus curve — now both exist.** This gate is the lighter, always-available
+  signal; the corpus `β_spec`/`p_main` via the diffusion engine (D30, `diffusion_bridge.py`) is the
+  heavier one. They are complementary — fusing them into one rank is a follow-up.
 
 ## Run it
 

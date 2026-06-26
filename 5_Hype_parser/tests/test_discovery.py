@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from hype_parser import db
-from hype_parser.discovery import convergence, funds, nascency, parsers, resolve, signals
+from hype_parser.discovery import (convergence, diffusion_bridge, funds, nascency, parsers,
+                                    resolve, signals)
 from hype_parser.embed import HashingEmbedder
 from hype_parser.registry import load_config
 
@@ -236,6 +237,51 @@ def test_fund_config_readers():
     assert any(v["name"] == "Baker Brothers Advisors" for v in ciks.values())
     etfs = funds.sector_etfs(cfg)
     assert "SMH" in etfs["semiconductors"]
+
+
+# ─── diffusion bridge (queries for discovered themes) ───────────────────────
+
+def test_derive_query_from_label_topic():
+    q = diffusion_bridge.derive_query("What's next for drones")
+    assert "drones" in q["keywords"]                          # framing stripped, topic kept
+    assert 'all:"drones"' in q["arxiv_query"]
+    assert '"drones"' in q["gdelt_query"]
+    assert q["wiki_article"] == "Drones"
+
+
+def test_derive_query_label_first_ignores_drifting_member_terms():
+    # a present label is the topic; member sector-tags must NOT pollute the corpus query
+    q = diffusion_bridge.derive_query("drones", ["drones defense", "drones industrials saas"])
+    assert q["keywords"] == ["drones"]                        # member 'defense'/'industrials'/'saas' dropped
+
+
+def test_derive_query_enriches_only_content_less_label():
+    # only a label with no content terms falls back to member texts
+    q = diffusion_bridge.derive_query("The Future Of", ["warehouse robots automation", "robots logistics"])
+    assert "robots" in q["keywords"]
+
+
+def test_derive_query_degenerate_label_falls_back():
+    q = diffusion_bridge.derive_query("the of and")           # all stopwords
+    assert q["keywords"] and q["arxiv_query"]                 # never empty
+
+
+def test_assign_and_load_discovered_radar_themes(tmp_path):
+    conn = _conn(tmp_path)
+    conn.execute("INSERT INTO themes (theme_id,label,created_at,updated_at,discovered_from) "
+                 "VALUES ('disc:drones','What''s next for drones','c','u','jury_convergence')")
+    conn.execute("INSERT INTO jury_signals (signal_id,source_id,item_text,item_hash,ingested_at) "
+                 "VALUES (1,'mit_tr_10','autonomous delivery drones','h1','t')")
+    conn.execute("INSERT INTO theme_convergence (theme_id,signal_id,similarity) VALUES ('disc:drones',1,1.0)")
+    conn.commit()
+    assert diffusion_bridge.assign_diffusion_queries(conn) == 1
+    assert diffusion_bridge.assign_diffusion_queries(conn) == 0          # idempotent (skips already-set)
+    assert diffusion_bridge.assign_diffusion_queries(conn, overwrite=True) == 1
+    radar = diffusion_bridge.load_discovered_radar_themes(conn)
+    assert len(radar) == 1
+    t = radar[0]
+    assert t["id"] == "disc:drones" and 'all:"drones"' in t["arxiv_query"]
+    assert isinstance(t["keywords"], list)                              # parsed from JSON
 
 
 # ─── nascency gate / ranking ─────────────────────────────────────────────────
