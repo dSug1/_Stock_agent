@@ -949,6 +949,60 @@ the hand-seeded baseline (§9 step 5). Horizon calibration (§5) still heuristic
 
 ---
 
+## D28 (2026-06-26) — Specialist-fund 13F cross-reference wired to real 2_Funds data (spec §4b)
+
+Completes the §4b smart-money confirmation end-to-end. The D27 `funds.cross_reference` scorer was pure
+(no data source); now `funds.new_buys_from_2funds(db_path, cfg)` reads **real NEW 13F positions** from
+`2_Funds_parser/2_fundparser.db` — the D3/D25 reuse path.
+
+- **Definition** matches `module_3.bridge`'s `is_new`: a `(fund, ticker)` is new in a quarter if the
+  fund holds it then but did **not** the prior quarter; each fund's **latest filing per period** wins
+  (amendments). Implemented as **stdlib SQL** against the 2_Funds `holdings`/`funds` tables — we reuse
+  2_Funds' *signal output*, not its pandas code (the standalone rule, D3). Fund **type** is tagged by
+  CIK from `specialist_funds.yaml` (`cik_type_map`); the cross-ref weights pure specialists above
+  crossover/VC. Fail-open to `{}` if the DB is missing/unreadable.
+- **CLI:** `5_discovery.py --funds [--quarter YYYY-MM-DD] [--funds-db PATH]` crosses the newest quarter's
+  new buys against each discovered theme's Track-A tickers. **Live:** read **292 new specialist
+  positions / 208 tickers** (2026-03-31 vs 2025-12-31) from the 21 biotech funds; **no overlap** with
+  the current AI/drones/nuclear discovered themes (YC+MIT-TR) — correct, biotech 13F holders won't hold
+  them. It will fire when biotech/listed-heavy themes are discovered (Fierce 15 etc., once those juries
+  are parsed). 143 tests (was 140; +3, synthetic 2_Funds DB).
+- **Caveat (carried):** 13F is US-listed, quarterly, ~45-day-lagged, longs-only — confirmation on
+  *listed* names, not discovery of private ones (per spec §4b). The non-biotech sectors still fall back
+  to **thematic-ETF holdings deltas** (`specialist_funds.yaml::etf_fallback`); that ETF-delta provider
+  is the remaining §4b wiring (the 2_Funds reuse covers biotech today). Not persisted yet — surfaced as
+  a computed signal; a `theme_smart_money` table follows when the panel consumes it.
+
+---
+
+## D29 (2026-06-26) — Discovery nascency gate: rank themes by the jury-year timeline (spec §3a)
+
+Convergence (D27) scores a theme only by *how many* independent leading juries agree — so all 5 live
+themes tied at 1.6 and were indistinguishable. D29 adds the **nascency gate** (`discovery/nascency.py`)
+that ranks them by **how nascent + accelerating** the jury recognition is, read from the
+`jury_signals.year` timeline already ingested — zero network, zero Claude.
+
+- **Instrument reuse:** `beta_jury` = the diffusion engine's `beta_spec` (OLS of ln(1+N) over a recent
+  window) applied to **annual jury counts** instead of monthly corpus counts. Gaps are filled to real
+  contiguous years (a missing year is a real 0). `rank_score = convergence_score × (recency_floor +
+  recency) × (1 + max(0, beta_jury))` — fuses convergence (independent juries) × acceleration (β) ×
+  recency (share in the last few years). **Pure read** (recomputes from stored signals, the diffusion
+  compute-on-read pattern); nothing persisted unless `--persist-horizon`.
+- **Refined horizon (spec §5):** the runway estimate was tier-only in D27; now it is nudged within its
+  tier band by the timeline (all-recent + accelerating ⇒ long/early end; old/decelerating ⇒ short end),
+  optionally written back to `themes.horizon_years` with `horizon_confidence='timeline'`.
+- **CLI:** `5_discovery.py --rank [--persist-horizon] [--current-year N]`. **Live:** the 5 tied themes
+  spread out — "drones" tops (β +0.31, recency 0.69, ~4.1y runway = early), the `tau`-over-merged "AI in
+  2026" mega-cluster sinks (β −0.14, recency 0.36, ~2.5y = later-stage). Horizon now varies 2.5–4.1y
+  from data, not a flat 3.5y tier default. 147 tests (was 143; +4). Walkthrough:
+  `spec/discovery_nascency_explained.md`.
+- **Limits (carried):** β is coarse on sparse annual data (a tilt, not a rate); `--rank` *orders*, it
+  does not *gate*/drop (the nascency threshold belongs with the §9 back-test alongside `tau`); and this
+  is the jury-timeline proxy — the corpus `β_spec`/`p_main` via the diffusion engine (§4 step 4) is the
+  next, heavier integration.
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

@@ -46,3 +46,12 @@ resolve:
 funds:
   crossover_weight: 0.5       # crossover/VC funds carry non-theme noise → weight below pure specialists
   specialist_weight: 1.0
+
+# --- nascency gate / ranking (spec §3a, §4 step 4) ----------------------------
+# Rank discovered themes by how nascent + accelerating their expert-jury recognition is, measured from
+# the jury_signals YEAR timeline (reuses the diffusion β_spec instrument over annual jury counts).
+nascency:
+  slope_window_years: 6       # OLS β of ln(1+jury_count) over the last N years (the diffusion β_spec analog)
+  recent_window_years: 3      # "recent" = jury signals in the last N years (drives the recency share)
+  rank:                       # rank_score = convergence_score × (recency_floor + recency) × (1 + max(0,β))
+    recency_floor: 0.5        #   floor so a high-convergence theme with sparse years still ranks ⚙

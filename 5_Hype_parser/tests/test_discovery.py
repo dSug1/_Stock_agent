@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from hype_parser import db
-from hype_parser.discovery import convergence, funds, parsers, resolve, signals
+from hype_parser.discovery import convergence, funds, nascency, parsers, resolve, signals
 from hype_parser.embed import HashingEmbedder
 from hype_parser.registry import load_config
 
@@ -236,6 +236,112 @@ def test_fund_config_readers():
     assert any(v["name"] == "Baker Brothers Advisors" for v in ciks.values())
     etfs = funds.sector_etfs(cfg)
     assert "SMH" in etfs["semiconductors"]
+
+
+# ─── nascency gate / ranking ─────────────────────────────────────────────────
+
+def test_nascency_metrics_accelerating_and_recent():
+    counts = {2020: 1, 2021: 2, 2022: 4, 2023: 8}            # geometric growth -> positive slope
+    m = nascency.nascency_metrics(counts, slope_window_years=6, current_year=2024, recent_window_years=3)
+    assert m["accelerating"] is True and m["beta_jury"] > 0
+    assert m["first_year"] == 2020 and m["years_since_first"] == 4
+    assert m["recency"] == pytest.approx(12 / 15)            # 2022+2023 of 15 total
+
+
+def test_nascency_metrics_old_theme_low_recency():
+    m = nascency.nascency_metrics({2014: 5, 2015: 5}, slope_window_years=6, current_year=2024)
+    assert m["recency"] == 0.0 and m["years_since_first"] == 10
+
+
+def test_contiguous_series_fills_gaps():
+    periods, by = nascency._contiguous_year_series({2020: 1, 2023: 2})
+    assert periods == ["2020", "2021", "2022", "2023"]
+    assert by["2021"] == 0 and by["2022"] == 0               # gaps are real zeros, not skipped
+
+
+def test_rank_discovered_orders_and_refines_horizon(tmp_path):
+    conn = _conn(tmp_path)
+    for sid, cred in (("mit_tr_10", "high"), ("darpa_eri", "high")):
+        conn.execute("INSERT INTO sources (source_id,name,edge_type,diffusion_position,jury_credibility,"
+                     "add_date,created_at,updated_at) VALUES (?,?,'awards','leading',?,'d','c','u')",
+                     (sid, sid, cred))
+    # two themes: 'hot' = recent+accelerating, 'cold' = old. Same 2-jury convergence score.
+    plan = {
+        "disc:hot": [("mit_tr_10", 2022), ("darpa_eri", 2023), ("mit_tr_10", 2023), ("darpa_eri", 2023)],
+        "disc:cold": [("mit_tr_10", 2013), ("darpa_eri", 2014), ("mit_tr_10", 2014), ("darpa_eri", 2015)],
+    }
+    sid_seq = 0
+    for tid, sigs in plan.items():
+        conn.execute("INSERT INTO themes (theme_id,label,created_at,updated_at,discovered_from) "
+                     "VALUES (?,?,'c','u','jury_convergence')", (tid, tid))
+        for src, yr in sigs:
+            sid_seq += 1
+            conn.execute("INSERT INTO jury_signals (signal_id,source_id,diffusion_position,"
+                         "jury_credibility,year,item_text,item_hash,ingested_at) "
+                         "VALUES (?,?,'leading','high',?,?,?, 't')",
+                         (sid_seq, src, yr, f"t{sid_seq}", f"h{sid_seq}"))
+            conn.execute("INSERT INTO theme_convergence (theme_id,signal_id,similarity) VALUES (?,?,1.0)",
+                         (tid, sid_seq))
+    conn.commit()
+    ranked = nascency.rank_discovered(conn, CFG, current_year=2024)
+    assert [r["theme_id"] for r in ranked][0] == "disc:hot"   # recent+accelerating ranks first
+    hot = next(r for r in ranked if r["theme_id"] == "disc:hot")
+    cold = next(r for r in ranked if r["theme_id"] == "disc:cold")
+    assert hot["rank_score"] > cold["rank_score"]
+    lo, hi = CFG["horizon"]["leading_only"]["band"]
+    assert lo <= hot["refined_horizon_years"] <= hi
+    assert hot["refined_horizon_years"] > cold["refined_horizon_years"]   # recent ⇒ longer runway
+    # persistence path
+    assert nascency.persist_refined_horizon(conn, ranked) == 2
+    row = conn.execute("SELECT horizon_confidence FROM themes WHERE theme_id='disc:hot'").fetchone()
+    assert row["horizon_confidence"] == "timeline"
+
+
+def _build_2funds_db(path):
+    """Minimal 2_Funds_parser-shaped holdings DB. Fund 1 holds AAA both quarters (not new) + BBB only
+    in the current quarter (new); fund 1 also files an amendment for the current quarter that must win
+    (latest filing_date). Fund 2 holds CCC only current (new)."""
+    import sqlite3
+    c = sqlite3.connect(path)
+    c.executescript("""
+        CREATE TABLE funds (id INTEGER PRIMARY KEY, cik TEXT, name TEXT);
+        CREATE TABLE holdings (id INTEGER PRIMARY KEY AUTOINCREMENT, fund_id INT, filing_date TEXT,
+            period_of_report TEXT, ticker TEXT, shares INT);
+    """)
+    c.execute("INSERT INTO funds VALUES (1,'0001263508','Baker Brothers Advisors')")
+    c.execute("INSERT INTO funds VALUES (2,'0001009258','Deerfield Management')")
+    rows = [
+        (1, "2024-11-14", "2024-09-30", "AAA", 100),     # prior: fund1 holds AAA
+        (1, "2025-02-14", "2024-12-31", "AAA", 120),     # current: AAA still held (not new)
+        (1, "2025-02-14", "2024-12-31", "BBB", 50),      # current: BBB new
+        (1, "2025-01-10", "2024-12-31", "BBB", 999),     # earlier filing for same period -> must be ignored
+        (2, "2025-02-14", "2024-12-31", "CCC", 70),      # current: CCC new (fund2 had nothing prior)
+    ]
+    c.executemany("INSERT INTO holdings (fund_id,filing_date,period_of_report,ticker,shares) "
+                  "VALUES (?,?,?,?,?)", rows)
+    c.commit(); c.close()
+
+
+def test_new_buys_from_2funds(tmp_path):
+    path = str(tmp_path / "2funds.db")
+    _build_2funds_db(path)
+    sf = funds.load_specialist_funds(
+        str(Path(__file__).resolve().parents[1] / "config" / "specialist_funds.yaml"))
+    buys = funds.new_buys_from_2funds(path, sf)
+    assert set(buys) == {"BBB", "CCC"}                    # AAA held both quarters -> not new
+    assert buys["BBB"][0]["name"] == "Baker Brothers Advisors"
+    assert buys["BBB"][0]["type"] == "specialist"         # tagged from specialist_funds.yaml by CIK
+
+
+def test_new_buys_fail_open_on_bad_db(tmp_path):
+    assert funds.new_buys_from_2funds(str(tmp_path / "nonexistent.db")) == {}
+
+
+def test_cik_type_map():
+    cfg = funds.load_specialist_funds(
+        str(Path(__file__).resolve().parents[1] / "config" / "specialist_funds.yaml"))
+    m = funds.cik_type_map(cfg)
+    assert m["0001263508"] == "specialist"               # Baker Brothers
 
 
 def test_cross_reference_weights_specialists_above_crossover():

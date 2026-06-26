@@ -54,9 +54,17 @@ This is the heart.
    No match ⇒ **Track B (private)** — recorded with a `listing_watch` so EDGAR can be monitored for an
    S-1/F-1/424B/S-4, flipping it to listed on first filing (the IPO is often the re-rating catalyst).
 
-### 3. Inspect  (`--list`, `--watch`)
+### 3. Inspect + confirm  (`--list`, `--watch`, `--funds`)
 `--list` shows the discovered themes with their horizon, jury breakdown, and Track-A tickers; `--watch`
 lists the Track-B private firms under EDGAR listing-watch.
+
+`--funds` adds the **specialist-fund smart-money confirmation** (spec §4b, D28): it reads the newest
+quarter's **NEW 13F positions** from `2_Funds_parser`'s holdings DB (the D3 reuse — a `(fund, ticker)`
+is new if held this quarter but not last, latest filing per period winning) and crosses them against
+each discovered theme's Track-A tickers. A specialist opening a position in a theme constituent while
+the theme is still early is a *capital jury* — an independent expert vote, in money. Today the 21 funds
+are biotech, so this fires once biotech/listed-heavy themes are discovered; non-biotech sectors fall
+back to thematic-ETF holdings deltas (the remaining wiring).
 
 ## What the first live run showed (D27)
 
@@ -75,9 +83,10 @@ honest underpowered state, the same discipline as the panel kill-switch.
 - **Snapshot extractors are crude.** Until a per-source parser tags real **companies** (and the edition
   **year**), the scrape juries contribute to *convergence* (via their text) but not to the *org roster*
   — so a breakthrough **headline** is never mislabelled as a watchlist firm.
-- **The historical backfill (spec §3a) and the specialist-fund 13F provider (§4b) are not wired yet.**
-  The `funds.cross_reference` scorer is pure and ready; it just needs a new-position feed (2_Funds reuse
-  for biotech, EDGAR/ETF deltas elsewhere).
+- **The specialist-fund 13F provider (§4b) is wired for biotech** (D28 — `new_buys_from_2funds` reads
+  the 2_Funds holdings DB). The **ETF holdings-delta** fallback for the non-biotech sectors is the
+  remaining piece. **The historical backfill (spec §3a)** for the scrape juries is not wired (the YC +
+  Nobel APIs already carry full history).
 - **No Claude anywhere** — convergence is cosine geometry over local embeddings, per the build economics.
 
 ## Files
@@ -90,7 +99,7 @@ src/hype_parser/discovery/
   parsers.py        YC + Nobel feeds (build-first) + crude snapshot-jury framework
   convergence.py    greedy cluster → convergence score → promote themes + horizon
   resolve.py        listed/private classification (SEC ticker map) + listing-watch
-  funds.py          specialist-fund cross-reference (config + pure scorer)
+  funds.py          specialist-fund cross-reference (config + scorer + 2_Funds 13F new-buys reader)
 ```
 Schema: `db.py::_migration_8` (`jury_signals`, `theme_convergence`, `theme_orgs`, `themes` +cols).
 Tests: `tests/test_discovery.py` (18).

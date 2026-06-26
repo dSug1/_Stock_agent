@@ -26,12 +26,14 @@ import logging
 import sys
 
 from hype_parser import db
-from hype_parser.discovery import convergence, parsers, resolve, signals
+from hype_parser.discovery import convergence, funds, nascency, parsers, resolve, signals
 from hype_parser.embed import get_embedder
 from hype_parser.registry import load_config
 
 DEFAULT_DB = "data/hype.db"
 DISCOVERY_CFG = "config/discovery.yaml"
+SPECIALIST_FUNDS_CFG = "config/specialist_funds.yaml"
+FUNDS_DB = "../2_Funds_parser/2_fundparser.db"   # reuse 2_Funds' 13F holdings (D3/D25)
 
 log = logging.getLogger("5_discovery")
 
@@ -121,12 +123,65 @@ def cmd_watch(conn) -> None:
         print(f"  {r['org_name'][:48]:48} theme={r['theme_id']:34} src={r['source_id']}")
 
 
+def cmd_rank(conn, args) -> None:
+    """Rank discovered themes by the jury-timeline nascency gate (convergence × acceleration × recency)."""
+    cfg = load_config(args.discovery_cfg)
+    ranked = nascency.rank_discovered(conn, cfg, current_year=args.current_year)
+    if not ranked:
+        print("no discovered themes to rank — run --ingest then --converge")
+        return
+    if args.persist_horizon:
+        n = nascency.persist_refined_horizon(conn, ranked)
+        print(f"persisted timeline-refined horizon for {n} themes")
+    print(f"{len(ranked)} discovered themes ranked (nascency gate):")
+    print(f"  {'rank':>5}  {'conv':>4} {'b_jury':>6} {'recency':>7} {'~runway':>7}  theme")
+    for r in ranked:
+        print(f"  {r['rank_score']:5.2f}  {r['convergence_score']:4.1f} {r['beta_jury']:6.2f} "
+              f"{r['recency']:7.2f} {r['refined_horizon_years']:6.1f}y  {r['label'][:48]}")
+
+
+def cmd_funds(conn, args) -> None:
+    """Specialist-fund smart-money confirmation on discovered themes' Track-A tickers (spec §4b).
+    Crosses 2_Funds' newest-quarter NEW 13F positions against each discovered theme's listed names."""
+    cfg = load_config(args.discovery_cfg)
+    sf = funds.load_specialist_funds(args.specialist_funds_cfg)
+    new_buys = funds.new_buys_from_2funds(args.funds_db, sf, quarter=args.quarter)
+    if not new_buys:
+        print(f"no new 13F positions read from {args.funds_db} "
+              "(check the 2_Funds DB path / that it has holdings)")
+        return
+    n_new = sum(len(v) for v in new_buys.values())
+    print(f"funds: {n_new} new specialist positions across {len(new_buys)} tickers "
+          f"(newest quarter in {args.funds_db})")
+    themes = convergence.list_discovered(conn)
+    any_hit = False
+    for t in themes:
+        ta = resolve.track_a_tickers(conn, t["theme_id"])
+        hits = funds.cross_reference(ta, new_buys, cfg["funds"])
+        if hits:
+            any_hit = True
+            print(f"  {t['theme_id']}:")
+            for h in hits:
+                print(f"    {h['ticker']:6} smart_money={h['smart_money_score']:.2f} "
+                      f"buyers={', '.join(h['buyers'][:4])}")
+    if not any_hit:
+        print("  no discovered-theme Track-A ticker overlaps a specialist new buy this quarter "
+              "(expected until biotech/listed-heavy themes are discovered)")
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Hype Parser theme discovery (jury convergence).")
     p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--discovery-cfg", default=DISCOVERY_CFG)
+    p.add_argument("--specialist-funds-cfg", default=SPECIALIST_FUNDS_CFG)
+    p.add_argument("--funds-db", default=FUNDS_DB, help="2_Funds_parser holdings DB (13F new positions)")
+    p.add_argument("--quarter", default=None, help="period_of_report (YYYY-MM-DD) for --funds; default newest")
+    p.add_argument("--current-year", type=int, default=None, help="reference year for --rank (default: now)")
+    p.add_argument("--persist-horizon", action="store_true", help="--rank: write refined horizon to themes")
     p.add_argument("--ingest", action="store_true", help="parse juries -> jury_signals + embed")
     p.add_argument("--converge", action="store_true", help="cluster -> score -> promote themes + resolve orgs")
+    p.add_argument("--rank", action="store_true", help="rank discovered themes by the nascency gate (spec 3a)")
+    p.add_argument("--funds", action="store_true", help="specialist-fund smart-money confirmation (spec 4b)")
     p.add_argument("--list", action="store_true", help="list discovered themes")
     p.add_argument("--watch", action="store_true", help="list Track-B listing-watch orgs")
     p.add_argument("--no-fetch", action="store_true", help="no network: snapshots/DB only")
@@ -143,6 +198,10 @@ def main(argv=None) -> int:
             cmd_ingest(conn, args); did = True
         if args.converge:
             cmd_converge(conn, args); did = True
+        if args.rank:
+            cmd_rank(conn, args); did = True
+        if args.funds:
+            cmd_funds(conn, args); did = True
         if args.watch:
             cmd_watch(conn); did = True
         if args.list or not did:
