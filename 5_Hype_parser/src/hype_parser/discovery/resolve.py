@@ -11,7 +11,8 @@ import logging
 import re
 
 from ..db import now_iso
-from ..fundamentals import TICKERS_URL, _default_http_get
+from ..fundamentals import TICKERS_URL
+from .parsers import _default_http_get          # size-capped getter (D36 hardening)
 
 log = logging.getLogger(__name__)
 

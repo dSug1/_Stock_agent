@@ -23,10 +23,12 @@ entity, entity_type, url)` plus the jury's `diffusion_position` (leading / bridg
 `jury_credibility` copied from the source registry.
 
 - **Build-first = machine-readable feeds** (`parsers.API_FETCHERS`): **Y Combinator** (the public
-  `yc-oss` JSON — thousands of startups with batch, one-liner, tags; a *leading* jury that names
-  **private** firms) and the **Nobel Prize** API (a *denominator* jury — it dates a theme, it does not
-  find it: the Pouzin nuance). Both fetch-then-parse with an injectable HTTP function and fail open, so
-  tests feed canned payloads with no network.
+  `yc-oss` JSON — thousands of startups; a *leading* jury naming **private** firms), the **Nobel Prize**
+  API (a *denominator* jury — dates a theme, doesn't find it: the Pouzin nuance), and **CNCF**
+  (`landscape.yml` — a *leading* cloud-native software jury; one signal per CNCF-accepted project, D35).
+  All fetch-then-parse with an injectable HTTP function and fail open, so tests feed canned payloads with
+  no network. Adding CNCF took discovery 5 → 12 themes (the new ones cloud-native infra, where CNCF
+  projects converge with YC software startups) — more independent juries ⇒ stronger convergence.
 - **Scrape juries** (MIT-TR10, R&D 100, Fierce 15, SPIE, BNEF…) are **not re-fetched here** — the OD-2
   forward archive already snapshots them. `parse_snapshot_source` reads the latest archived edition and
   extracts candidate items. Today's generic HTML extractor is **deliberately crude** (it pulls

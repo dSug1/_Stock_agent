@@ -22,14 +22,25 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = "HypeParser/0.1 (research; local)"
 
+# Hard cap on a single response body. Bounds memory against a hostile/broken host returning a giant
+# body (the build-first feeds are small: YC all.json ~5 MB, CNCF landscape ~2 MB). We send no
+# Accept-Encoding, so there is also no gzip-decompression-bomb vector. Read cap is enforced, not trusted.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
 YC_ALL_URL = "https://yc-oss.github.io/api/companies/all.json"
 NOBEL_URL = "https://api.nobelprize.org/2.0/nobelPrizes?limit=1000"
+CNCF_URL = "https://raw.githubusercontent.com/cncf/landscape/master/landscape.yml"
 
 
-def _default_http_get(url: str, timeout: int = 30) -> bytes:
+def _default_http_get(url: str, timeout: int = 30, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
+    """GET a URL, capped at ``max_bytes`` (read one byte past the cap and reject if exceeded, so an
+    oversized body never lands in memory whole). Callers fail open on the raised error."""
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"response exceeds {max_bytes}-byte cap for {url}")
+    return data
 
 
 # ─── Y Combinator (leading; private-firm + RFS theme jury) ───────────────────
@@ -136,6 +147,65 @@ def fetch_nobel(http_get=None, *, since_year: int | None = None) -> list[dict]:
     return parse_nobel(payload, since_year=since_year)
 
 
+# ─── CNCF (leading; cloud-native software jury — landscape.yml) ──────────────
+
+def _cncf_year(extra):
+    """Acceptance year of a CNCF project = the *leading* signal (when the jury first picked it). YAML
+    may parse the date as a datetime.date or a string; take the earliest known maturity date."""
+    if not isinstance(extra, dict):
+        return None
+    for key in ("accepted", "sandbox", "incubating", "graduated"):
+        v = extra.get(key)
+        if v is None:
+            continue
+        if hasattr(v, "year"):
+            return int(v.year)
+        s = str(v)
+        if len(s) >= 4 and s[:4].isdigit():
+            return int(s[:4])
+    return None
+
+
+def parse_cncf(payload, *, source_id: str = "cncf_sandbox", since_year: int | None = None) -> list[dict]:
+    """CNCF landscape.yml -> one signal per **CNCF-accepted project** (those with a `project` maturity:
+    sandbox/incubating/graduated/archived — the jury's actual picks, not every landscape member).
+    Project != company (per the registry note), so entity_type='technology'; `item_text` carries the
+    sub/category so convergence places it by topic (it converges with YC software startups)."""
+    landscape = payload.get("landscape", []) if isinstance(payload, dict) else (payload or [])
+    out = []
+    for cat in landscape or []:
+        cat_name = (cat.get("name") or "") if isinstance(cat, dict) else ""
+        for sub in (cat.get("subcategories") or []) if isinstance(cat, dict) else []:
+            sub_name = (sub.get("name") or "") if isinstance(sub, dict) else ""
+            for item in (sub.get("items") or []) if isinstance(sub, dict) else []:
+                if not isinstance(item, dict) or not item.get("project"):
+                    continue                              # only CNCF-accepted projects
+                name = (item.get("name") or "").strip()
+                if not name:
+                    continue
+                year = _cncf_year(item.get("extra"))
+                if since_year and (year is None or year < since_year):
+                    continue
+                item_text = " — ".join(p for p in (name, sub_name, cat_name) if p)
+                out.append({
+                    "source_id": source_id, "diffusion_position": "leading", "jury_credibility": "high",
+                    "year": year, "item_text": item_text, "entity": name, "entity_type": "technology",
+                    "url": item.get("homepage_url") or item.get("repo_url"),
+                })
+    return out
+
+
+def fetch_cncf(http_get=None, *, since_year: int | None = None) -> list[dict]:
+    http_get = http_get or _default_http_get
+    try:
+        import yaml
+        payload = yaml.safe_load(http_get(CNCF_URL))
+    except Exception as exc:  # fail-open (network or YAML)
+        log.warning("CNCF fetch failed: %s", exc)
+        return []
+    return parse_cncf(payload, since_year=since_year)
+
+
 # ─── snapshot juries (scrape sources captured by the OD-2 forward archive) ────
 
 _TAG = re.compile(r"<[^>]+>")
@@ -206,4 +276,5 @@ def parse_snapshot_source(conn, source_id: str, *, extractor=None, year: int | N
 API_FETCHERS = {
     "yc_batch_rfs": fetch_yc,
     "nobel_prize": fetch_nobel,
+    "cncf_sandbox": fetch_cncf,
 }

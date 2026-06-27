@@ -1132,6 +1132,69 @@ skipped ~50 wks/yr).
 
 ---
 
+## D35 (2026-06-26) — Third build-first jury: CNCF landscape (+ registry re-seed to 108)
+
+Discovery's convergence was thin — only YC contributed real entities, so themes formed mainly from
+YC↔MIT-TR overlap. Added **CNCF** (`cncf_sandbox`), the third build-first machine-readable jury
+(`parsers.parse_cncf`/`fetch_cncf`, added to `API_FETCHERS`): the cloud-native `landscape.yml`, a
+*leading, high-credibility* software jury. One signal per **CNCF-accepted project** (those with a
+`project` maturity — sandbox/incubating/graduated — not every landscape member); `entity_type='technology'`
+(project != company, per the registry note), acceptance year = the leading signal; fail-open on
+network/YAML.
+
+- **Registry re-seed:** the DB held only the original 70 sources (frozen v1); the D23 expansion to 108
+  was config-only. Ran `5_registry.py --seed` → **+38 sources** (now 108, incl. `cncf_sandbox`), so
+  `annotate_from_registry` + the D34 calendar see the new juries.
+- **Live effect — the convergence thesis working:** ingesting CNCF (**238 signals**) and re-converging
+  took discovery **5 → 12 themes**. The 7 new ones are cloud-native infra (Cadence Workflow, bpfman/eBPF,
+  CDK8s, metal3 bare-metal, Apicurio schema registry, Serverless Workflow…) — formed where CNCF projects
+  converge with YC software startups (each backed by 2 independent leading juries). One extra independent
+  jury surfaced a whole new sector, exactly as the model predicts. 167 tests (was 164; +3).
+- **Note:** CNCF entities are technologies, so they strengthen *theme formation*, not the Track-A/B org
+  roster directly (the company behind a project is a later enrichment, per the registry note). Product
+  Hunt (OAuth) and ARPA-E (less-clean data portal) remain the other build-first candidates.
+
+---
+
+## D36 (2026-06-26) — Security hardening pass for external-content fetches + the untrusted-data policy
+
+The discovery module pulls third-party web data (YC, Nobel, CNCF, the SEC ticker map). This pass hardens
+that surface and writes down the standing policy.
+
+**The load-bearing property — no prompt-injection surface:** the discovery pipeline is **zero-LLM**
+(local MiniLM embeddings + cosine math; no model reads the fetched text). A poisoned jury entry
+("ignore previous instructions…") is just a string that becomes a vector — there is nothing to instruct.
+**This changes only when the optional Claude theme-*naming* step (spec §6) is built:** at that point
+scraped text enters a prompt and MUST be treated as untrusted data (delimited, the model told it is
+content not instructions, never allowed to trigger tools/actions). That code does not exist yet.
+
+**What was already safe (verified, not assumed):** external content is **parsed, never executed** —
+`json.loads` + `yaml.safe_load` (never `yaml.load`, which can construct arbitrary Python objects); no
+`eval`/`exec`/`pickle`/`subprocess` in the path. SQL is fully **parameterized** (bound `?`/named, never
+string-built). Endpoints are **hardcoded constants** (no SSRF from fetched data). HTTPS, GET-only, **no
+credentials sent** (nothing exfiltrates). Fetchers are **fail-open + injectable** (a hostile/garbage
+response → `[]`; tests never touch the network). Single-user **local** tool (bounded blast radius).
+
+**Fixed this pass:**
+1. **Response size cap** — `parsers._default_http_get` now reads one byte past `MAX_RESPONSE_BYTES`
+   (64 MB) and rejects oversized bodies, so a hostile/broken host can't exhaust memory (no
+   `Accept-Encoding` is sent ⇒ no gzip-bomb vector either). `resolve` (the SEC ticker-map fetch) now
+   routes through this capped getter.
+2. **`href` scheme allow-list** — `render_radar._safe_url` admits only `http(s)` into an `href` (blocks
+   `javascript:`/`data:` XSS from externally-sourced doc links) and adds `rel="noopener noreferrer"`.
+   (The discovery report, `render_discovery`, already `html.escape`s every external string and puts no
+   external URL in an `href` — so it was already XSS-safe.)
+3. **Tests:** size-cap enforcement, fail-open on the cap error, and the `_safe_url` allow-list. 170 tests
+   (was 167; +3).
+
+**Standing policy (applies repo-wide):** treat all fetched/scraped content as untrusted — safe loaders
+only, parameterized SQL, `html.escape` + http(s)-only hrefs in any report, size-capped reads. Any future
+provider that needs a key (Product Hunt, ARPA-E — deferred; user won't register) must read it from
+env/`.env`, never log or commit it. **Follow-up:** propagate the size cap to the OD-2 archive getter and
+the Wave-1..4 ingest clients (`arxiv`/`gdelt`/… still uncapped) — same one-line pattern.
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

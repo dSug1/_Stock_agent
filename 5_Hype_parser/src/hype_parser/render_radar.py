@@ -37,6 +37,14 @@ def _fmt(x, nd=3):
     return f"{x:.{nd}f}"
 
 
+def _safe_url(url):
+    """Allow only http(s) URLs into an href — blocks javascript:/data: (XSS) from externally-sourced
+    document links (D36 hardening). Returns the trimmed URL or '' to render as plain text."""
+    u = (url or "").strip()
+    low = u.lower()
+    return u if (low.startswith("http://") or low.startswith("https://")) else ""
+
+
 def render(theme_blocks, *, embedder_name, semantic, params, out_path,
            registry_version=None, generated_at=None):
     generated_at = generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -161,11 +169,13 @@ def render(theme_blocks, *, embedder_name, semantic, params, out_path,
         if members:
             parts.append('<div class="docs"><b>Top member docs (by cosine):</b><ul>')
             for m in members:
-                url = html.escape(m["url"] or "")
+                safe = _safe_url(m["url"])
                 title = html.escape(m["title"] or m["doc_id"])
-                parts.append(f'<li>{_fmt(m["cosine"], 2)} &middot; '
-                             f'<a href="{url}" target="_blank">{title}</a> '
-                             f'<span style="color:#999">{html.escape(m["published_month"] or "")}</span></li>')
+                when = html.escape(m["published_month"] or "")
+                link = (f'<a href="{html.escape(safe)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+                        if safe else title)
+                parts.append(f'<li>{_fmt(m["cosine"], 2)} &middot; {link} '
+                             f'<span style="color:#999">{when}</span></li>')
             parts.append("</ul></div>")
 
         # raw series table (collapsed)

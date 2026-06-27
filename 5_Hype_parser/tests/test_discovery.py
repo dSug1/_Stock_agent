@@ -75,6 +75,77 @@ def test_parse_nobel_is_denominator():
     assert "genome editing" in rows[0]["item_text"]
 
 
+# ─── security hardening (D36) ────────────────────────────────────────────────
+
+class _FakeResp:
+    def __init__(self, body):
+        self._b = body
+
+    def read(self, n=-1):
+        return self._b[:n] if (n is not None and n >= 0) else self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_http_get_enforces_size_cap(monkeypatch):
+    import urllib.request as ur
+    monkeypatch.setattr(ur, "urlopen", lambda req, timeout=30: _FakeResp(b"x" * 100))
+    with pytest.raises(ValueError):                          # body 100 > cap 50 -> rejected
+        parsers._default_http_get("https://x", max_bytes=50)
+    assert parsers._default_http_get("https://x", max_bytes=200) == b"x" * 100   # under cap ok
+
+
+def test_fetch_fails_open_on_cap_error():
+    # the size cap raises ValueError; fetchers must fail open to [] (not propagate)
+    def too_big(url):
+        raise ValueError("response exceeds cap")
+    assert parsers.fetch_yc(http_get=too_big) == []
+    assert parsers.fetch_cncf(http_get=too_big) == []
+
+
+def test_render_radar_safe_url_blocks_non_http():
+    from hype_parser import render_radar
+    assert render_radar._safe_url("https://arxiv.org/abs/1") == "https://arxiv.org/abs/1"
+    assert render_radar._safe_url("javascript:alert(1)") == ""
+    assert render_radar._safe_url("data:text/html,<script>") == ""
+    assert render_radar._safe_url("  HTTP://ok ").lower().startswith("http://")
+
+
+def test_parse_cncf_only_accepted_projects():
+    payload = {"landscape": [{
+        "name": "Orchestration & Management",
+        "subcategories": [{
+            "name": "Service Mesh",
+            "items": [
+                {"name": "Istio", "project": "graduated", "homepage_url": "https://istio.io",
+                 "extra": {"accepted": "2022-09-28"}},
+                {"name": "SomeVendor", "homepage_url": "https://x"},          # no `project` -> dropped
+                {"name": "Linkerd", "project": "graduated", "extra": {"accepted": "2017-01-23"}},
+            ]}]}]}
+    rows = parsers.parse_cncf(payload, since_year=2020)
+    assert [r["entity"] for r in rows] == ["Istio"]                 # Linkerd (2017) filtered by since_year
+    r = rows[0]
+    assert r["diffusion_position"] == "leading" and r["entity_type"] == "technology"
+    assert r["year"] == 2022 and "Service Mesh" in r["item_text"]
+
+
+def test_cncf_year_handles_date_and_string():
+    import datetime
+    assert parsers._cncf_year({"accepted": datetime.date(2019, 5, 1)}) == 2019
+    assert parsers._cncf_year({"incubating": "2020-11-02"}) == 2020
+    assert parsers._cncf_year({}) is None
+
+
+def test_fetch_cncf_fail_open():
+    def boom(url, timeout=30):
+        raise OSError("down")
+    assert parsers.fetch_cncf(http_get=boom) == []
+
+
 def test_extract_named_entities_from_html_filters_noise():
     html = ("<ul><li>Quantum Widgets Inc</li><li>Subscribe to our newsletter</li>"
             "<li>" + "x" * 200 + "</li></ul><h3>Photon Labs</h3>")
