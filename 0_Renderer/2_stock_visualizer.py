@@ -20,7 +20,7 @@ Usage
     python 2_stock_visualizer.py          # prompts in terminal, opens browser
 """
 
-import time, datetime, threading, webbrowser, sqlite3
+import time, datetime, threading, webbrowser, sqlite3, json
 import email.utils
 from pathlib import Path
 from contextlib import contextmanager
@@ -726,9 +726,16 @@ def search_tickers(query: str, n: int = 8) -> list[dict]:
             params={"q": query, "quotesCount": n, "newsCount": 0},
             headers=_HEADERS,
             timeout=6,
+            stream=True,
         )
         r.raise_for_status()
-        quotes = r.json().get("quotes", [])
+        # Bound the response so a hostile/oversized upstream body can't be
+        # buffered unboundedly into memory: read at most ~5 MB, then parse.
+        _MAX_BYTES = 5 * 1024 * 1024
+        body = r.raw.read(_MAX_BYTES + 1, decode_content=True)
+        if len(body) > _MAX_BYTES:
+            return []
+        quotes = json.loads(body).get("quotes", [])
         return [
             {
                 "symbol": q["symbol"],
@@ -802,7 +809,8 @@ def api_data():
             return ("", 204)
         return jsonify(data)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        app.logger.exception("api_data failed")
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route("/api/data_batch")
@@ -830,10 +838,16 @@ def api_data_batch():
     if mode not in ("fresh", "swr"):
         mode = "fresh"
     tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
+    # Reject implausibly long lists outright, then cap to bound the outbound
+    # yfinance fan-out (one round-trip per uncached symbol) and DB writes.
+    if len(tickers) > 200:
+        return jsonify({"error": "too many tickers"}), 400
+    tickers = tickers[:25]
     try:
         return jsonify({"period": period, "tickers": get_chart_data_batch(tickers, period, mode)})
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        app.logger.exception("api_data_batch failed")
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route("/api/search")
@@ -936,4 +950,7 @@ if __name__ == "__main__":
     threading.Thread(target=_open_browser, args=(url,), daemon=True).start()
     # threaded=True lets Flask serve the per-iframe live-poll requests
     # concurrently instead of serialising them on a single worker.
-    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False, threaded=True)
+    # Loopback-only: the UI opens http://localhost:PORT/, so binding to
+    # 127.0.0.1 fully serves the single-user desktop use while keeping the
+    # no-auth API off the LAN.
+    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False, threaded=True)

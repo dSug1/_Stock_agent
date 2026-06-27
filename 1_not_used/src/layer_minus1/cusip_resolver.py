@@ -42,13 +42,21 @@ REJECTED_SECURITY_SUBSTRINGS = (
 
 HttpPost = Callable[[str, bytes, dict], bytes]
 
+# Hard cap on any single HTTP response body, to stop a hostile/MITM'd
+# response from exhausting memory before json.loads. Read one byte past the
+# cap so overflow is detectable.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
 
 def _default_http_post(url: str, body: bytes, headers: dict) -> bytes:
     req = urllib.request.Request(
         url, data=body, headers=headers, method="POST"
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+        data = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise ValueError(f"response exceeds {MAX_RESPONSE_BYTES} byte cap")
+    return data
 
 
 def _cached(conn: sqlite3.Connection, cusip: str) -> Optional[dict]:

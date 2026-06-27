@@ -39,6 +39,11 @@ if not EDGAR_USER_AGENT:
 
 EDGAR_RATE_LIMIT_PER_SEC = float(os.getenv("EDGAR_RATE_LIMIT_PER_SEC", "9.5"))
 
+# Hard cap on a single response body — guards against OOM from a buggy /
+# hostile endpoint streaming an unbounded payload. SEC companyfacts JSON
+# tops out well under this; legitimate bodies never approach it.
+_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
 
@@ -115,7 +120,7 @@ def http_get(
     last_err: Optional[Exception] = None
     while attempt <= max_retries:
         try:
-            resp = _SESSION.get(url, headers=headers, timeout=30)
+            resp = _SESSION.get(url, headers=headers, timeout=30, stream=True)
         except (requests.ConnectionError, requests.Timeout) as e:
             last_err = e
             wait = 2 ** attempt
@@ -137,8 +142,27 @@ def http_get(
             continue
         if not (200 <= resp.status_code < 300):
             raise HttpError(resp.status_code, resp.reason or "", url)
-        return resp.content
+        return _read_capped(resp, url)
     raise HttpError(0, f"network failure: {last_err}", url)
+
+
+def _read_capped(resp, url: str) -> bytes:
+    """Read a streamed response body, rejecting anything over the cap.
+
+    Reads one chunk past the limit so an over-cap body is detected even
+    when Content-Length is absent or lies.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=1 << 16):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > _MAX_RESPONSE_BYTES:
+            resp.close()
+            raise HttpError(0, f"response exceeds {_MAX_RESPONSE_BYTES} bytes", url)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # --- submissions index ----------------------------------------------------

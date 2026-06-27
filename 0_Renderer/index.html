@@ -1338,7 +1338,7 @@
           if (!b || !b.interactive) continue;
           const el = b.element;
           if (!el || el.tagName !== 'IFRAME') continue;
-          try { el.contentWindow.postMessage({ type: 'sv-mode', light }, '*'); }
+          try { el.contentWindow.postMessage({ type: 'sv-mode', light }, window.location.origin); }
           catch (_) {}
         }
       }
@@ -1471,8 +1471,8 @@
       iframe.setAttribute('allow', 'fullscreen');
       iframe.setAttribute('loading', 'eager');
       iframe.addEventListener('load', () => {
-        try { iframe.contentWindow.postMessage({ type: 'sv-mode', light: isLightMode() }, '*'); } catch (_) {}
-        try { iframe.contentWindow.postMessage({ type: 'sv-detail', show: false }, '*'); } catch (_) {}
+        try { iframe.contentWindow.postMessage({ type: 'sv-mode', light: isLightMode() }, window.location.origin); } catch (_) {}
+        try { iframe.contentWindow.postMessage({ type: 'sv-detail', show: false }, window.location.origin); } catch (_) {}
       }, { once: true });
       return iframe;
     }
@@ -1711,6 +1711,7 @@
     // through the same normalization path so zoom feel is identical
     // whether the cursor is over a billboard or the 3D background.
     window.addEventListener('message', (ev) => {
+      if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'sv-wheel' || typeof d.deltaY !== 'number') return;
       _applyWheelKick(d.deltaY, d.deltaMode | 0);
@@ -1720,6 +1721,7 @@
     // billboard's ticker, i.e. orbit to frame it the same way a ticker-list
     // row click does.
     window.addEventListener('message', (ev) => {
+      if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'sv-dblclick' || !ev.source) return;
       for (let i = 0; i < billboards.length; i++) {
@@ -1753,6 +1755,7 @@
     let   _rmbPendTheta = 0;
     let   _rmbPendPhi   = 0;
     window.addEventListener('message', (ev) => {
+      if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'sv-rmb-move') return;
       if (typeof d.deltaX !== 'number' || typeof d.deltaY !== 'number') return;
@@ -1883,6 +1886,7 @@
     //  billboard iframe so they all stay in sync on the same time window.
     // ══════════════════════════════════════════════════════════════════════════
     window.addEventListener('message', (ev) => {
+      if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'sv-period' || typeof d.period !== 'string') return;
       // Batch-fetch for every other iframe (skip the originator — it already
@@ -1949,6 +1953,7 @@
     let _lastSortSig = '';
 
     window.addEventListener('message', (ev) => {
+      if (ev.origin !== window.location.origin) return;
       const d = ev.data;
       if (!d || d.type !== 'sv-price-info') return;
       if (ev.source) {
@@ -1957,17 +1962,17 @@
         for (let i = 0; i < billboards.length; i++) {
           const bi = billboards[i];
           if (bi.interactive && bi.element.contentWindow === ev.source) {
-            try { ev.source.postMessage({ type: 'sv-mode', light: isLightMode() }, '*'); } catch (_) {}
+            try { ev.source.postMessage({ type: 'sv-mode', light: isLightMode() }, window.location.origin); } catch (_) {}
             if (bi._detail !== undefined) {
-              try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, '*'); } catch (_) {}
+              try { ev.source.postMessage({ type: 'sv-detail', show: bi._detail }, window.location.origin); } catch (_) {}
             }
-            try { ev.source.postMessage({ type: 'sv-charttype', chartType: _chartType }, '*'); } catch (_) {}
+            try { ev.source.postMessage({ type: 'sv-charttype', chartType: _chartType }, window.location.origin); } catch (_) {}
             // Push the current target for this ticker so the iframe renders
             // it as soon as the first chart draw completes.
             try {
               const t  = getTargetPrice(bi.ticker);
               const t2 = getTargetPrice2(bi.ticker);
-              ev.source.postMessage({ type: 'sv-target', target: t, target2: t2 }, '*');
+              ev.source.postMessage({ type: 'sv-target', target: t, target2: t2 }, window.location.origin);
             } catch (_) {}
             break;
           }
@@ -2428,7 +2433,7 @@
       const target2 = getTargetPrice2(ticker);
       for (const b of billboards) {
         if (!b.interactive || b.ticker !== ticker) continue;
-        try { b.element.contentWindow.postMessage({ type: 'sv-target', target, target2 }, '*'); } catch (_) {}
+        try { b.element.contentWindow.postMessage({ type: 'sv-target', target, target2 }, window.location.origin); } catch (_) {}
       }
     }
 
@@ -2635,7 +2640,7 @@
         if (!b || !b.interactive) continue;
         const el = b.element;
         if (!el || el.tagName !== 'IFRAME') continue;
-        try { el.contentWindow.postMessage({ type: 'sv-charttype', chartType: _chartType }, '*'); }
+        try { el.contentWindow.postMessage({ type: 'sv-charttype', chartType: _chartType }, window.location.origin); }
         catch (_) {}
       }
     }
@@ -2849,7 +2854,7 @@
       for (const b of billboards) {
         if (!b.interactive) continue;
         try {
-          b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, '*');
+          b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, window.location.origin);
         } catch (_) { /* same-origin safety net */ }
       }
     }
@@ -2892,7 +2897,7 @@
             // Render cached frame immediately.
             try {
               b.element.contentWindow.postMessage(
-                { type: 'sv-period-with-data', period: p, data }, '*');
+                { type: 'sv-period-with-data', period: p, data }, window.location.origin);
             } catch (_) { /* cross-origin safety net */ }
             if (!data.stale) needFresh.delete(b.ticker);
           }
@@ -2914,7 +2919,7 @@
           if (!data) continue;
           try {
             b.element.contentWindow.postMessage(
-              { type: 'sv-period-with-data', period: p, data }, '*');
+              { type: 'sv-period-with-data', period: p, data }, window.location.origin);
           } catch (_) { /* cross-origin safety net */ }
         }
       } catch (_) {
@@ -2923,7 +2928,7 @@
         for (const b of targets) {
           if (!needFresh.has(b.ticker)) continue;
           try {
-            b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, '*');
+            b.element.contentWindow.postMessage({ type: 'sv-period', period: p }, window.location.origin);
           } catch (_) { /* same-origin safety net */ }
         }
       }
@@ -3257,8 +3262,8 @@
       iframe.setAttribute('loading', 'eager');
       attachFocusSanitizer(iframe);
       iframe.addEventListener('load', () => {
-        try { iframe.contentWindow.postMessage({ type: 'sv-mode', light: isLightMode() }, '*'); } catch (_) {}
-        try { iframe.contentWindow.postMessage({ type: 'sv-detail', show: false }, '*'); } catch (_) {}
+        try { iframe.contentWindow.postMessage({ type: 'sv-mode', light: isLightMode() }, window.location.origin); } catch (_) {}
+        try { iframe.contentWindow.postMessage({ type: 'sv-detail', show: false }, window.location.origin); } catch (_) {}
       }, { once: true });
       iframe.style.display = 'none';  // hidden until the next projection frame
       billboardsLayer.appendChild(iframe);
@@ -3612,7 +3617,7 @@
           if (b._detail !== show) {
             b._detail = show;
             el.classList.toggle('no-detail', !show);
-            try { el.contentWindow.postMessage({ type: 'sv-detail', show }, '*'); } catch (_) {}
+            try { el.contentWindow.postMessage({ type: 'sv-detail', show }, window.location.origin); } catch (_) {}
           }
         }
 

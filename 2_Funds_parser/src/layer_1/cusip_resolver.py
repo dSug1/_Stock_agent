@@ -24,6 +24,9 @@ OPENFIGI_BATCH_SIZE = 10
 OPENFIGI_RATE_LIMIT_SLEEP = 60.0 / 25.0  # 25 requests/minute -> 2.4s
 US_EXCH_CODES = frozenset({"US", "UN", "UA", "UW", "UR"})
 
+# OOM guard: cap any single OpenFIGI response read into memory.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
 ACCEPTED_SECURITY_TYPES = frozenset({
     "Common Stock",
     "Depositary Receipt",
@@ -51,7 +54,10 @@ def _default_http_post(url: str, body: bytes, headers: dict) -> bytes:
         url, data=body, headers=headers, method="POST"
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+        capped = resp.read(MAX_RESPONSE_BYTES + 1)
+        if len(capped) > MAX_RESPONSE_BYTES:
+            raise ValueError(f"response exceeds {MAX_RESPONSE_BYTES} byte cap")
+        return capped
 
 
 def _cached(conn: sqlite3.Connection, cusip: str) -> Optional[dict]:

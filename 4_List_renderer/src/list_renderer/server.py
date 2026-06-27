@@ -63,6 +63,11 @@ _STATIC: dict[str, tuple[Path, str]] = {
 }
 
 
+# POST body size cap (S8): interaction batches are small; a request larger than
+# this is malformed/hostile.
+_MAX_BODY_BYTES = 2 * 1024 * 1024
+
+
 def _bool_param(qs: dict, name: str) -> bool:
     vals = qs.get(name)
     if not vals:
@@ -102,11 +107,30 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             return {}
+        if length > _MAX_BODY_BYTES:           # S8: bound the read
+            raise ValueError("request body too large")
         raw = self.rfile.read(length)
         try:
             return json.loads(raw.decode("utf-8")) or {}
         except (ValueError, UnicodeDecodeError):
             return {}
+
+    def _csrf_ok(self) -> bool:
+        """S8 CSRF guard: a cross-site page can POST to localhost, so reject any
+        request whose Origin is present and not our own. Absent Origin = a local
+        CLI/tool (curl/scripts), which we allow. We also require a JSON
+        content-type so a cross-site form/simple POST can't reach the handlers
+        without triggering a CORS preflight it cannot satisfy."""
+        host_port = self.server.server_address[1]
+        allowed = {
+            f"http://127.0.0.1:{host_port}",
+            f"http://localhost:{host_port}",
+        }
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in allowed:
+            return False
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        return ctype == "application/json"
 
     # --- GET ------------------------------------------------------------
     def do_GET(self) -> None:
@@ -245,6 +269,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         try:
+            if not self._csrf_ok():           # S8: cross-site / non-JSON POST
+                return self._send_json({"error": "forbidden"}, 403)
             body = self._read_body()
             if path == "/api/interact":
                 return self._post_interact(body)

@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import html
 import re
-import urllib.request
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # type hints only; parsing uses defusedxml
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
+
+from defusedxml.ElementTree import fromstring as _safe_fromstring
+
+from ._net import fetch_bytes
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) 4_List_renderer/1.0"
 ATOM = "{http://www.w3.org/2005/Atom}"
 
 
 def fetch(url: str, timeout: int = 15) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    return fetch_bytes(url, timeout=timeout, headers={"User-Agent": UA})
 
 
 def text(elem: ET.Element | None) -> str:
@@ -118,7 +119,7 @@ def result_from_item(item: ET.Element, brand: str) -> dict | None:
 
 def parse_feed(raw: bytes, brand: str, max_items: int) -> list[dict]:
     """Parse feed bytes -> up to `max_items` Highlight dicts."""
-    root = ET.fromstring(raw)
+    root = _safe_fromstring(raw)  # defused: no XXE / entity-expansion DoS
     items = root.findall(".//item") or root.findall(f".//{ATOM}entry")
     out: list[dict] = []
     for item in items:

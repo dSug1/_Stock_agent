@@ -10,6 +10,7 @@ import json
 import logging
 import time
 import urllib.request
+from ..nethttp import capped_read
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def _default_http_post(url: str, body: dict, timeout: int = 30) -> str:
         url, data=data, method="POST",
         headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+        return capped_read(resp).decode("utf-8", "replace")
 
 
 def parse_results(payload: str):

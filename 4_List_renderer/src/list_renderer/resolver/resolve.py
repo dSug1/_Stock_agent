@@ -9,11 +9,11 @@ import hashlib
 import logging
 import re
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 import yaml
 
+from ..adapters._net import fetch_bytes, validate_url
 from ..llm import estimate_cost, run_llm_task
 
 log = logging.getLogger("4_render_list.resolver")
@@ -67,10 +67,8 @@ def prompt_version() -> str:
 
 
 def fetch_html(url: str, max_chars: int = 60000, timeout: int = 20) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8", "replace")
-    return raw[:max_chars]
+    raw = fetch_bytes(url, timeout=timeout, headers={"User-Agent": _UA})
+    return raw.decode("utf-8", "replace")[:max_chars]
 
 
 def find_rss_link(html: str, base_url: str) -> str | None:
@@ -139,8 +137,14 @@ def _to_recipe(url: str, data: dict):
     confidence = data.get("confidence")
     if method == "rss":
         feed = (data.get("rss") or {}).get("feed_url")
+        # S6: a Claude-returned feed_url is untrusted (page content could steer
+        # it at an internal host) — gate it before it becomes a saved recipe.
+        validate_url(feed)
         return "rss", {"adapter": "rss", "feed_url": feed}, None, confidence
     web = data.get("web") or {}
+    # web recipes re-fetch the original (already-validated) `url`, but gate again
+    # so a saved recipe never carries an unvalidated target.
+    validate_url(url)
     fetch_spec = {"adapter": "web", "url": url}
     extract_spec = {
         "item_selector": web.get("item_selector"),

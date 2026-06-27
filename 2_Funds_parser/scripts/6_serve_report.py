@@ -34,6 +34,7 @@ import argparse
 import http.server
 import json
 import logging
+import re
 import socket
 import sqlite3
 import sys
@@ -56,7 +57,25 @@ from module_6b.selection_io import (  # noqa: E402
 DEFAULT_PORT = 4609
 OUTPUTS = PROJECT_ROOT / "Outputs"
 
+# Quarter path segments are the only client-controlled input that reaches a
+# filesystem path. Pin them to the canonical YYYYQn shape so a crafted segment
+# (e.g. a Windows backslash like `foo\..\..\evil`) can never escape Outputs/.
+_QUARTER_RE = re.compile(r"\d{4}Q[1-4]")
+
 _LOG = logging.getLogger("6_serve_report")
+
+
+def _valid_quarter(quarter: str) -> bool:
+    """True iff `quarter` is exactly the YYYYQn shape (no path separators)."""
+    return bool(_QUARTER_RE.fullmatch(quarter or ""))
+
+
+def _within_outputs(path: Path) -> bool:
+    """Defense-in-depth: the resolved path must live directly in Outputs/."""
+    try:
+        return path.resolve().parent == OUTPUTS.resolve()
+    except OSError:
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,6 +149,24 @@ class SelectionHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", location)
         self.end_headers()
 
+    def _origin_ok(self) -> bool:
+        """CSRF guard for state-changing requests.
+
+        A same-origin browser fetch sends an ``Origin`` header; the local CLI
+        (curl/python) sends none. Allow a missing Origin (local tooling) but
+        reject any cross-origin browser request so a visited web page can't
+        drive writes against this loopback server.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        port = self.server.server_address[1]
+        allowed = {
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        }
+        return origin in allowed
+
     # ── routes ──
     def do_GET(self) -> None:                                    # noqa: N802
         parts = _split_path(self.path)
@@ -142,7 +179,13 @@ class SelectionHandler(http.server.BaseHTTPRequestHandler):
         # GET /<quarter>
         if len(parts) == 1 and parts[0] != "selection":
             quarter = parts[0]
+            if not _valid_quarter(quarter):
+                self._send_json(400, {"error": "Bad quarter (expected YYYYQn)"})
+                return
             html_path = OUTPUTS / f"final_ranking_{quarter}.html"
+            if not _within_outputs(html_path):
+                self._send_json(400, {"error": "Bad quarter path"})
+                return
             if not html_path.exists():
                 self._send_json(404, {
                     "error": f"No HTML for quarter {quarter}",
@@ -160,9 +203,15 @@ class SelectionHandler(http.server.BaseHTTPRequestHandler):
         # GET /selection/<quarter>
         if len(parts) == 2 and parts[0] == "selection":
             quarter = parts[1]
+            if not _valid_quarter(quarter):
+                self._send_json(400, {"error": "Bad quarter (expected YYYYQn)"})
+                return
             json_path = selection_json_path(
                 OUTPUTS / f"final_ranking_{quarter}.html"
             )
+            if not _within_outputs(json_path):
+                self._send_json(400, {"error": "Bad quarter path"})
+                return
             data = load_selection_json(json_path)
             if data is None:
                 self._send_json(404, {
@@ -180,6 +229,12 @@ class SelectionHandler(http.server.BaseHTTPRequestHandler):
 
         if len(parts) == 2 and parts[0] == "selection":
             quarter = parts[1]
+            if not self._origin_ok():
+                self._send_json(403, {"error": "Cross-origin request rejected"})
+                return
+            if not _valid_quarter(quarter):
+                self._send_json(400, {"error": "Bad quarter (expected YYYYQn)"})
+                return
             length = int(self.headers.get("Content-Length", "0") or "0")
             if length <= 0 or length > 1_000_000:
                 self._send_json(400, {"error": "Bad Content-Length"})
@@ -198,6 +253,9 @@ class SelectionHandler(http.server.BaseHTTPRequestHandler):
             json_path = selection_json_path(
                 OUTPUTS / f"final_ranking_{quarter}.html"
             )
+            if not _within_outputs(json_path):
+                self._send_json(400, {"error": "Bad quarter path"})
+                return
             try:
                 saved = stamp_update(json_path, payload)
             except Exception as e:

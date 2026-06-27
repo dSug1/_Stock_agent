@@ -11,6 +11,7 @@ import logging
 import time
 import urllib.parse
 import urllib.request
+from ..nethttp import capped_read
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ def _default_http_get(url: str, api_key: str, timeout: int = 30) -> str:
     req = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT, "X-Api-Key": api_key})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+        return capped_read(resp).decode("utf-8", "replace")
 
 
 def parse_patents(payload: str):

@@ -470,7 +470,18 @@
         return String(s == null ? "" : s)
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      // S7: only http/https URLs may become a link / window.open target.
+      // External titles/snippets carry attacker-supplied hrefs (javascript:,
+      // data:, file:); anything else returns "" so the href is dropped.
+      function safeUrl(u) {
+        if (u == null) return "";
+        var s = String(u).trim();
+        return /^https?:\/\//i.test(s) ? s : "";
       }
 
       function highlight(snippet, terms) {
@@ -527,15 +538,17 @@
 
       function resultEl(r, index) {
         var titleInner = esc(r.title) + (r.verified ? GREEN_CHECK : "");
-        var title = r.title_url
-          ? '<a class="result-title" data-act="open" href="' + esc(r.title_url) +
+        var titleHref = safeUrl(r.title_url);
+        var title = titleHref
+          ? '<a class="result-title" data-act="open" href="' + esc(titleHref) +
             '" target="_blank" rel="noopener">' + titleInner + "</a>"
           : '<div class="result-title">' + titleInner + "</div>";
 
         var snippet = highlight(r.snippet, r.bold_terms);
-        if (r.read_more_url) {
+        var readHref = safeUrl(r.read_more_url);
+        if (readHref) {
           snippet +=
-            ' <a class="read-more" data-act="read_more" href="' + esc(r.read_more_url) +
+            ' <a class="read-more" data-act="read_more" href="' + esc(readHref) +
             '" target="_blank" rel="noopener">Read more</a>';
         }
 
@@ -733,13 +746,14 @@
         closeMenu();
         if (!SERVED) { toast("Start the server to like/hide (run_4_List_server.bat)"); return; }
         var r = itemById(id);
+        var openHref = r ? safeUrl(r.title_url) : "";
         var liked = !!STATE.liked[id];
         var menu = document.createElement("div");
         menu.className = "menu";
         menu.innerHTML =
           '<button data-m="like">' + (liked ? "♥ Liked" : "♡ Like") + "</button>" +
           '<button data-m="hide">🚫 Hide this</button>' +
-          (r && r.title_url ? '<button data-m="open">↗ Open in new tab</button>' : "") +
+          (openHref ? '<button data-m="open">↗ Open in new tab</button>' : "") +
           (r && r.score_breakdown ? '<button data-m="why">ℹ Why ranked here?</button>' : "");
         document.body.appendChild(menu);
         var rect = anchor.getBoundingClientRect();
@@ -757,9 +771,9 @@
           if (action === "like") likeItem(id);
           else if (action === "hide") hideItem(id);
           else if (action === "why") toggleWhy(id);
-          else if (action === "open" && r && r.title_url) {
+          else if (action === "open" && openHref) {
             opened[id] = true; emit(id, "open");
-            window.open(r.title_url, "_blank", "noopener");
+            window.open(openHref, "_blank", "noopener");
           }
         });
       }

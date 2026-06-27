@@ -484,7 +484,10 @@ def test_cusip_resolver_cache_hits_api_once(tmp_path: Path) -> None:
     try:
         import json
         response = json.dumps([
-            {"data": [{"ticker": "ACME", "exchCode": "US"}]},
+            # securityType is required by the resolver's US-equity allow-list
+            # (_record_is_equity); this test only checks caching (one API call).
+            {"data": [{"ticker": "ACME", "exchCode": "US",
+                       "securityType": "Common Stock"}]},
         ]).encode("utf-8")
         counter = _Counter(response)
         first = cusip_resolver.resolve_cusip(

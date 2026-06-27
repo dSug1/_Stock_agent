@@ -23,11 +23,26 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from ._net import fetch_bytes
+
 log = logging.getLogger("4_render_list.http_api")
+
+# Hop-by-hop headers (RFC 7230 §6.1) plus Host: never forwarded from config —
+# they let a malicious source config rewrite the request target/identity (S14).
+_DROP_HEADERS = frozenset({
+    "host", "connection", "keep-alive", "proxy-authenticate",
+    "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
+})
+
+
+def _safe_headers(headers: dict | None) -> dict:
+    """Strip hop-by-hop and Host keys from config-supplied request headers."""
+    if not headers:
+        return {}
+    return {k: v for k, v in headers.items() if k.lower() not in _DROP_HEADERS}
 
 
 def _to_iso(value) -> str | None:
@@ -83,9 +98,11 @@ def fetch_results(
     if not url or not fields or not fields.get("title"):
         raise ValueError("http_api adapter requires config.url and fields.title")
 
-    req = urllib.request.Request(url, headers={"User-Agent": _UA, **(headers or {})})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read().decode("utf-8", "replace"))
+    raw = fetch_bytes(
+        url, timeout=20,
+        headers={"User-Agent": _UA, **_safe_headers(headers)},
+    )
+    data = json.loads(raw.decode("utf-8", "replace"))
 
     raw_items = _dig(data, items_path) or []
     if not isinstance(raw_items, list):

@@ -16,6 +16,12 @@ from __future__ import annotations
 
 import logging
 import xml.etree.ElementTree as ET
+# Parse untrusted SEC XML with defusedxml — neutralises entity-expansion
+# ("billion laughs") + DTD attacks. Falls back to stdlib if unavailable.
+try:
+    from defusedxml.ElementTree import fromstring as _xml_fromstring
+except ImportError:                                              # pragma: no cover
+    _xml_fromstring = ET.fromstring
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -114,9 +120,13 @@ def parse_form4_xml(
     Raises Form4ParseError on malformed XML or a missing `issuer` element.
     """
     try:
-        root = ET.fromstring(xml_bytes)
+        root = _xml_fromstring(xml_bytes)
     except ET.ParseError as e:
         raise Form4ParseError(f"xml parse: {e}") from e
+    except Exception as e:                                       # noqa: BLE001
+        # defusedxml raises its own EntitiesForbidden / DTDForbidden types
+        # for malicious XML — treat all as a parse failure (fail-open).
+        raise Form4ParseError(f"xml parse (rejected): {e}") from e
 
     # --- issuer block ---
     issuer = root.find("issuer")

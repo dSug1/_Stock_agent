@@ -9,9 +9,32 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from typing import Callable, Optional
 
+try:
+    # defusedxml guards against entity-expansion (billion-laughs) DoS on
+    # untrusted EDGAR XML. Fall back to stdlib if it isn't installed.
+    from defusedxml.ElementTree import fromstring as _xml_fromstring
+    from defusedxml.common import DefusedXmlException as _DefusedXmlException
+    _XML_PARSE_ERRORS: tuple = (ET.ParseError, _DefusedXmlException)
+except ImportError:  # pragma: no cover - defusedxml is in requirements.txt
+    _xml_fromstring = ET.fromstring
+    _XML_PARSE_ERRORS = (ET.ParseError,)
+
 from database.db import MARKET_VALUE_RAW_USD_CUTOFF
 
 log = logging.getLogger(__name__)
+
+# Hard cap on any single HTTP response body. 13F info tables are well under
+# this; the cap exists to stop a hostile/MITM'd response from exhausting
+# memory. We read one byte past the cap so overflow is detectable.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+
+def _read_capped(resp) -> bytes:
+    """Read a response body, rejecting anything over MAX_RESPONSE_BYTES."""
+    body = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise ValueError(f"response exceeds {MAX_RESPONSE_BYTES} byte cap")
+    return body
 
 
 def _normalize_market_value(
@@ -45,7 +68,7 @@ def _default_http_get(url: str) -> bytes:
         url, headers={"User-Agent": EDGAR_USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read()
+        body = _read_capped(resp)
     time.sleep(EDGAR_RATE_LIMIT_SLEEP)
     return body
 
@@ -168,9 +191,12 @@ def parse_13f_xml(xml_content: str) -> list[dict]:
     Never raises on malformed per-row data — only on unrecoverable XML.
     """
     try:
-        root = ET.fromstring(xml_content)
-    except ET.ParseError as exc:
-        log.warning("malformed 13F XML: %s", exc)
+        root = _xml_fromstring(xml_content)
+    except _XML_PARSE_ERRORS as exc:
+        # ET.ParseError covers malformed XML; defusedxml raises a
+        # DefusedXmlException (not a ParseError) on an entity bomb. Both
+        # are unrecoverable input, so fail open with [] either way.
+        log.warning("malformed or unsafe 13F XML: %s", exc)
         return []
 
     holdings: list[dict] = []

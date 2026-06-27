@@ -30,6 +30,13 @@ from typing import Iterable, Optional
 import requests
 from requests.adapters import HTTPAdapter
 
+# Prefer defusedxml (blocks entity-expansion / external-entity attacks on the
+# untrusted Form 4 XML we parse); fall back to the stdlib parser if it's absent.
+try:
+    from defusedxml.ElementTree import fromstring as _xml_fromstring
+except ImportError:  # pragma: no cover - defusedxml is a declared dependency
+    from xml.etree.ElementTree import fromstring as _xml_fromstring
+
 # Reuse the existing M2 EDGAR limiter — single process-global bucket, shared
 # across M2 (layer_1/edgar_13f) and M4c (this file). Importing the module
 # attribute gives us the same instance in any caller.
@@ -45,6 +52,10 @@ log = logging.getLogger(__name__)
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
+
+# OOM guard: cap any single EDGAR response read into memory. 64 MiB sits well
+# above the largest real companyfacts XBRL JSON.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 # D56 — module-level requests.Session with a pool sized for the M4c worker
 # count. requests.Session is thread-safe (urllib3 PoolManager underneath),
@@ -115,17 +126,24 @@ def _http_request(
         headers["If-None-Match"] = if_none_match
     if if_modified_since:
         headers["If-Modified-Since"] = if_modified_since
-    resp = _SESSION.get(url, headers=headers, timeout=30)
-    if resp.status_code == 304:
-        return _HttpResponse(b"", 304, resp.headers.get("ETag"),
-                             resp.headers.get("Last-Modified"))
-    if not (200 <= resp.status_code < 300):
-        raise _HttpError(resp.status_code, resp.reason or "")
-    return _HttpResponse(
-        resp.content, resp.status_code,
-        resp.headers.get("ETag"),
-        resp.headers.get("Last-Modified"),
-    )
+    resp = _SESSION.get(url, headers=headers, timeout=30, stream=True)
+    try:
+        if resp.status_code == 304:
+            return _HttpResponse(b"", 304, resp.headers.get("ETag"),
+                                 resp.headers.get("Last-Modified"))
+        if not (200 <= resp.status_code < 300):
+            raise _HttpError(resp.status_code, resp.reason or "")
+        # OOM guard: buffer at most MAX_RESPONSE_BYTES (+1 sentinel) before bailing.
+        body = resp.raw.read(MAX_RESPONSE_BYTES + 1, decode_content=True)
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise ValueError(f"response exceeds {MAX_RESPONSE_BYTES} byte cap")
+        return _HttpResponse(
+            body, resp.status_code,
+            resp.headers.get("ETag"),
+            resp.headers.get("Last-Modified"),
+        )
+    finally:
+        resp.close()
 
 
 def _http_get(url: str, *, accept: str = "application/json") -> bytes:
@@ -528,8 +546,8 @@ def _build_form4_url(cik: str, accession: str, doc: Optional[str]) -> str:
 def _parse_form4_xml(xml_bytes: bytes) -> tuple[list[dict], Optional[str]]:
     """Returns ([txn_rows], parse_error_or_None)."""
     try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as e:
+        root = _xml_fromstring(xml_bytes)
+    except Exception as e:  # ET.ParseError or defusedxml entity-attack guard
         return [], f"xml parse: {e}"
 
     rep = root.find("reportingOwner")

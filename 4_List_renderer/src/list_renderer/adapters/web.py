@@ -13,8 +13,9 @@ extract_spec:
 from __future__ import annotations
 
 import logging
-import urllib.request
 from urllib.parse import urljoin, urlsplit
+
+from ._net import fetch_bytes
 
 log = logging.getLogger("4_render_list.web")
 
@@ -22,9 +23,8 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) 4_List_renderer/1.0"
 
 
 def _fetch(url: str, timeout: int = 20) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+    raw = fetch_bytes(url, timeout=timeout, headers={"User-Agent": _UA})
+    return raw.decode("utf-8", "replace")
 
 
 def fetch_results(url: str, extract_spec: dict, max_items: int = 20) -> list[dict]:

@@ -18,6 +18,8 @@ import logging
 import sqlite3
 import urllib.request
 
+from .nethttp import capped_read
+
 from .db import now_iso
 
 log = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ def _default_http_get(url: str, timeout: int = 20):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         status = getattr(resp, "status", None) or resp.getcode()
-        body = resp.read()
+        body = capped_read(resp)
     return status, body
 
 

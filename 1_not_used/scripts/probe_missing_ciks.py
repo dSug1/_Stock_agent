@@ -14,6 +14,7 @@ module resolves:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -46,6 +47,12 @@ def _collect_all_filings(payload: dict) -> tuple[list[str], list[str]]:
     for page in filings.get("files", []) or []:
         name = page.get("name")
         if not name:
+            continue
+        # `name` comes from EDGAR's own JSON; validate it before
+        # interpolating into the URL so a tampered value can't traverse
+        # the path or redirect off-host (SSRF).
+        if not re.fullmatch(r"[A-Za-z0-9._-]+\.json", name):
+            print(f"    [warn] skipping suspicious page name: {name!r}")
             continue
         url = EDGAR_SUBMISSIONS_PAGE_URL.format(name=name)
         try:

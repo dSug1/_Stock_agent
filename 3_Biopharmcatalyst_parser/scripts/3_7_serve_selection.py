@@ -40,6 +40,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 OUTPUTS = PROJECT_ROOT / "Outputs"
+# Max accepted POST body (selection / ack sidecars are tiny KB-scale JSON).
+_MAX_POST_BYTES = 1 * 1024 * 1024
 BIOTECH_DB = PROJECT_ROOT / "data" / "biotech.db"
 DEEP_DIVES_DB = PROJECT_ROOT / "data" / "claude_deep_dives.db"
 SELECTION_JSON = OUTPUTS / "catalyst_scores_selection.json"
@@ -208,14 +210,43 @@ class _Handler(BaseHTTPRequestHandler):
         # Static fall-through — serve files under Outputs/.
         return self._serve_static(parsed.path)
 
+    def _origin_allowed(self) -> bool:
+        """CSRF guard — reject cross-origin POSTs. An absent Origin (curl,
+        same-page fetch in some browsers) is allowed; a present Origin must
+        match this server's own loopback host:port."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            port = self.server.server_address[1]
+        except Exception:
+            port = None
+        allowed = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+        return origin in allowed
+
+    def _read_json_body(self):
+        """Read + JSON-decode the request body with a size cap.
+        Returns (obj, error_response_sent: bool)."""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length > _MAX_POST_BYTES:
+            self._json(413, {"error": f"body exceeds {_MAX_POST_BYTES} bytes"})
+            return None, True
+        try:
+            obj = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        except json.JSONDecodeError:
+            self._json(400, {"error": "body must be valid JSON"})
+            return None, True
+        return obj, False
+
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path in ("/api/selection", "/api/save_acknowledged_tickers"):
+            if not self._origin_allowed():
+                return self._json(403, {"error": "cross-origin POST rejected"})
         if parsed.path == "/api/selection":
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            try:
-                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
-            except json.JSONDecodeError:
-                return self._json(400, {"error": "body must be valid JSON"})
+            body, sent = self._read_json_body()
+            if sent:
+                return
             if not isinstance(body, dict):
                 return self._json(400, {"error": "body must be a JSON object"})
             # Merge keys we care about.
@@ -230,11 +261,9 @@ class _Handler(BaseHTTPRequestHandler):
         # browser's localStorage and persist it to disk so the M7/M8
         # dispatchers can apply the pre-dispatch gate.
         if parsed.path == "/api/save_acknowledged_tickers":
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            try:
-                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
-            except json.JSONDecodeError:
-                return self._json(400, {"error": "body must be valid JSON"})
+            body, sent = self._read_json_body()
+            if sent:
+                return
             tickers = body.get("tickers") if isinstance(body, dict) else None
             if not isinstance(tickers, list):
                 return self._json(400, {"error": "body.tickers must be a list of strings"})
@@ -267,13 +296,19 @@ class _Handler(BaseHTTPRequestHandler):
     def _serve_static(self, path: str) -> None:
         # Map '/' → 'catalyst_scores.html' for convenience.
         rel = path.lstrip("/") or "catalyst_scores.html"
+        # Reject traversal segments up front — `urlparse` does NOT normalise
+        # `..`, so a raw client can send `GET /../Outputs_x/y.html`.
+        if ".." in rel.replace("\\", "/").split("/"):
+            return self._json(403, {"error": "forbidden"})
         target = OUTPUTS / rel
-        # Path-traversal guard.
+        # Path-traversal guard — true ancestry check (a `startswith` string
+        # compare is fooled by sibling dirs sharing the `Outputs` prefix).
         try:
-            resolved = target.resolve()
             outputs_resolved = OUTPUTS.resolve()
-            if not str(resolved).startswith(str(outputs_resolved)):
-                return self._json(403, {"error": "forbidden"})
+            resolved = target.resolve()
+            resolved.relative_to(outputs_resolved)
+        except ValueError:
+            return self._json(403, {"error": "forbidden"})
         except Exception:
             return self._json(404, {"error": "bad path"})
         if not target.exists() or not target.is_file():
@@ -346,6 +381,11 @@ def main() -> int:
     if n_ok or n_fail:
         print(f"[3_7_serve_selection] prewarmed live-price cache from {disk_cache.name}: "
               f"{n_ok} success(es) + {n_fail} failure(s) preloaded")
+
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"[3_7_serve_selection] WARNING: binding non-loopback host {args.host!r} — "
+              f"this exposes the selection/ack write endpoints to the network. "
+              f"Use 127.0.0.1 unless you really mean it.")
 
     httpd = ThreadingHTTPServer((args.host, args.port), _Handler)
     url = f"http://{args.host}:{args.port}/catalyst_scores.html"

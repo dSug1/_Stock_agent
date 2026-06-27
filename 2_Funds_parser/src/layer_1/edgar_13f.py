@@ -22,9 +22,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Callable, Optional
 
+# Prefer defusedxml (blocks entity-expansion / external-entity attacks on the
+# untrusted EDGAR XML we parse); fall back to the stdlib parser if it's absent.
+try:
+    from defusedxml.ElementTree import fromstring as _xml_fromstring
+except ImportError:  # pragma: no cover - defusedxml is a declared dependency
+    from xml.etree.ElementTree import fromstring as _xml_fromstring
+
 from database.db import MARKET_VALUE_RAW_USD_CUTOFF
 
 log = logging.getLogger(__name__)
+
+# Cap on any single EDGAR response read into memory (OOM guard against a
+# malfunctioning / hostile upstream). 64 MiB is well above the largest real
+# 13F info-table XML or submissions JSON.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 
 EDGAR_USER_AGENT = "StockPicker contact@stockpicker.local"
 # SEC fair-use is 10 req/sec per IP. We target 9.5 to stay safely under
@@ -71,13 +83,25 @@ class _RateLimiter:
 _EDGAR_LIMITER = _RateLimiter(EDGAR_RATE_PER_SEC)
 
 
+def _read_capped(resp, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
+    """Read up to `max_bytes`; raise if the body exceeds the cap.
+
+    Reads one byte past the limit so a body that is exactly `max_bytes` is
+    accepted while anything larger is rejected before it is fully buffered.
+    """
+    body = resp.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ValueError(f"response exceeds {max_bytes} byte cap")
+    return body
+
+
 def _default_http_get(url: str) -> bytes:
     _EDGAR_LIMITER.acquire()
     req = urllib.request.Request(
         url, headers={"User-Agent": EDGAR_USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+        return _read_capped(resp)
 
 
 def _pad_cik(cik: str) -> str:
@@ -197,9 +221,9 @@ def _safe_int(value: Optional[str]) -> Optional[int]:
 
 def parse_13f_xml(xml_content: str) -> list[dict]:
     try:
-        root = ET.fromstring(xml_content)
-    except ET.ParseError as exc:
-        log.warning("malformed 13F XML: %s", exc)
+        root = _xml_fromstring(xml_content)
+    except Exception as exc:  # ET.ParseError or defusedxml entity-attack guard
+        log.warning("malformed/unsafe 13F XML: %s", exc)
         return []
 
     holdings: list[dict] = []

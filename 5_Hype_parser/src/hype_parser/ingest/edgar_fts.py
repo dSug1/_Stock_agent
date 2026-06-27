@@ -19,6 +19,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from ..nethttp import capped_read
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -34,7 +35,7 @@ _TICKER_RE = re.compile(r"\(([A-Z][A-Z0-9.\-]{0,6})\)\s*\(CIK", re.IGNORECASE)
 def _default_http_get(url: str, timeout: int = 30) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+        return capped_read(resp).decode("utf-8", "replace")
 
 
 def parse_response(payload: str):

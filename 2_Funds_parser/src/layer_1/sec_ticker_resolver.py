@@ -30,6 +30,9 @@ SEC_USER_AGENT = "StockPicker contact@stockpicker.local"
 SEC_RATE_LIMIT_SLEEP = 0.11
 DEFAULT_CACHE_MAX_AGE_DAYS = 7
 
+# OOM guard: cap any single SEC response read into memory.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CACHE_PATH = (
     PROJECT_ROOT / "Outputs" / "sec_company_tickers.json"
@@ -54,12 +57,20 @@ _WHITESPACE = re.compile(r"\s+")
 HttpGet = Callable[[str], bytes]
 
 
+def _read_capped(resp, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
+    """Read up to `max_bytes`; raise if the body exceeds the cap."""
+    body = resp.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ValueError(f"response exceeds {max_bytes} byte cap")
+    return body
+
+
 def _default_http_get(url: str) -> bytes:
     req = urllib.request.Request(
         url, headers={"User-Agent": SEC_USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read()
+        body = _read_capped(resp)
     time.sleep(SEC_RATE_LIMIT_SLEEP)
     return body
 

@@ -523,7 +523,7 @@ window.addEventListener('wheel', (ev) => {
         type:      'sv-wheel',
         deltaY:    ev.deltaY,
         deltaMode: ev.deltaMode,
-      }, '*');
+      }, window.location.origin);
     }
   } catch (_) { /* cross-origin safety net — same-origin in practice */ }
 }, { passive: false });
@@ -564,7 +564,7 @@ document.addEventListener('mousemove', (ev) => {
         type:   'sv-rmb-move',
         deltaX: dx,
         deltaY: dy,
-      }, '*');
+      }, window.location.origin);
     }
   } catch (_) {}
 }, true);
@@ -580,7 +580,7 @@ document.addEventListener('contextmenu', (ev) => ev.preventDefault(), true);
 document.addEventListener('dblclick', (ev) => {
   try {
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: 'sv-dblclick' }, '*');
+      window.parent.postMessage({ type: 'sv-dblclick' }, window.location.origin);
     }
   } catch (_) {}
 }, true);
@@ -693,12 +693,13 @@ let _ignoreRangeChange  = false;
 function broadcastPeriod(p) {
   try {
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: "sv-period", period: p }, "*");
+      window.parent.postMessage({ type: "sv-period", period: p }, window.location.origin);
     }
   } catch (_) { /* cross-origin safety net */ }
 }
 
 window.addEventListener("message", (ev) => {
+  if (ev.origin !== window.location.origin) return;
   const d = ev.data;
   if (!d || typeof d.period !== "string" || !PERIODS.includes(d.period)) return;
 
@@ -1003,7 +1004,7 @@ function renderChart(data) {
         positive: chg >= 0,
         status: market_open ? 'open' : 'closed',
         statusText: $statusBadge.textContent,
-      }, '*');
+      }, window.location.origin);
     } catch (_) {}
   }
 
@@ -1086,6 +1087,7 @@ function applyDetail(show) {
 }
 
 window.addEventListener('message', (ev) => {
+  if (ev.origin !== window.location.origin) return;
   const d = ev && ev.data;
   if (d && d.type === 'sv-mode') applyMode(d.light);
   if (d && d.type === 'sv-detail') applyDetail(d.show);
