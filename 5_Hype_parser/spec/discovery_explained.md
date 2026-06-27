@@ -83,6 +83,16 @@ split **1 listed / 489 private** — exactly right, because YC firms are private
 MIT-TR snapshot loaded, convergence **promotes nothing** (it needs ≥2 independent leading juries) — the
 honest underpowered state, the same discipline as the panel kill-switch.
 
+## The weekly run — fetch only what's due (D34)
+
+`--weekly` is the operational entry point. It consults `config/discovery_calendar.yaml` (D26) via
+`calendar.py` and fetches a jury **only when DUE** — its publish window is open AND this year's edition
+isn't already in the DB (the watermark is `MAX(jury_signals.year)` for that source). So most weeks are a
+near no-op: annual juries are skipped ~50 weeks/year, only the continuous feeds (YC) poll, plus any award
+in its window, plus the specialist-fund cross-ref in the ~3 weeks after a 13F deadline. Then it runs
+converge → rank → report on whatever changed. `--due [--as-of DATE]` shows what a given week would fetch
+without running it (e.g. on 2026-06-27 only YC + the MIT-TR snapshot are due; Nobel waits for October).
+
 ## Measuring discovered themes — the diffusion bridge (D30)
 
 Convergence promotes a theme, but to know *where on the diffusion curve* it sits — the whole point
@@ -154,6 +164,7 @@ src/hype_parser/discovery/
   funds.py          specialist-fund cross-reference (config + scorer + 2_Funds 13F new-buys reader)
   nascency.py       jury-timeline nascency gate / ranking (see discovery_nascency_explained.md)
   diffusion_bridge.py  zero-Claude diffusion queries so the radar can measure discovered themes (D30)
+  calendar.py       release-calendar DUE logic — the weekly run fetches only due juries (D34)
   assess.py         fuse jury-timeline + corpus diffusion; compare discovered vs hand-seeded (D31) + build_report (D33)
 (render_discovery.py at package root — the HTML diagnostic, D33)
 ```

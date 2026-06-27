@@ -26,11 +26,12 @@ import logging
 import sys
 import threading
 import webbrowser
+from datetime import date
 from pathlib import Path
 
 from hype_parser import db, render_discovery
-from hype_parser.discovery import (assess, convergence, diffusion_bridge, funds, nascency, parsers,
-                                   resolve, signals)
+from hype_parser.discovery import (assess, calendar as cal, convergence, diffusion_bridge, funds,
+                                   nascency, parsers, resolve, signals)
 from hype_parser.embed import get_embedder
 from hype_parser.registry import load_config
 
@@ -39,6 +40,7 @@ DEFAULT_DB = "data/hype.db"
 DISCOVERY_CFG = "config/discovery.yaml"
 DIFFUSION_CFG = "config/diffusion.yaml"
 SPECIALIST_FUNDS_CFG = "config/specialist_funds.yaml"
+CALENDAR_CFG = "config/discovery_calendar.yaml"
 FUNDS_DB = "../2_Funds_parser/2_fundparser.db"   # reuse 2_Funds' 13F holdings (D3/D25)
 REPORT_OUT = "_intermediate_outputs/discovery_report.html"
 
@@ -54,16 +56,22 @@ def _snapshot_jury_sources(conn) -> list[str]:
     return [r["source_id"] for r in rows if r["source_id"] not in parsers.API_FETCHERS]
 
 
-def cmd_ingest(conn, args) -> None:
+def cmd_ingest(conn, args, *, due=None) -> None:
+    """Ingest jury signals. ``due`` (a set of source_ids) limits the fetch to calendar-due sources
+    (the weekly run); None = all parseable sources."""
     total = {"inserted": 0, "skipped": 0}
     if not args.no_fetch:
         for sid, fetcher in parsers.API_FETCHERS.items():
+            if due is not None and sid not in due:
+                continue
             rows = fetcher(since_year=args.since_year)
             res = signals.upsert_signals(conn, rows)
             total["inserted"] += res["inserted"]
             total["skipped"] += res["skipped"]
             log.info("API jury %-14s parsed=%-5d inserted=%-5d", sid, len(rows), res["inserted"])
     for sid in _snapshot_jury_sources(conn):
+        if due is not None and sid not in due:
+            continue
         rows = parsers.parse_snapshot_source(conn, sid)
         if rows:
             res = signals.upsert_signals(conn, rows)
@@ -164,6 +172,44 @@ def cmd_assess(conn, args) -> None:
               f"{r['label'][:42]}")
 
 
+def _today(args) -> date:
+    return date.fromisoformat(args.as_of) if args.as_of else date.today()
+
+
+def _ingestable(conn) -> set:
+    """Sources discovery can actually parse: the build-first APIs + archived snapshot juries."""
+    return set(parsers.API_FETCHERS) | set(_snapshot_jury_sources(conn))
+
+
+def cmd_due(conn, args) -> None:
+    """Show which jury sources the weekly run would fetch on a given date (spec §5a release calendar)."""
+    calendar = cal.load_calendar(args.calendar_cfg)
+    today = _today(args)
+    ingestable = _ingestable(conn)
+    due = cal.due_jury_sources(conn, calendar, today=today, restrict_to=ingestable)
+    funds_due = cal.funds_due(calendar, today=today)
+    print(f"as of {today}: {len(due)} of {len(ingestable)} ingestable jury sources DUE")
+    for sid in due:
+        cy = cal.captured_year(conn, sid)
+        print(f"  {sid:24} (captured_year={cy})")
+    print(f"  specialist-fund 13F cross-ref DUE: {funds_due} (post-13F-deadline window)")
+
+
+def cmd_weekly(conn, args) -> None:
+    """The weekly run: fetch only calendar-due juries, then converge -> rank -> report (spec §5a)."""
+    calendar = cal.load_calendar(args.calendar_cfg)
+    today = _today(args)
+    due = set(cal.due_jury_sources(conn, calendar, today=today, restrict_to=_ingestable(conn)))
+    print(f"weekly run ({today}): {len(due)} due jury sources -> {sorted(due)}")
+    cmd_ingest(conn, args, due=due)
+    cmd_converge(conn, args)
+    cmd_rank(conn, args)
+    cmd_report(conn, args)
+    if cal.funds_due(calendar, today=today):
+        print("(13F window open -> running specialist-fund cross-ref)")
+        cmd_funds(conn, args)
+
+
 def cmd_report(conn, args) -> None:
     """Render the discovery HTML diagnostic: ranked themes (convergence + nascency + corpus + Track
     A/B + smart-money) vs the hand-seeded baseline."""
@@ -248,10 +294,15 @@ def main(argv=None) -> int:
     p.add_argument("--discovery-cfg", default=DISCOVERY_CFG)
     p.add_argument("--diffusion-cfg", default=DIFFUSION_CFG)
     p.add_argument("--specialist-funds-cfg", default=SPECIALIST_FUNDS_CFG)
+    p.add_argument("--calendar-cfg", default=CALENDAR_CFG)
+    p.add_argument("--as-of", default=None, help="reference date YYYY-MM-DD for --due/--weekly (default today)")
     p.add_argument("--funds-db", default=FUNDS_DB, help="2_Funds_parser holdings DB (13F new positions)")
     p.add_argument("--quarter", default=None, help="period_of_report (YYYY-MM-DD) for --funds; default newest")
     p.add_argument("--current-year", type=int, default=None, help="reference year for --rank (default: now)")
     p.add_argument("--persist-horizon", action="store_true", help="--rank: write refined horizon to themes")
+    p.add_argument("--weekly", action="store_true",
+                   help="weekly run: fetch only calendar-due juries -> converge -> rank -> report (spec 5a)")
+    p.add_argument("--due", action="store_true", help="show which jury sources are due to fetch (calendar)")
     p.add_argument("--ingest", action="store_true", help="parse juries -> jury_signals + embed")
     p.add_argument("--converge", action="store_true", help="cluster -> score -> promote themes + resolve orgs")
     p.add_argument("--diffusion-queries", action="store_true",
@@ -275,6 +326,10 @@ def main(argv=None) -> int:
     conn = db.connect(args.db)
     try:
         did = False
+        if args.weekly:
+            cmd_weekly(conn, args); did = True
+        if args.due:
+            cmd_due(conn, args); did = True
         if args.ingest:
             cmd_ingest(conn, args); did = True
         if args.converge:

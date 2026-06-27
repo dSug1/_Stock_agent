@@ -7,9 +7,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from datetime import date
+
 from hype_parser import db, render_discovery
-from hype_parser.discovery import (assess, convergence, diffusion_bridge, funds, nascency, parsers,
-                                    resolve, signals)
+from hype_parser.discovery import (assess, calendar as cal, convergence, diffusion_bridge, funds,
+                                    nascency, parsers, resolve, signals)
 from hype_parser.embed import HashingEmbedder
 from hype_parser.registry import load_config
 
@@ -321,6 +323,59 @@ def test_assess_unmeasured_theme_is_jury_only(tmp_path):
     res = assess.assess_discovered(conn, CFG, ASSESS_PARAMS, current_year=2024)
     d = res[0]
     assert d["corpus_measured"] is False and d["combined_score"] == d["rank_score"]
+
+
+# ─── release calendar (which juries are due) ─────────────────────────────────
+
+def test_is_jury_due_continuous_always():
+    assert cal.is_jury_due("continuous", None, today=date(2026, 6, 27), captured_year=None,
+                           current_year=2026) is True
+
+
+def test_is_jury_due_annual_window_and_watermark():
+    # annual jury publishing in Oct: not due in June, due in Oct, then NOT due once captured this year
+    assert cal.is_jury_due("annual", [10], today=date(2026, 6, 27), captured_year=2025,
+                           current_year=2026) is False              # before window
+    assert cal.is_jury_due("annual", [10], today=date(2026, 10, 5), captured_year=2025,
+                           current_year=2026) is True               # in window, 2026 not captured
+    assert cal.is_jury_due("annual", [10], today=date(2026, 10, 5), captured_year=2026,
+                           current_year=2026) is False              # already captured 2026
+
+
+def test_is_jury_due_quarterly_handled_elsewhere():
+    assert cal.is_jury_due("quarterly", None, today=date(2026, 6, 27), captured_year=None,
+                           current_year=2026) is False
+
+
+def test_is_funds_due_window():
+    due_from = [{"quarter_end": "03-31", "due_from": "05-15"}]
+    assert cal.is_funds_due(date(2026, 5, 20), due_from) is True    # within 21d of 05-15
+    assert cal.is_funds_due(date(2026, 7, 1), due_from) is False    # long after
+
+
+def test_due_jury_sources_uses_watermark(tmp_path):
+    conn = _conn(tmp_path)
+    # an annual jury (Oct) + a continuous one
+    conn.execute("INSERT INTO sources (source_id,name,edge_type,cadence,add_date,created_at,updated_at) "
+                 "VALUES ('nobel_prize','Nobel','awards','annual','d','c','u')")
+    conn.execute("INSERT INTO sources (source_id,name,edge_type,cadence,add_date,created_at,updated_at) "
+                 "VALUES ('yc_batch_rfs','YC','awards','continuous','d','c','u')")
+    conn.commit()
+    calendar = {"annual_publish": {"nobel_prize": [10]}}
+    # June: only the continuous source is due
+    due = cal.due_jury_sources(conn, calendar, today=date(2026, 6, 27),
+                               restrict_to={"nobel_prize", "yc_batch_rfs"})
+    assert due == ["yc_batch_rfs"]
+    # October: both due (nobel not yet captured for 2026)
+    assert set(cal.due_jury_sources(conn, calendar, today=date(2026, 10, 5),
+                                    restrict_to={"nobel_prize", "yc_batch_rfs"})) == \
+        {"nobel_prize", "yc_batch_rfs"}
+    # capture Nobel 2026 -> no longer due even in window
+    conn.execute("INSERT INTO jury_signals (source_id,year,item_text,item_hash,ingested_at) "
+                 "VALUES ('nobel_prize',2026,'x','h','t')")
+    conn.commit()
+    assert cal.due_jury_sources(conn, calendar, today=date(2026, 10, 5),
+                                restrict_to={"nobel_prize", "yc_batch_rfs"}) == ["yc_batch_rfs"]
 
 
 # ─── discovery HTML report ───────────────────────────────────────────────────

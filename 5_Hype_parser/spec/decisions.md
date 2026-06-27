@@ -1108,6 +1108,30 @@ backfill), or gated on the panel reaching n≥100 (the full forward-return back-
 
 ---
 
+## D34 (2026-06-26) — Weekly release-calendar logic: fetch a jury only when DUE (spec §5a)
+
+D26 added the calendar *config* (`discovery_calendar.yaml`) but nothing *consulted* it — every step was a
+manual flag and an ingest fetched all parseable sources every time. `discovery/calendar.py` is the logic
+that decides which jury sources are **DUE** this week, so a typical week is a near no-op (annual juries
+skipped ~50 wks/yr).
+
+- **`is_jury_due`** (pure): `quarterly` → never here (funds); `annual` → due only if this year's edition
+  isn't captured yet (watermark = `MAX(jury_signals.year)` per source) AND we're in/after its publish
+  window; `continuous`/`daily`/`weekly`/unknown → always poll (cheap, watermark-deduped). **`is_funds_due`**
+  → true only in the ~3 weeks after a 13F deadline (Feb/May/Aug/Nov). **`due_jury_sources`** wraps these
+  over the registry + watermark.
+- **CLI:** `--due [--as-of DATE]` shows what the weekly run would fetch; `--weekly` runs the due-gated
+  pipeline (fetch only due juries → converge → rank → report, + funds cross-ref iff the 13F window is
+  open). `cmd_ingest` gained a `due` filter.
+- **Live proof:** as of 2026-06-27, **2 of 3** ingestable juries due (YC continuous + the MIT-TR
+  snapshot; **Nobel correctly skipped** — annual, its window is October); simulated 2026-10-05 → Nobel
+  becomes due (2026 edition not yet captured). 164 tests (was 159; +5).
+- **Note:** only sources discovery can actually parse (the build-first APIs + archived snapshots) are
+  considered; the ~79 leading juries still need per-source snapshot parsers before the calendar fully
+  exercises them — but the *when-to-fetch* logic is now correct and tested.
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they
