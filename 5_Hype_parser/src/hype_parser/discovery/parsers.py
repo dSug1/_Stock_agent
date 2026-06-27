@@ -20,7 +20,10 @@ import urllib.request
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = "HypeParser/0.1 (research; local)"
+# SEC's fair-access policy 403s any request whose User-Agent lacks a contact, and `resolve` fetches
+# SEC company_tickers.json through this getter — so the UA MUST carry a contact (D38: this silently
+# zeroed Track-A resolution for every theme until fixed). Matches fundamentals.USER_AGENT.
+USER_AGENT = "HypeParser/0.1 research (admin@hypeparser.local)"
 
 # Hard cap on a single response body. Bounds memory against a hostile/broken host returning a giant
 # body (the build-first feeds are small: YC all.json ~5 MB, CNCF landscape ~2 MB). We send no
@@ -30,6 +33,13 @@ MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 YC_ALL_URL = "https://yc-oss.github.io/api/companies/all.json"
 NOBEL_URL = "https://api.nobelprize.org/2.0/nobelPrizes?limit=1000"
 CNCF_URL = "https://raw.githubusercontent.com/cncf/landscape/master/landscape.yml"
+# openFDA drugsfda — biotech jury (D38). Server-side filter to PRIORITY ORIGINAL approvals: the FDA
+# (the regulatory "jury") granting a *priority* review to a *new* application is the leading,
+# company-naming biotech signal — and it skips the generic/labeling-supplement noise that floods the
+# raw endpoint. Sponsors are mostly LISTED pharma/biotech → Track-A constituents for the panel.
+FDA_DRUGSFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+FDA_APPROVALS_QUERY = ("submissions.submission_type:ORIG+AND+submissions.review_priority:PRIORITY"
+                       "+AND+submissions.submission_status:AP")
 
 
 def _default_http_get(url: str, timeout: int = 30, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
@@ -206,6 +216,103 @@ def fetch_cncf(http_get=None, *, since_year: int | None = None) -> list[dict]:
     return parse_cncf(payload, since_year=since_year)
 
 
+# ─── openFDA drug approvals (leading; biotech company-naming jury — D38) ──────
+
+def _orig_ap_year(submissions) -> int | None:
+    """Year of the EARLIEST original-application approval in a drugsfda record. The record's
+    `submissions` array carries every action (ORIG + later SUPPL labeling/efficacy); we want the
+    ORIG/AP one (the actual approval), earliest if several. None if no dated original approval."""
+    years = []
+    for s in submissions or []:
+        if not isinstance(s, dict):
+            continue
+        if (s.get("submission_type") == "ORIG" and s.get("submission_status") == "AP"):
+            d = str(s.get("submission_status_date") or "")
+            if len(d) >= 4 and d[:4].isdigit():
+                years.append(int(d[:4]))
+    return min(years) if years else None
+
+
+def _orig_class(submissions) -> str:
+    """Description of the original submission's class (e.g. 'Type 1 - New Molecular Entity') — adds
+    modality/novelty text to item_text so convergence can place the therapy by kind."""
+    for s in submissions or []:
+        if isinstance(s, dict) and s.get("submission_type") == "ORIG":
+            return (s.get("submission_class_code_description") or "").strip()
+    return ""
+
+
+def parse_fda_approvals(payload, *, source_id: str = "fda_drug_approvals",
+                        since_year: int | None = None) -> list[dict]:
+    """openFDA drugsfda JSON ({'results': [...]}) → one jury signal per drug **application** that has a
+    dated original approval. ``entity`` = sponsor company (resolves to a Track-A ticker for listed
+    pharma/biotech); ``item_text`` = brand names + active ingredients + dosage/route + submission class,
+    the therapeutic text convergence clusters on. ``since_year`` bounds the history. Deduped by
+    application_number. Fail-open shape (a malformed record is skipped, not raised)."""
+    results = payload.get("results", []) if isinstance(payload, dict) else (payload or [])
+    out, seen = [], set()
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        appno = (r.get("application_number") or "").strip()
+        if appno and appno in seen:
+            continue
+        sponsor = (r.get("sponsor_name") or "").strip()
+        if not sponsor:
+            continue
+        year = _orig_ap_year(r.get("submissions"))
+        if since_year and (year is None or year < since_year):
+            continue
+        brands, ingredients, forms = [], [], []
+        for p in r.get("products") or []:
+            if not isinstance(p, dict):
+                continue
+            if p.get("brand_name"):
+                brands.append(str(p["brand_name"]).strip())
+            for ai in p.get("active_ingredients") or []:
+                if isinstance(ai, dict) and ai.get("name"):
+                    ingredients.append(str(ai["name"]).strip())
+            for k in ("dosage_form", "route"):
+                if p.get(k):
+                    forms.append(str(p[k]).strip())
+        # Dedup the small token lists order-preservingly (a multi-product app repeats brand/ingredient).
+        def _uniq(xs):
+            s, o = set(), []
+            for x in xs:
+                if x and x.lower() not in s:
+                    s.add(x.lower())
+                    o.append(x)
+            return o
+        parts = (_uniq(brands) + _uniq(ingredients) + _uniq(forms)
+                 + ([_orig_class(r.get("submissions"))] if _orig_class(r.get("submissions")) else []))
+        item_text = " — ".join(p for p in ([sponsor] + parts) if p)
+        if appno:
+            seen.add(appno)
+        out.append({
+            "source_id": source_id,
+            "diffusion_position": "leading",
+            "jury_credibility": "medium",
+            "year": year,
+            "item_text": item_text,
+            "entity": sponsor,
+            "entity_type": "company",
+            "url": f"https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo={appno}" if appno else None,
+        })
+    return out
+
+
+def fetch_fda_approvals(http_get=None, *, since_year: int | None = None, limit: int = 1000) -> list[dict]:
+    """Pull priority original drug approvals from openFDA (no key needed; capped, fail-open)."""
+    http_get = http_get or _default_http_get
+    url = f"{FDA_DRUGSFDA_URL}?search={FDA_APPROVALS_QUERY}&limit={int(limit)}"
+    try:
+        payload = json.loads(http_get(url))
+    except Exception as exc:  # fail-open (network, rate-limit, or JSON)
+        log.warning("openFDA approvals fetch failed: %s", exc)
+        return []
+    return parse_fda_approvals(payload, since_year=since_year)
+
+
 # ─── snapshot juries (scrape sources captured by the OD-2 forward archive) ────
 
 _TAG = re.compile(r"<[^>]+>")
@@ -277,4 +384,5 @@ API_FETCHERS = {
     "yc_batch_rfs": fetch_yc,
     "nobel_prize": fetch_nobel,
     "cncf_sandbox": fetch_cncf,
+    "fda_drug_approvals": fetch_fda_approvals,
 }

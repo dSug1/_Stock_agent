@@ -133,6 +133,56 @@ def test_parse_cncf_only_accepted_projects():
     assert r["year"] == 2022 and "Service Mesh" in r["item_text"]
 
 
+# ─── FDA drug approvals (biotech listed-naming jury, D38) ────────────────────
+
+def test_parse_fda_approvals_fields_and_year():
+    payload = {"results": [{
+        "application_number": "BLA761234",
+        "sponsor_name": "VERTEX PHARMACEUTICALS",
+        "products": [{"brand_name": "CASGEVY",
+                      "active_ingredients": [{"name": "EXAGAMGLOGENE AUTOTEMCEL"}],
+                      "dosage_form": "SUSPENSION", "route": "INTRAVENOUS"}],
+        "submissions": [
+            {"submission_type": "ORIG", "submission_status": "AP",
+             "submission_status_date": "20231208",
+             "submission_class_code_description": "Type 1 - New Molecular Entity"},
+            {"submission_type": "SUPPL", "submission_status": "AP",
+             "submission_status_date": "20240115"},          # later labeling — must NOT set the year
+        ],
+    }]}
+    rows = parsers.parse_fda_approvals(payload)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["entity"] == "VERTEX PHARMACEUTICALS" and r["entity_type"] == "company"
+    assert r["diffusion_position"] == "leading" and r["year"] == 2023      # ORIG/AP date, not the SUPPL
+    assert "CASGEVY" in r["item_text"] and "New Molecular Entity" in r["item_text"]
+
+
+def test_parse_fda_approvals_since_year_and_dedup_and_no_orig():
+    payload = {"results": [
+        {"application_number": "NDA1", "sponsor_name": "OldPharma",
+         "submissions": [{"submission_type": "ORIG", "submission_status": "AP",
+                          "submission_status_date": "20150101"}]},          # < since_year -> dropped
+        {"application_number": "NDA2", "sponsor_name": "NewBio", "products": [{"brand_name": "DrugX"}],
+         "submissions": [{"submission_type": "ORIG", "submission_status": "AP",
+                          "submission_status_date": "20220301"}]},
+        {"application_number": "NDA2", "sponsor_name": "NewBio dup",          # dup app no -> dropped
+         "submissions": [{"submission_type": "ORIG", "submission_status": "AP",
+                          "submission_status_date": "20220301"}]},
+        {"application_number": "NDA3", "sponsor_name": "NoApproval",
+         "submissions": [{"submission_type": "SUPPL", "submission_status": "AP",
+                          "submission_status_date": "20220301"}]},           # no ORIG/AP -> dropped
+    ]}
+    rows = parsers.parse_fda_approvals(payload, since_year=2018)
+    assert [r["entity"] for r in rows] == ["NewBio"]
+
+
+def test_fetch_fda_approvals_fail_open():
+    def boom(url):
+        raise OSError("openFDA 429")
+    assert parsers.fetch_fda_approvals(http_get=boom) == []
+
+
 def test_cncf_year_handles_date_and_string():
     import datetime
     assert parsers._cncf_year({"accepted": datetime.date(2019, 5, 1)}) == 2019
@@ -273,6 +323,24 @@ def test_build_convergence_eligibility_and_promote(tmp_path):
     assert t["discovered_from"] == "jury_convergence"
     n = conn.execute("SELECT COUNT(*) FROM theme_convergence WHERE theme_id=?", (ids[0],)).fetchone()[0]
     assert n == 3
+
+
+def test_solo_leading_source_promotes_alone_else_needs_two():
+    """D38: a single `solo_leading_sources` regulatory jury (FDA) promotes a cluster on its own; any
+    other single leading jury still needs a 2nd (min_leading_juries). min_signals still applies."""
+    fda = [_sig(i, "fda_drug_approvals", [1, 0, 0], cred="medium", entity=f"Pharma{i}")
+           for i in range(1, 4)]                                    # 3 signals, ONE jury
+    diag = convergence.score_group(fda, CFG)
+    assert diag["n_leading_juries"] == 1 and diag["leading_sources"] == ["fda_drug_approvals"]
+    assert convergence._eligible(diag, CFG) is True                 # solo exception fires
+
+    # a non-solo single leading jury with the same shape is NOT eligible
+    other = [_sig(i, "mit_tr_10", [1, 0, 0], entity=f"Co{i}") for i in range(1, 4)]
+    assert convergence._eligible(convergence.score_group(other, CFG), CFG) is False
+
+    # even the solo jury needs min_signals (2 < 3) — the exception relaxes jury-count, not signal-count
+    two = [_sig(i, "fda_drug_approvals", [1, 0, 0], cred="medium") for i in range(1, 3)]
+    assert convergence._eligible(convergence.score_group(two, CFG), CFG) is False
 
 
 # ─── org resolution (listed vs private) ──────────────────────────────────────
@@ -498,6 +566,7 @@ def test_derive_query_from_label_topic():
     assert "drones" in q["keywords"]                          # framing stripped, topic kept
     assert 'all:"drones"' in q["arxiv_query"]
     assert '"drones"' in q["gdelt_query"]
+    assert '"drones"' in q["edgar_query"]                     # Wave-3 ticker linkage (quoted phrase)
     assert q["wiki_article"] == "Drones"
 
 
@@ -533,7 +602,19 @@ def test_assign_and_load_discovered_radar_themes(tmp_path):
     assert len(radar) == 1
     t = radar[0]
     assert t["id"] == "disc:drones" and 'all:"drones"' in t["arxiv_query"]
-    assert isinstance(t["keywords"], list)                              # parsed from JSON
+    assert '"drones"' in t["edgar_query"]                               # EDGAR linkage now fires
+    assert isinstance(t["keywords"], list) and "drones" in t["keywords"]
+
+    # promote() clobbers descriptor/keywords with member item-texts on re-converge; the radar bridge
+    # must STILL serve a topic-aligned descriptor (re-derived from the clobber-proof label), else
+    # membership comes back empty (the "0 members" bug).
+    conn.execute("UPDATE themes SET descriptor=?, keywords=? WHERE theme_id='disc:drones'",
+                 ("Paladin — we fly delivery drones | JetPack — flying motorcycles",
+                  '["Paladin","JetPack"]'))
+    conn.commit()
+    t2 = diffusion_bridge.load_discovered_radar_themes(conn)[0]
+    assert "drones" in t2["descriptor"].lower() and "drones" in t2["keywords"]   # not the startup-speak
+    assert "paladin" not in t2["descriptor"].lower()
 
 
 # ─── nascency gate / ranking ─────────────────────────────────────────────────

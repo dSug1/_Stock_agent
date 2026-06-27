@@ -12,6 +12,10 @@ convergence:
   min_signals: 3              # a group needs ≥ this many signals to be a candidate theme
   min_leading_juries: 2       # ...AND ≥ this many DISTINCT *leading* sources (independence; denominator
                               #   juries do not count toward promotion — they only set the horizon, §5)
+  solo_leading_sources:       # EXCEPTION (D38): these *regulatory/consensus* leading juries may promote a
+    - fda_drug_approvals      #   group ALONE (each signal is already a multi-expert decision — an FDA
+                              #   priority approval — so within-jury consensus substitutes for the ≥2
+                              #   cross-jury independence bar). min_signals still applies. ⚙ panel-calibrated.
   top_k_themes: 40            # promote at most this many top-scoring groups per run
   # anti-mega-cluster: greedy clustering lets one loose centroid drift and absorb hundreds of distinct
   # startups (the 379-signal "AI in 2026" blob). Split any group bigger than max_cluster_size by

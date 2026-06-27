@@ -82,10 +82,12 @@ def derive_query(label: str, member_texts=None, *, top_k: int = 4) -> dict:
         terms = [(_content_tokens(label) or [label.strip().lower() or "theme"])[0]]
     arxiv = " OR ".join(f'all:"{t}"' for t in terms)
     gdelt = " OR ".join(f'"{t}"' for t in terms)
+    edgar = " OR ".join(f'"{t}"' for t in terms)                    # SEC FTS wants quoted phrases (Wave 3)
     return {
         "keywords": terms,
         "arxiv_query": arxiv,
         "gdelt_query": gdelt,
+        "edgar_query": edgar,                                       # ticker linkage for discovered themes
         "wiki_article": terms[0].title(),                           # may 404; radar handles wiki misses
         # A TOPIC-facing centroid descriptor. The promote() descriptor is the jury *blurbs*
         # (startup-speak) — too far from research abstracts at tau_member, so membership came back empty.
@@ -126,18 +128,27 @@ def assign_diffusion_queries(conn, *, top_k: int = 4, overwrite: bool = False) -
 
 def load_discovered_radar_themes(conn) -> list[dict]:
     """Discovered themes shaped as radar theme-dicts (the `_process_theme` contract: id + *_query +
-    descriptor + keywords). Only those with an arxiv_query (i.e. assign_diffusion_queries has run)."""
+    descriptor + keywords). Only those an `arxiv_query` was assigned to (i.e. `assign_diffusion_queries`
+    has 'activated' them — the FDA-sponsor themes deliberately have none, so they stay out).
+
+    The topic query/descriptor are **re-derived from the label at read time**, NOT read from the stored
+    `descriptor`/`keywords` columns: `convergence.promote()` overwrites those with member item-texts +
+    entities on every re-converge (startup-speak that doesn't match a research corpus → empty membership,
+    the bug behind "1080 candidate docs, 0 members"). The label is clobber-proof, so re-deriving keeps the
+    membership centroid topic-aligned regardless of converge/diffusion-queries ordering. Also supplies an
+    `edgar_query` so Wave-3 ticker linkage fires for discovered themes (hand-seeded themes get one from the
+    seed YAML; without it `_process_theme` skips EDGAR → 0 tickers)."""
     rows = conn.execute(
-        "SELECT theme_id, label, keywords, descriptor, arxiv_query, gdelt_query, wiki_article "
-        "FROM themes WHERE discovered_from='jury_convergence' AND arxiv_query IS NOT NULL "
+        "SELECT theme_id, label FROM themes "
+        "WHERE discovered_from='jury_convergence' AND arxiv_query IS NOT NULL "
         "ORDER BY theme_id").fetchall()
     out = []
     for r in rows:
+        q = derive_query(r["label"], theme_member_texts(conn, r["theme_id"]))
         out.append({
             "id": r["theme_id"], "label": r["label"],
-            "keywords": json.loads(r["keywords"]) if r["keywords"] else [],
-            "descriptor": r["descriptor"],
-            "arxiv_query": r["arxiv_query"], "gdelt_query": r["gdelt_query"],
-            "wiki_article": r["wiki_article"],
+            "keywords": q["keywords"], "descriptor": q["descriptor"],
+            "arxiv_query": q["arxiv_query"], "gdelt_query": q["gdelt_query"],
+            "edgar_query": q["edgar_query"], "wiki_article": q["wiki_article"],
         })
     return out

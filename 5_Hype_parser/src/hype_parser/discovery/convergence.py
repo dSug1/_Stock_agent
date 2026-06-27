@@ -100,6 +100,7 @@ def score_group(members: list[dict], cfg: dict) -> dict:
         "n_signals": len(members),
         "n_sources": len(by_source),
         "n_leading_juries": len(leading_sources),
+        "leading_sources": sorted(leading_sources),
         "positions": positions,
         "sources": sorted(by_source),
     }
@@ -142,8 +143,21 @@ def _group_label(members: list[dict]) -> str:
 
 
 def _eligible(diag: dict, cfg: dict) -> bool:
+    """A group is a candidate theme if it has enough signals AND enough INDEPENDENT leading juries.
+
+    The independence bar is normally ``min_leading_juries`` (≥2) so no single award's idiosyncratic
+    pick promotes a theme. Exception (D38, user decision): a ``solo_leading_sources`` jury — a
+    high-credibility *regulatory/consensus* jury whose every signal is ALREADY a multi-expert
+    decision (FDA priority approval) — can promote on its own, because the within-jury consensus
+    substitutes for cross-jury independence. ``min_signals`` still applies (a real cluster, not one
+    drug). Empty ``solo_leading_sources`` ⇒ the strict ≥2 rule, unchanged."""
     c = cfg["convergence"]
-    return diag["n_signals"] >= c["min_signals"] and diag["n_leading_juries"] >= c["min_leading_juries"]
+    if diag["n_signals"] < c["min_signals"]:
+        return False
+    if diag["n_leading_juries"] >= c["min_leading_juries"]:
+        return True
+    solo = set(c.get("solo_leading_sources") or [])
+    return bool(solo and (set(diag.get("leading_sources", [])) & solo))
 
 
 def build_convergence(signals: list[dict], cfg: dict) -> list[dict]:

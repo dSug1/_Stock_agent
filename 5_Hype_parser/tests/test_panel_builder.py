@@ -199,3 +199,22 @@ def test_crude_label():
     assert pb.crude_label(1.5, hit_return=1.0) == "positive"
     assert pb.crude_label(0.2, hit_return=1.0) == "hard_negative"
     assert pb.crude_label(None, hit_return=1.0) is None
+
+
+def test_candidate_tickers_unions_edgar_then_track_a():
+    # EDGAR linkage first (mention-order preserved by caller), then discovered Track-A extras, deduped
+    # case-insensitively, no cap.
+    out = pb.candidate_tickers(["NTLA", "crsp"], ["CRSP", "JOBY", "NTLA", "ACHR"])
+    assert out == ["NTLA", "CRSP", "JOBY", "ACHR"]
+
+
+def test_candidate_tickers_handles_empty_and_none():
+    assert pb.candidate_tickers([], None) == []
+    assert pb.candidate_tickers([], ["JOBY"]) == ["JOBY"]      # discovered theme w/ no EDGAR linkage
+    assert pb.candidate_tickers(["", None, "joby"]) == ["JOBY"]
+
+
+def test_candidate_tickers_cap_applies_to_union():
+    # Cap is applied AFTER the union so a Track-A name can survive even when EDGAR fills the head.
+    out = pb.candidate_tickers(["A", "B", "C"], ["D", "E"], max_n=4)
+    assert out == ["A", "B", "C", "D"]

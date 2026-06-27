@@ -18,6 +18,7 @@ import urllib.request
 from datetime import date
 
 from .db import now_iso
+from .nethttp import capped_read
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ SHARES_CONCEPTS = ["CommonStockSharesOutstanding", "EntityCommonStockSharesOutst
 def _default_http_get(url: str, timeout: int = 30) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        return capped_read(resp)        # 64 MiB size guard (audit S10 / D37) — fail-open per house style
 
 
 def load_ticker_cik_map(http_get=None) -> dict:

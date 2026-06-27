@@ -51,6 +51,28 @@ def test_load_ticker_cik_map():
     assert m["AAPL"] == "0000320193"                 # upper-cased + zero-padded to 10
 
 
+def test_default_http_get_routes_through_size_cap(monkeypatch):
+    """The real default getter (the one missed by the first D36 hardening pass — D37) must route its
+    response body through the shared cap, so a hostile/oversized SEC response can't OOM the process.
+    Cap *semantics* are covered by test_nethttp; here we lock the wiring against silent regression."""
+    class _Resp:
+        def __init__(self, body): self._b = body
+        def read(self, n=-1): return self._b[:n] if (n is not None and n >= 0) else self._b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    seen = {}
+
+    def _spy_cap(resp, *a, **k):
+        seen["called"] = True
+        return resp.read()
+
+    monkeypatch.setattr(fu, "capped_read", _spy_cap)
+    monkeypatch.setattr(fu.urllib.request, "urlopen", lambda req, timeout=30: _Resp(b"payload"))
+    assert fu._default_http_get("https://data.sec.gov/whatever") == b"payload"
+    assert seen.get("called"), "_default_http_get must read via capped_read"
+
+
 def test_fetch_company_facts_injected():
     status, rows, err = fu.fetch_company_facts("X", "1", http_get=lambda u: json.dumps(FACTS).encode())
     assert status == "ok" and len(rows) == 5 and err is None

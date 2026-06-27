@@ -1190,8 +1190,144 @@ response → `[]`; tests never touch the network). Single-user **local** tool (b
 **Standing policy (applies repo-wide):** treat all fetched/scraped content as untrusted — safe loaders
 only, parameterized SQL, `html.escape` + http(s)-only hrefs in any report, size-capped reads. Any future
 provider that needs a key (Product Hunt, ARPA-E — deferred; user won't register) must read it from
-env/`.env`, never log or commit it. **Follow-up:** propagate the size cap to the OD-2 archive getter and
-the Wave-1..4 ingest clients (`arxiv`/`gdelt`/… still uncapped) — same one-line pattern.
+env/`.env`, never log or commit it. **Follow-up (DONE in D37):** propagate the size cap to the OD-2
+archive getter and the Wave-1..4 ingest clients (`arxiv`/`gdelt`/… were still uncapped) — same one-line
+pattern.
+
+---
+
+## D37 (2026-06-27) — Size-cap propagated repo-wide; shared helper; the missed `fundamentals` getter closed
+
+Completes the D36 follow-up: every external HTTP getter in 5_Hype now bounds its response body, so no
+single hostile/broken host can exhaust memory. The work was the **whole-repo security audit** (S10;
+`../SECURITY_AUDIT.md`) and is now verified complete and consistent.
+
+**What was done:**
+1. **Shared helper** — `src/hype_parser/nethttp.py::capped_read(resp, max_bytes=64 MiB)` reads one byte
+   past the cap and raises `ValueError` on overflow (no `Accept-Encoding` sent ⇒ no gzip-bomb). This is
+   the canonical implementation; the discovery getter (`discovery/parsers.py`) keeps its equivalent
+   inline cap from D36.
+2. **Wired into all 11 Wave-1..4 ingest getters** (`arxiv`, `gdelt`, `wikipedia`, `europepmc`,
+   `clinicaltrials`, `hackernews`, `edgar_fts`, `nih_reporter`, `nsf`, `sbir`, `patentsview`) **and the
+   OD-2 `archive.py` getter** — each now `capped_read(resp)` instead of a bare `resp.read()`. Callers stay
+   fail-open (the raised `ValueError` degrades to `[]`/no-write, the house style).
+3. **The getter the first pass MISSED** — `fundamentals._default_http_get` (the SEC companyfacts /
+   `company_tickers.json` fetch) was still doing a bare `resp.read()`. It is the one most worth capping
+   (companyfacts JSON is the largest single body 5_Hype pulls). Now routed through `capped_read`. This was
+   the real remaining gap; with it closed, **`grep -rn '\.read()' src/hype_parser` returns nothing.**
+4. **Tests** — `tests/test_nethttp.py` covers the cap *semantics* (oversized rejected / under-cap passes /
+   exact-cap boundary); a new `test_fundamentals.py::test_default_http_get_routes_through_size_cap` locks
+   the *wiring* of the previously-missed getter against silent regression. **174 tests** (was 173; +1 here,
+   the +3 nethttp tests landed with the audit).
+
+**Note on the stale notes:** the handoff §4(a) already claimed this done (correctly, for the ingest +
+archive getters) while the §8 file-map still said "getters still uncapped" and `fundamentals` was in fact
+uncapped — the inconsistency that prompted the recheck. Both are now corrected. Standing rule unchanged
+(D36 policy): all fetched content is untrusted; size-capped reads on every getter.
+
+---
+
+## D38 (2026-06-27) — Toward listed-heavy discovery: openFDA biotech jury + SEC-UA fix; finding = one jury can't promote
+
+**Context (the §4(c) pivot, the panel workstream):** before spending the radar network run, we set out to
+**broaden discovery toward sectors with LISTED constituents** so the discovered universe can feed the
+panel (the 12 themes to date are CNCF/YC-heavy → resolve to *private* orgs). The DB confirmed it: 12
+discovered themes, **0 with a `theme_series`, only 1 with any Track-A ticker**. Biotech is the natural
+lever (the spec's "breakthrough designations" jury type; 2_Funds already supplies 21 biotech specialist
+funds). Also wired the candidate-set union for the panel — see the panel change below.
+
+**Built (the openFDA biotech jury):** `parsers.parse_fda_approvals` + `fetch_fda_approvals` (registered in
+`API_FETCHERS` as `fda_drug_approvals`; new registry entry, re-seeded → 109 sources). Build-first: openFDA
+`drugsfda`, server-side-filtered to **PRIORITY ORIGINAL approvals** (`submission_type:ORIG AND
+review_priority:PRIORITY AND submission_status:AP`) so the **regulatory jury** signal is the novel
+therapy, not the generic/labeling-supplement noise. One signal per application: `entity` = **sponsor
+company** (mostly LISTED pharma/biotech → Track-A), `item_text` = brand + active ingredients + dosage/route
++ submission class, `year` = earliest ORIG/AP date (not a later SUPPL). Live: **275 signals, 185 distinct
+sponsors, 2016–2026** (IMMUNOCORE, NOVARTIS, BRISTOL, SERVIER…). +3 parser tests.
+
+**Fixed (a real pre-existing bug):** the discovery parsers' `USER_AGENT` lacked a contact, so SEC's
+fair-access policy **403'd `resolve.load_name_index`** (SEC `company_tickers.json`) — and because the
+fetch fail-opens, it **silently zeroed Track-A resolution for *every* theme** (the "only 1/12 has Track-A"
+symptom was partly this, not only private orgs). Aligned the UA with the working `fundamentals.USER_AGENT`.
+Post-fix the resolver runs: 1 listed / 222 private / 0 unknown across the 12 themes — confirming the
+current themes' company-entities are genuinely **private-heavy** (their listed constituents would come from
+the radar's EDGAR-FTS linkage, not jury org-resolution).
+
+**THE FINDING (empirical, decisive):** adding openFDA **alone does NOT promote any biotech theme.**
+Convergence requires **`min_leading_juries ≥ 2`** (independence; D27/`discovery.yaml`), and the 275 FDA
+signals cluster among *themselves* (one jury) — drug-approval text does not co-cluster with the tech-heavy
+YC/CNCF juries at `tau=0.55`. So every pure-FDA cluster is ineligible; the promoted set stayed the same 12
+tech themes, and **FDA's listed sponsors are never surfaced** (no biotech theme to attach them to). **A
+single biotech jury is insufficient — biotech needs a PARTNER leading jury whose text co-clusters with
+drug approvals** (candidate build-first partners: ClinicalTrials.gov sponsors — shares drug vocabulary, an
+API already in-repo; or a biotech awards jury).
+
+**RESOLVED (user decision):** take the regulatory-jury exception — a single high-credibility *regulatory*
+jury (an FDA priority approval is itself a multi-reviewer consensus) may promote a cluster on its own.
+Implemented NOT as a global `min_leading_juries=1` (that would let any one startup-award promote) but as an
+explicit allow-list `convergence.solo_leading_sources: [fda_drug_approvals]` (⚙). `_eligible` now: enough
+`min_signals` AND (`n_leading_juries ≥ min_leading_juries` OR the group contains a solo-promote leading
+source). `score_group` exposes `leading_sources` for the check; empty allow-list = the strict ≥2 rule,
+unchanged. **Live result:** discovered themes **12 → 28**, Track-A listed constituents **1 → 18** — 16
+biotech themes now surface listed sponsors the panel can screen (AZN, ABBV, AMGN, BIIB, BMY, GILD, INCY,
+LLY, PFE, NVS, ADCT…). +1 test (`test_solo_leading_source_promotes_alone_else_needs_two`).
+
+**Known limitation (follow-up):** FDA-cluster theme *labels* are the sponsor company name (e.g. "ASTRAZENECA
+AB") because `_group_label` picks the top leading signal's entity — fine for the panel (Track-A tickers
+resolve correctly) but a poor theme name, and `diffusion_bridge.derive_query` would then query the *company*
+not the modality. Fix later: label/​query a solo-regulatory cluster by its dominant active-ingredient/drug-
+class text instead of the sponsor. Conservative SEC name-matching also leaves foreign/private sponsors
+(Bayer, Ipsen, Servier) as Track-B — expected.
+
+**Also (panel §4(c) step 2):** `panel_builder.candidate_tickers(edgar, track_a, max_n)` (pure, +3 tests) +
+`build_crude` now screens **EDGAR ticker-linkage ∪ discovered-theme Track-A** per theme (no-op for
+hand-seeded themes; theme-agnostic gates unchanged). Inert until the radar gives discovered themes a series.
+
+**Tests: 181** (was 174; +3 FDA parser, +3 candidate_tickers, +1 solo-promote). Registry 109 sources (re-seed
+needed before a backtest window — still frozen at `v1`; §6.7). Discovered themes 28, Track-A constituents 18.
+Next: run the radar across the discovered themes (gives them a series + EDGAR linkage), then rebuild the
+crude panel on EDGAR ∪ Track-A and re-check the Protocol §2.3 strata toward n≥100.
+
+---
+
+## D39 (2026-06-27) — Two discovered-theme→radar bridge bugs (found by the first radar run)
+
+The first `5_radar.py --include-discovered` run measured the 12 query-ready discovered themes but came back
+near-useless: most got a `theme_series` with **0 member-months** (e.g. drones: 1080 candidate docs, 0
+members) and **0 EDGAR tickers** — so they'd contribute nothing to the panel. Two real bugs in
+`diffusion_bridge.py`, both now fixed:
+
+1. **Descriptor/keywords clobbered by re-converge.** `convergence.promote()`'s `ON CONFLICT` overwrites
+   `themes.descriptor` + `themes.keywords` with the members' raw `item_text`/entities (YC startup-speak)
+   on every run, but leaves `arxiv_query` — so running `--diffusion-queries` *then* re-converging (as D38
+   did) leaves a clean arxiv query beside a startup-speak descriptor. The radar's membership centroid =
+   `encode(descriptor + keywords)`, so it stopped matching the research corpus → empty membership (the
+   D30 "0 members" failure, re-triggered). **Fix:** `load_discovered_radar_themes` now **re-derives** the
+   topic query + descriptor from the (clobber-proof) `label` at read time via `derive_query`, instead of
+   trusting the stored columns. Immune to converge/diffusion-queries ordering.
+2. **No EDGAR ticker linkage for discovered themes.** `_process_theme` only runs Wave-3 EDGAR FTS when the
+   theme dict has an `edgar_query`; hand-seeded themes get one from the seed YAML, but the discovered-theme
+   dict never had one → `theme_tickers` empty for every discovered theme (the listed constituents the panel
+   needs). **Fix:** `derive_query` now emits an `edgar_query` (quoted-phrase FTS), surfaced by
+   `load_discovered_radar_themes`.
+
+Extended 2 existing bridge tests (edgar_query present; clobber-resilience of the re-derive — count stays
+181). Re-ran the radar after the fix. Note the
+root cause #1 (promote clobbers descriptor) still exists in `promote()` itself — the bridge now defends
+against it, but the canonical pipeline order remains converge → diffusion-queries → radar.
+
+**Third gotcha — SWR hid the EDGAR fetch.** After the descriptor fix the second radar run recomputed
+membership from cache (drones 0 → 187 member-months ✓) but still wrote **0 EDGAR tickers**: `_process_theme`
+guards EDGAR behind `if do_fetch:`, and `do_fetch = args.refresh or _theme_is_stale(theme, ttl=7d)` — the
+first run had just made every theme "fresh", so the second skipped all fetching. EDGAR for the discovered
+themes had never been fetched (run 1 had no `edgar_query`), so there was nothing cached to recompute from.
+Fixed operationally with a **targeted EDGAR backfill** (call `edgar_fts.fetch_yearly` per discovered theme
++ `write_theme_tickers`, no arxiv refetch). Result: **drones → 75 tickers** (UAVS, BLDP, GPRO, OPTT…),
+**nuclear-power → 67** (BWXT, LTBR, UEC, ETR…) — the cheap small-caps the screener targets. The noisy
+"ai-*" themes resolved many junk tickers (broad/drifty label queries — the D38 label-quality follow-up
+again) but carry ~0 membership, so the panel's nascency gate (`β>0 ∧ n_spec≥5`) auto-filters them; the
+cloud-native OSS themes resolve 0 (no listed filers). Lesson: a per-theme `--refresh`/EDGAR-only path would
+make this a one-command operation — a small radar-CLI follow-up.
 
 ---
 

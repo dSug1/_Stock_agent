@@ -54,6 +54,52 @@ def theme_regime(theme_id: str) -> str:
     return _THEME_REGIME.get(theme_id, "B")
 
 
+def theme_horizon_weeks(horizon_years, cfg_crude):
+    """Forward-return / hold horizon H (weeks) for a theme — **horizon-aware H** (Protocol; D22/D40).
+
+    A nascent theme's re-rating plays out over its diffusion *runway*, not a fixed calendar window: a
+    slow theme (drones, ~3.5yr) measured at a fixed 52w systematically under-counts the re-rating (and
+    thus positives), while a fast one over-counts noise. A DISCOVERED theme carries that runway as the
+    convergence `horizon_years` (D29); a hand-seeded theme has none, so it falls back to
+    `default_horizon_weeks`. Result clamped to `[min_horizon_weeks, max_horizon_weeks]`.
+
+    `horizon_mode: fixed` (or absent) reproduces the old single-horizon behaviour exactly — every theme
+    gets `primary_horizon_weeks`. Pure (no I/O); the caller reads `horizon_years` from the themes row.
+    """
+    if cfg_crude.get("horizon_mode", "fixed") != "theme_aware":
+        return int(cfg_crude["primary_horizon_weeks"])
+    if horizon_years and float(horizon_years) > 0:
+        h = int(round(float(horizon_years) * 52))
+    else:
+        h = int(cfg_crude.get("default_horizon_weeks", cfg_crude["primary_horizon_weeks"]))
+    lo = int(cfg_crude.get("min_horizon_weeks", 13))
+    hi = int(cfg_crude.get("max_horizon_weeks", 260))
+    return max(lo, min(hi, h))
+
+
+def candidate_tickers(edgar_tickers, track_a_tickers=None, *, max_n=None):
+    """Per-theme candidate constituent set for the panel: the EDGAR ticker-linkage names FIRST
+    (highest mention-count order is preserved by the caller), then any DISCOVERED-theme Track-A
+    tickers (jury-surfaced firms that resolved to a ticker, spec §4a / D21 → §4 (c) step 2) not
+    already present. Deduped, order-preserving, optionally capped to `max_n` after the union so a
+    discovered theme with no EDGAR linkage still contributes its jury constituents.
+
+    Pure (no I/O) so the union logic is unit-testable; the caller supplies both lists from the DB.
+    """
+    out, seen = [], set()
+    for tk in list(edgar_tickers) + list(track_a_tickers or []):
+        if not tk:
+            continue
+        u = tk.upper()
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+        if max_n and len(out) >= max_n:
+            break
+    return out
+
+
 def contiguous_series(periods, n_spec_by, n_main_by):
     """Fill a (possibly gappy) monthly series into a contiguous YYYY-MM grid so slopes have no holes.
 

@@ -172,3 +172,25 @@ src/hype_parser/discovery/
 ```
 Schema: `db.py::_migration_8` (`jury_signals`, `theme_convergence`, `theme_orgs`, `themes` +cols).
 Tests: `tests/test_discovery.py` (18).
+
+## D38 — listed-heavy discovery (the openFDA biotech jury + the solo-promote exception)
+
+To feed the **panel** (which needs LISTED constituents), discovery was broadened toward biotech — the one
+sector where a build-first jury reliably names public companies. `parsers.parse_fda_approvals` /
+`fetch_fda_approvals` (registered `fda_drug_approvals`) pull openFDA `drugsfda` **priority original**
+approvals: one signal per drug application, `entity` = the **sponsor company** (listed pharma/biotech),
+generics/labeling-supplements filtered out server-side. Live: 275 signals, 185 sponsors, 2016–2026.
+
+But one jury could not promote a theme: convergence's independence bar (`min_leading_juries ≥ 2`) makes a
+single jury's clusters ineligible, and FDA drug text does not co-cluster with the tech YC/CNCF juries. The
+chosen fix (user decision) is the **regulatory-jury exception**: `convergence.solo_leading_sources`
+(⚙, currently `[fda_drug_approvals]`) lists leading juries credible enough to promote a cluster ALONE —
+because each FDA priority approval is *already* a multi-reviewer consensus, so within-jury consensus
+substitutes for cross-jury independence. `min_signals` still applies; `_eligible` checks
+`n_leading_juries ≥ min_leading_juries OR (group ∩ solo_leading_sources)`. Result: themes **12 → 28**,
+listed Track-A constituents **1 → 18** (AZN, ABBV, AMGN, BIIB, BMY, GILD, INCY, LLY, PFE, NVS, ADCT…).
+
+Also fixed here: the discovery parsers' User-Agent lacked a contact, so SEC `company_tickers.json` 403'd and
+`resolve` silently returned an empty index (Track-A was zero for *every* theme). UA now matches
+`fundamentals`. Known follow-up: an FDA cluster's *label* is its sponsor name (panel Track-A is correct, but
+a poor theme name and a misleading radar query — re-label by drug-class text later).

@@ -22,6 +22,7 @@ import yaml
 
 from hype_parser import (db, fundamentals, killswitch, mshare, panel, panel_builder, panel_strata,
                          prices, themes)
+from hype_parser.discovery import resolve
 
 DEFAULT_DB = "data/hype.db"
 ANCHORS_CFG = "config/panel_anchors.yaml"
@@ -115,8 +116,23 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
         bench_ticker = cr.get("benchmarks", {}).get(tid)
         bench_mc = _bench_close(bench_ticker) if (cr.get("use_relative_drawdown")
                                                   and bench_ticker) else None
-        for tk_row in themes.read_theme_tickers(conn, tid, limit=cr["max_per_theme"]):
-            ticker = tk_row["ticker"]
+        # Horizon-aware H (D40): the label/return window is THIS theme's diffusion runway, not a fixed
+        # 52w — a discovered theme carries horizon_years (drones ~3.5yr); hand-seeded fall back to the
+        # default. horizon_mode:fixed reproduces the single-horizon behaviour. Fetch the standard
+        # horizons UNION prim_h so the report still shows 13/26/52 alongside the theme's own window.
+        prim_h = panel_builder.theme_horizon_weeks(th["horizon_years"], cr)
+        row_horizons = sorted(set(horizons) | {prim_h})
+        # Candidate constituents = EDGAR ticker-linkage UNION the discovered theme's Track-A
+        # (jury-surfaced, ticker-resolved) firms (D21 → §4 (c) step 2). track_a_tickers is empty for
+        # hand-seeded themes (no theme_orgs rows), so this is a no-op there; for discovered themes it
+        # adds the jury constituents the literature-linkage may miss. The gates downstream are
+        # theme-agnostic, so a Track-A name is screened against this theme's PIT series exactly as an
+        # EDGAR-linked one.
+        edgar_tickers = [r["ticker"] for r in
+                         themes.read_theme_tickers(conn, tid, limit=cr["max_per_theme"])]
+        candidates = panel_builder.candidate_tickers(
+            edgar_tickers, resolve.track_a_tickers(conn, tid), max_n=cr["max_per_theme"])
+        for ticker in candidates:
             try:
                 daily = fetch_prices(ticker, cr["price_start"], today)
             except Exception as exc:
@@ -144,11 +160,11 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
             def _slice(_tk, start, end, _daily=daily):
                 return [(d, p) for d, p in _daily if start <= d < end]
 
-            rr = prices.forward_returns(ticker, t0_date, horizons, fetch=_slice, today=today)
-            prim_stats = rr.get(prim, {})
+            rr = prices.forward_returns(ticker, t0_date, row_horizons, fetch=_slice, today=today)
+            prim_stats = rr.get(prim_h, {})
             fwd_prim = prim_stats.get("fwd_return")
             if fwd_prim is None:
-                skips.append((ticker, tid, f"t0={t0m} too recent for {prim}w horizon"))
+                skips.append((ticker, tid, f"t0={t0m} too recent for {prim_h}w horizon"))
                 continue
 
             # m_share label clause (Stage B): split the run into re-rating vs fundamental growth,
@@ -156,7 +172,7 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
             # are loaded for this ticker (run scripts/5_fundamentals.py --fetch to enable).
             ms = {"m_share": None, "mode": "no_fundamentals"}
             if cr.get("use_mshare", True) and _has_facts(conn, ticker):
-                tH = prices._add_weeks(t0_date, prim)
+                tH = prices._add_weeks(t0_date, prim_h)
                 f0 = fundamentals.fundamentals_as_of(conn, ticker, t0_date)
                 fH = fundamentals.fundamentals_as_of(conn, ticker, tH)
                 ms = mshare.decompose_mshare(
@@ -168,6 +184,7 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
 
             feats = panel_builder.pit_features(tid, sig)
             feats["era"] = panel_builder.era_feature(t0m)
+            feats["horizon_weeks"] = float(prim_h)        # window length (control for mixed horizons)
             if ms["m_share"] is not None:
                 feats["m_share"] = ms["m_share"]
             ff = None
@@ -190,7 +207,7 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
             rows_built.append({"pid": pid, "ticker": ticker, "theme": tid, "t0": t0_date,
                                "label": label, "fwd": fwd_prim, "narrative": feats["narrative"],
                                "free_float": feats["free_float"], "m_share": ms["m_share"],
-                               "ms_mode": ms["mode"]})
+                               "ms_mode": ms["mode"], "prim": prim_h})
 
     # Impute missing free_float with the panel median so those rows aren't dropped from the crude
     # regression (current-float lookups are flaky; this is a crude control anyway).
@@ -208,7 +225,7 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
         feats = panel.read_features(conn, r["pid"])
         rets = {row["horizon_weeks"]: row["fwd_return"]
                 for row in panel.read_returns(conn, r["pid"])}
-        ks_rows.append({"fwd_return": rets.get(prim), "narrative": feats.get("narrative"),
+        ks_rows.append({"fwd_return": rets.get(r["prim"]), "narrative": feats.get("narrative"),
                         **{c: feats.get(c) for c in cr["controls"]}})
     ksw = cfg["kill_switch"]
     verdict = killswitch.run(ks_rows, narrative_key="narrative", control_keys=tuple(cr["controls"]),
