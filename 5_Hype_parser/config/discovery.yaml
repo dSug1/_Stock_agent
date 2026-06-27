@@ -13,6 +13,12 @@ convergence:
   min_leading_juries: 2       # ...AND ≥ this many DISTINCT *leading* sources (independence; denominator
                               #   juries do not count toward promotion — they only set the horizon, §5)
   top_k_themes: 40            # promote at most this many top-scoring groups per run
+  # anti-mega-cluster: greedy clustering lets one loose centroid drift and absorb hundreds of distinct
+  # startups (the 379-signal "AI in 2026" blob). Split any group bigger than max_cluster_size by
+  # re-clustering it at a tighter tau — self-correcting: a real theme stays whole, a blob fragments. ⚙
+  max_cluster_size: 60
+  split_tau_step: 0.08        # tau increment per split round
+  tau_ceiling: 0.85           # stop tightening here (avoid singleton dust)
 
 # --- jury weighting (spec §4 step 3) ------------------------------------------
 # score = Σ over distinct sources in the group of  credibility_weight × position_weight.

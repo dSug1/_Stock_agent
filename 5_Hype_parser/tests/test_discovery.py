@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from hype_parser import db
-from hype_parser.discovery import (convergence, diffusion_bridge, funds, nascency, parsers,
+from hype_parser.discovery import (assess, convergence, diffusion_bridge, funds, nascency, parsers,
                                     resolve, signals)
 from hype_parser.embed import HashingEmbedder
 from hype_parser.registry import load_config
@@ -140,6 +140,22 @@ def test_cluster_signals_separates_groups():
     assert {len(g) for g in groups} == {2}
 
 
+def test_oversized_blob_splits_but_cohesive_theme_survives():
+    # a drifted "blob": two distinct directions loosely bridged -> should split when tightened
+    blob = ([_sig(i, "a", [1, 0.05 * (i % 3), 0]) for i in range(1, 40)] +
+            [_sig(i, "b", [0, 1, 0.05 * (i % 3)]) for i in range(40, 80)])
+    split = convergence.cluster_signals(blob, tau=0.4, max_cluster_size=50)
+    assert len(split) >= 2                                     # the loose blob fragments
+    # a genuinely cohesive big group (all near-identical) must NOT be split
+    tight = [_sig(i, "a", [1, 0.001 * (i % 2), 0]) for i in range(1, 70)]
+    assert len(convergence.cluster_signals(tight, tau=0.4, max_cluster_size=50)) == 1
+
+
+def test_cluster_signals_no_split_when_unset():
+    sigs = [_sig(i, "a", [1, 0.02 * (i % 2), 0]) for i in range(1, 80)]
+    assert len(convergence.cluster_signals(sigs, tau=0.4)) == 1   # backward-compatible (no max_size)
+
+
 def test_score_group_counts_distinct_leading_juries():
     members = [_sig(1, "mit_tr_10", [1, 0]), _sig(2, "darpa_eri", [1, 0]),
                _sig(3, "mit_tr_10", [1, 0])]                       # same source -> counts once
@@ -237,6 +253,74 @@ def test_fund_config_readers():
     assert any(v["name"] == "Baker Brothers Advisors" for v in ciks.values())
     etfs = funds.sector_etfs(cfg)
     assert "SMH" in etfs["semiconductors"]
+
+
+# ─── assessment (fuse jury-timeline + corpus; vs seed baseline) ──────────────
+
+ASSESS_PARAMS = {"L": 12, "tau_member": 0.45, "beta_min": 0.0, "p_max": 0.5}
+
+
+def _rising_series(conn, tid, n=14):
+    y, m = 2024, 1
+    for i in range(n):
+        conn.execute("INSERT INTO theme_series (theme_id,period,n_spec,n_main,computed_at) "
+                     "VALUES (?,?,?,0,'t')", (tid, f"{y:04d}-{m:02d}", i + 1))
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    conn.commit()
+
+
+def _disc_theme_with_jury(conn, tid, sigs, start_id):
+    for sid in {s[0] for s in sigs}:
+        conn.execute("INSERT OR IGNORE INTO sources (source_id,name,edge_type,diffusion_position,"
+                     "jury_credibility,add_date,created_at,updated_at) "
+                     "VALUES (?,?,'awards','leading','high','d','c','u')", (sid, sid))
+    conn.execute("INSERT INTO themes (theme_id,label,created_at,updated_at,discovered_from) "
+                 "VALUES (?,?,'c','u','jury_convergence')", (tid, tid))
+    for i, (src, yr) in enumerate(sigs, start_id):
+        conn.execute("INSERT INTO jury_signals (signal_id,source_id,diffusion_position,jury_credibility,"
+                     "year,item_text,item_hash,ingested_at) VALUES (?,?,'leading','high',?,?,?,'t')",
+                     (i, src, yr, f"t{i}", f"h{i}"))
+        conn.execute("INSERT INTO theme_convergence (theme_id,signal_id,similarity) VALUES (?,?,1.0)",
+                     (tid, i))
+    conn.commit()
+
+
+def test_theme_corpus_metrics_none_without_series(tmp_path):
+    conn = _conn(tmp_path)
+    conn.execute("INSERT INTO themes (theme_id,label,created_at,updated_at) VALUES ('seed:x','x','c','u')")
+    conn.commit()
+    assert assess.theme_corpus_metrics(conn, "seed:x", ASSESS_PARAMS) is None
+    _rising_series(conn, "seed:x")
+    cm = assess.theme_corpus_metrics(conn, "seed:x", ASSESS_PARAMS)
+    assert cm["beta_spec"] > 0 and cm["n_spec_total"] > 0
+
+
+def test_assess_compare_fuses_and_baselines(tmp_path):
+    conn = _conn(tmp_path)
+    _disc_theme_with_jury(conn, "disc:d",
+                          [("mit_tr_10", 2022), ("darpa_eri", 2023), ("mit_tr_10", 2023),
+                           ("darpa_eri", 2023)], start_id=1)
+    _rising_series(conn, "disc:d")
+    conn.execute("INSERT INTO themes (theme_id,label,created_at,updated_at) VALUES ('seed:s','S','c','u')")
+    _rising_series(conn, "seed:s")
+    res = assess.compare(conn, CFG, ASSESS_PARAMS, current_year=2024)
+    assert res["summary"]["n_discovered"] == 1 and res["summary"]["n_discovered_measured"] == 1
+    assert res["summary"]["n_seed_measured"] == 1
+    d = res["discovered"][0]
+    assert d["corpus_measured"] and d["corpus"]["beta_spec"] > 0
+    assert d["combined_score"] >= d["rank_score"]          # lifted by positive corpus β_spec
+    assert res["seed_baseline"][0]["theme_id"] == "seed:s"
+
+
+def test_assess_unmeasured_theme_is_jury_only(tmp_path):
+    conn = _conn(tmp_path)
+    _disc_theme_with_jury(conn, "disc:u", [("mit_tr_10", 2023), ("darpa_eri", 2023),
+                                           ("mit_tr_10", 2022)], start_id=1)   # no series written
+    res = assess.assess_discovered(conn, CFG, ASSESS_PARAMS, current_year=2024)
+    d = res[0]
+    assert d["corpus_measured"] is False and d["combined_score"] == d["rank_score"]
 
 
 # ─── diffusion bridge (queries for discovered themes) ───────────────────────

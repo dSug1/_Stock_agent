@@ -26,8 +26,8 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(a @ b / (na * nb)) if na and nb else 0.0
 
 
-def cluster_signals(signals: list[dict], tau: float) -> list[list[dict]]:
-    """Greedy single-pass clustering: each signal joins the existing group whose centroid is most
+def _greedy_pass(signals: list[dict], tau: float) -> list[list[dict]]:
+    """One greedy single-pass clustering: each signal joins the existing group whose centroid is most
     similar (cosine ≥ ``tau``), else seeds a new group. Centroids update incrementally. Order is by
     signal_id (deterministic). Each signal dict must carry a normalized ``vec`` (np.ndarray)."""
     clusters: list[dict] = []                    # {members: [...], sum: vec, centroid: vec}
@@ -46,6 +46,37 @@ def cluster_signals(signals: list[dict], tau: float) -> list[list[dict]]:
             n = np.linalg.norm(best["sum"])
             best["centroid"] = best["sum"] / n if n else best["sum"]
     return [c["members"] for c in clusters]
+
+
+def _split_oversized(members: list[dict], tau: float, *, max_size: int, step: float,
+                     ceiling: float) -> list[list[dict]]:
+    """Recursively split an oversized group by re-clustering its members at a TIGHTER tau. This is
+    self-correcting: a genuinely cohesive theme stays one group when tightened (so we stop), while a
+    drifted mega-cluster (e.g. the centroid-drift 'all AI startups' blob) fragments into sub-themes."""
+    if len(members) <= max_size or tau >= ceiling:
+        return [members]
+    sub = _greedy_pass(members, tau + step)
+    if len(sub) <= 1:                            # didn't separate -> genuinely cohesive, keep whole
+        return [members]
+    out = []
+    for g in sub:
+        out.extend(_split_oversized(g, tau + step, max_size=max_size, step=step, ceiling=ceiling))
+    return out
+
+
+def cluster_signals(signals: list[dict], tau: float, *, max_cluster_size: int | None = None,
+                    split_step: float = 0.08, tau_ceiling: float = 0.85) -> list[list[dict]]:
+    """Greedy cosine clustering at ``tau`` (see ``_greedy_pass``), then — when ``max_cluster_size`` is
+    set — split any oversized group by re-clustering it tighter (anti-mega-cluster; the centroid-drift
+    failure mode where one loose 'AI' centroid absorbs hundreds of distinct startups)."""
+    groups = _greedy_pass(signals, tau)
+    if not max_cluster_size:
+        return groups
+    out = []
+    for g in groups:
+        out.extend(_split_oversized(g, tau, max_size=max_cluster_size, step=split_step,
+                                    ceiling=tau_ceiling))
+    return out
 
 
 def score_group(members: list[dict], cfg: dict) -> dict:
@@ -119,8 +150,11 @@ def build_convergence(signals: list[dict], cfg: dict) -> list[dict]:
     """Cluster + score + rank, no DB writes (pure, testable). Returns eligible candidate themes,
     score-desc, capped at top_k_themes. Each: {label, slug, score, diag, horizon, members,
     similarities}."""
-    tau = cfg["convergence"]["tau_converge"]
-    groups = cluster_signals(signals, tau)
+    cc = cfg["convergence"]
+    tau = cc["tau_converge"]
+    groups = cluster_signals(signals, tau, max_cluster_size=cc.get("max_cluster_size"),
+                             split_step=cc.get("split_tau_step", 0.08),
+                             tau_ceiling=cc.get("tau_ceiling", 0.85))
     candidates = []
     for members in groups:
         diag = score_group(members, cfg)

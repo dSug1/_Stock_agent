@@ -1033,6 +1033,58 @@ a corpus for it. `discovery/diffusion_bridge.py` derives them, zero-Claude.
 
 ---
 
+## D31 (2026-06-26) — Theme assessment: fuse the two nascency signals + compare vs hand-seeded (spec §9.5)
+
+The discovery module now reads "how early" a theme is **two independent ways** — the jury timeline
+(D29: `beta_jury`, recency) and the corpus diffusion (D30: `beta_spec`, `p_main`, `nascency_gate`).
+`discovery/assess.py` fuses them per discovered theme and lays the discovered themes next to the
+hand-seeded baseline on the **same** diffusion metric — the §9-step-5 comparison (the diffusion-signature
+part; the full panel/forward-return back-test is separate, Protocol §4).
+
+- **Fusion (monotone, never penalises):** `combined_score = jury rank_score × (1 + max(0, beta_spec))`
+  when the radar has measured the theme, else jury-only. Measuring a theme can only *raise* its rank;
+  an unmeasured theme is un-lifted, not penalised. Pure read over the stored series (no network).
+- **CLI:** `5_discovery.py --assess`. **Live result (encouraging):** the discovered **drones** theme
+  scores `beta_spec = 0.08` — **on par with / above the best hand-seeded themes** (Mamba 0.07, RAG
+  0.04; CRISPR is late at p_main 0.81; mKRAS negative). Median discovered β_spec **0.081** > seed median
+  **0.032**. So discovery surfaced a theme with an early-diffusion signature comparable to the curated
+  baseline — the first real signal that the jury-convergence approach finds genuinely-nascent themes.
+- **Caveat:** only 1 of 5 discovered themes is measured (the radar ran on drones only); the harness
+  honestly shows `n/a` + "1 measured" for the rest. Running `5_radar.py --include-discovered` across all
+  discovered themes (a network pass) fills the comparison. 155 tests (was 152; +3).
+
+This closes the discovery vertical for now: **ingest juries → converge → resolve orgs (Track A/B) →
+nascency-rank → smart-money confirm → diffusion-measure → assess vs baseline**, all zero-Claude. The
+remaining open items are calibration (`tau_converge`, `tau_member`, the fusion/horizon weights), the
+per-source snapshot parsers + §3a backfill + §4b ETF-delta fallback, and the full panel/forward-return
+back-test (Protocol §4) — all gated on the kill-switch and the panel reaching n≥100.
+
+---
+
+## D32 (2026-06-26) — Anti-mega-cluster: self-correcting split of oversized convergence groups
+
+The standing convergence defect (D27–D31): greedy single-pass clustering lets one centroid **drift** and
+absorb hundreds of loosely-related signals — the **379-signal "AI in 2026" blob**, a single theme that
+swallowed most AI startups. Raising `tau_converge` globally is blunt (it also fragments the *good*
+tight themes). Fix: keep `tau` where it is, but **split only the oversized groups** by re-clustering
+their members at a progressively tighter tau (`convergence._split_oversized`, config
+`max_cluster_size`/`split_tau_step`/`tau_ceiling`).
+
+- **Self-correcting:** a genuinely cohesive theme stays one group when tightened (the re-cluster returns
+  a single group → stop), while a drifted blob fragments into sub-themes. Each fragment is then re-scored
+  by jury convergence — sub-fragments that lose the ≥2-distinct-leading-jury bar are simply **not
+  promoted** (correct: they were only a "theme" by accident of the blob).
+- **Live effect:** "AI in 2026" **379 → 7 signals**; total Track-B private orgs **489 → 121** (the blob's
+  hundreds of loosely-related YC startups no longer lump into one theme). Still 5 themes promoted, now
+  tight (chatbots 49 / drones 34 / AI-and-math 40 / AI-in-2026 7 / nuclear 5). Re-measured drones still
+  β_spec 0.081, so the §9.5 comparison stands. Backward-compatible (no `max_cluster_size` ⇒ old behavior).
+  157 tests (was 155; +2).
+- **Still ⚙:** `max_cluster_size=60`, `split_tau_step=0.08`, `tau_ceiling=0.85` are unfit defaults like
+  every discovery knob — the back-test calibrates them. This is an algorithmic guard against the
+  *failure mode*, not a fitted value.
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

@@ -39,7 +39,10 @@ entity, entity_type, url)` plus the jury's `diffusion_position` (leading / bridg
 This is the heart.
 
 1. **Cluster** the signal vectors greedily: each signal joins the existing group whose centroid is most
-   similar (cosine ≥ `tau_converge`), else seeds a new group. A group is a *candidate theme*.
+   similar (cosine ≥ `tau_converge`), else seeds a new group. A group is a *candidate theme*. Then any
+   **oversized** group (centroid-drift mega-cluster) is **split** by re-clustering it tighter (D32) —
+   self-correcting: a real theme stays whole, a blob fragments (this is what took the "AI in 2026" blob
+   from 379 signals down to a tight 7).
 2. **Score** each group by **convergence, not volume**:
    `score = Σ over DISTINCT sources of (credibility_weight × position_weight)`. One jury naming fifty
    companies counts **once** — what matters is how many *independent, credible, leading* juries agree.
@@ -98,11 +101,32 @@ genuine drone papers → **β_spec = +0.081, nascency_gate = True**. So a *disco
 measured by the same instrument as a hand-seeded one — which is exactly what the §9-step-5 back-test
 compares. (p_main read 0 only because GDELT was rate-limited that run.)
 
+## Assessing discovery — two signals fused, compared to the baseline (D31)
+
+A theme's "how early is it?" now has **two independent reads**: the **jury timeline** (`beta_jury`,
+recency — `nascency.py`) and the **corpus diffusion** (`beta_spec`, `p_main`, `nascency_gate` —
+the radar, via the bridge above). `assess.py` (`5_discovery.py --assess`) does two things:
+
+1. **Fuses** them per discovered theme: `combined_score = jury rank_score × (1 + max(0, beta_spec))`
+   when the theme has been measured on the diffusion engine, else jury-only. Measuring can only *raise*
+   a theme's rank — an unmeasured theme is never penalised.
+2. **Compares** the discovered themes against the **hand-seeded baseline** on the *same* corpus
+   `beta_spec` — the §9-step-5 question: does discovery surface themes that look as early/accelerating
+   as the curated ones?
+
+**The encouraging live result:** the discovered **drones** theme scored `beta_spec = 0.08` — on par
+with or above the best hand-seeded themes (Mamba 0.07, RAG 0.04; CRISPR is already mainstream at
+`p_main` 0.81; mKRAS negative). Median discovered β_spec (0.081) beat the seed median (0.032). That is
+the first real signal that jury-convergence finds genuinely-nascent themes — not just *any* themes. (It
+is the diffusion-signature comparison; the full forward-return panel back-test, Protocol §4, is
+separate and gated on the panel reaching n ≥ 100.)
+
 ## What is deliberately unfinished (and why it's safe)
 
-- **`tau_converge` is unfit.** At 0.55 the AI startups collapse into one ~380-signal mega-cluster. The
-  threshold (and the jury weights, min-juries, top-k) are calibrated only at the §9-step-5 back-test
-  against the hand-seeded baseline — every value in `config/discovery.yaml` is a ⚙ knob, not a fit.
+- **`tau_converge` is unfit.** At 0.55 the AI startups used to collapse into one ~380-signal mega-cluster;
+  the D32 oversized-split now fragments that blob (→ 7), but the threshold (and the jury weights,
+  min-juries, top-k, `max_cluster_size`) are calibrated only at the §9-step-5 back-test against the
+  hand-seeded baseline — every value in `config/discovery.yaml` is a ⚙ knob, not a fit.
 - **Snapshot extractors are crude.** Until a per-source parser tags real **companies** (and the edition
   **year**), the scrape juries contribute to *convergence* (via their text) but not to the *org roster*
   — so a breakthrough **headline** is never mislabelled as a watchlist firm.
@@ -125,6 +149,7 @@ src/hype_parser/discovery/
   funds.py          specialist-fund cross-reference (config + scorer + 2_Funds 13F new-buys reader)
   nascency.py       jury-timeline nascency gate / ranking (see discovery_nascency_explained.md)
   diffusion_bridge.py  zero-Claude diffusion queries so the radar can measure discovered themes (D30)
+  assess.py         fuse jury-timeline + corpus diffusion; compare discovered vs hand-seeded (D31)
 ```
 Schema: `db.py::_migration_8` (`jury_signals`, `theme_convergence`, `theme_orgs`, `themes` +cols).
 Tests: `tests/test_discovery.py` (18).

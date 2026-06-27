@@ -26,13 +26,14 @@ import logging
 import sys
 
 from hype_parser import db
-from hype_parser.discovery import (convergence, diffusion_bridge, funds, nascency, parsers,
+from hype_parser.discovery import (assess, convergence, diffusion_bridge, funds, nascency, parsers,
                                    resolve, signals)
 from hype_parser.embed import get_embedder
 from hype_parser.registry import load_config
 
 DEFAULT_DB = "data/hype.db"
 DISCOVERY_CFG = "config/discovery.yaml"
+DIFFUSION_CFG = "config/diffusion.yaml"
 SPECIALIST_FUNDS_CFG = "config/specialist_funds.yaml"
 FUNDS_DB = "../2_Funds_parser/2_fundparser.db"   # reuse 2_Funds' 13F holdings (D3/D25)
 
@@ -124,6 +125,40 @@ def cmd_watch(conn) -> None:
         print(f"  {r['org_name'][:48]:48} theme={r['theme_id']:34} src={r['source_id']}")
 
 
+def _diffusion_params(path):
+    cfg = load_config(path)
+    return {**cfg["membership"], **cfg["diffusion"]}
+
+
+def cmd_assess(conn, args) -> None:
+    """§9-step-5: fuse jury-timeline + corpus-diffusion per discovered theme and compare to the
+    hand-seeded baseline. Needs the radar to have measured themes (5_radar.py --include-discovered)."""
+    cfg = load_config(args.discovery_cfg)
+    params = _diffusion_params(args.diffusion_cfg)
+    res = assess.compare(conn, cfg, params, current_year=args.current_year)
+    s = res["summary"]
+    print(f"assessment: {s['n_discovered']} discovered themes "
+          f"({s['n_discovered_measured']} measured on the diffusion engine), "
+          f"{s['n_seed_measured']} seed themes measured")
+    print(f"  median b_spec -- discovered: {s['median_discovered_beta_spec']}  "
+          f"seed baseline: {s['median_seed_beta_spec']}")
+    print("\n  DISCOVERED (fused jury-timeline x corpus):")
+    print(f"    {'comb':>5} {'jury':>5} {'bjury':>6} {'bspec':>6} {'p_main':>6} gate  theme")
+    for r in res["discovered"]:
+        c = r["corpus"]
+        bs = f"{c['beta_spec']:6.2f}" if c else "   n/a"
+        pm = f"{c['p_main']:6.2f}" if c else "   n/a"
+        gate = ("Y" if c["nascency_gate"] else "n") if c else "-"
+        print(f"    {r['combined_score']:5.2f} {r['rank_score']:5.2f} {r['beta_jury']:6.2f} "
+              f"{bs} {pm}  {gate}   {r['label'][:42]}")
+    print("\n  HAND-SEEDED baseline (corpus):")
+    print(f"    {'bspec':>6} {'p_main':>6} gate  theme")
+    for r in res["seed_baseline"]:
+        c = r["corpus"]
+        print(f"    {c['beta_spec']:6.2f} {c['p_main']:6.2f}  {'Y' if c['nascency_gate'] else 'n'}   "
+              f"{r['label'][:42]}")
+
+
 def cmd_diffusion_queries(conn, args) -> None:
     """Assign zero-Claude diffusion queries to discovered themes so the radar can measure their
     corpus β_spec/p_main (spec §4 step 4). Then run: 5_radar.py --include-discovered."""
@@ -186,6 +221,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Hype Parser theme discovery (jury convergence).")
     p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--discovery-cfg", default=DISCOVERY_CFG)
+    p.add_argument("--diffusion-cfg", default=DIFFUSION_CFG)
     p.add_argument("--specialist-funds-cfg", default=SPECIALIST_FUNDS_CFG)
     p.add_argument("--funds-db", default=FUNDS_DB, help="2_Funds_parser holdings DB (13F new positions)")
     p.add_argument("--quarter", default=None, help="period_of_report (YYYY-MM-DD) for --funds; default newest")
@@ -197,6 +233,8 @@ def main(argv=None) -> int:
                    help="assign zero-Claude diffusion queries to discovered themes (then 5_radar --include-discovered)")
     p.add_argument("--overwrite-queries", action="store_true", help="--diffusion-queries: re-derive even if set")
     p.add_argument("--rank", action="store_true", help="rank discovered themes by the nascency gate (spec 3a)")
+    p.add_argument("--assess", action="store_true",
+                   help="fuse jury-timeline + corpus diffusion; compare vs hand-seeded baseline (spec 9.5)")
     p.add_argument("--funds", action="store_true", help="specialist-fund smart-money confirmation (spec 4b)")
     p.add_argument("--list", action="store_true", help="list discovered themes")
     p.add_argument("--watch", action="store_true", help="list Track-B listing-watch orgs")
@@ -218,6 +256,8 @@ def main(argv=None) -> int:
             cmd_diffusion_queries(conn, args); did = True
         if args.rank:
             cmd_rank(conn, args); did = True
+        if args.assess:
+            cmd_assess(conn, args); did = True
         if args.funds:
             cmd_funds(conn, args); did = True
         if args.watch:
