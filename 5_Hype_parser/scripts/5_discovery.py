@@ -24,18 +24,23 @@ Network etiquette: the build-first feeds are public APIs/JSON; --no-fetch keeps 
 import argparse
 import logging
 import sys
+import threading
+import webbrowser
+from pathlib import Path
 
-from hype_parser import db
+from hype_parser import db, render_discovery
 from hype_parser.discovery import (assess, convergence, diffusion_bridge, funds, nascency, parsers,
                                    resolve, signals)
 from hype_parser.embed import get_embedder
 from hype_parser.registry import load_config
 
+ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = "data/hype.db"
 DISCOVERY_CFG = "config/discovery.yaml"
 DIFFUSION_CFG = "config/diffusion.yaml"
 SPECIALIST_FUNDS_CFG = "config/specialist_funds.yaml"
 FUNDS_DB = "../2_Funds_parser/2_fundparser.db"   # reuse 2_Funds' 13F holdings (D3/D25)
+REPORT_OUT = "_intermediate_outputs/discovery_report.html"
 
 log = logging.getLogger("5_discovery")
 
@@ -159,6 +164,26 @@ def cmd_assess(conn, args) -> None:
               f"{r['label'][:42]}")
 
 
+def cmd_report(conn, args) -> None:
+    """Render the discovery HTML diagnostic: ranked themes (convergence + nascency + corpus + Track
+    A/B + smart-money) vs the hand-seeded baseline."""
+    cfg = load_config(args.discovery_cfg)
+    params = _diffusion_params(args.diffusion_cfg)
+    new_buys = None
+    try:
+        sf = funds.load_specialist_funds(args.specialist_funds_cfg)
+        new_buys = funds.new_buys_from_2funds(args.funds_db, sf, quarter=args.quarter)
+    except Exception as exc:                                  # report works without smart-money
+        log.info("smart-money skipped (%s)", exc)
+    report = assess.build_report(conn, cfg, params, current_year=args.current_year, new_buys=new_buys)
+    out_path = ROOT / REPORT_OUT
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    render_discovery.render(report, out_path=str(out_path))
+    print(f"rendered {len(report['themes'])} discovered themes -> {out_path}")
+    if args.open_browser:
+        threading.Timer(0.5, lambda: webbrowser.open(out_path.as_uri())).start()
+
+
 def cmd_diffusion_queries(conn, args) -> None:
     """Assign zero-Claude diffusion queries to discovered themes so the radar can measure their
     corpus β_spec/p_main (spec §4 step 4). Then run: 5_radar.py --include-discovered."""
@@ -235,6 +260,8 @@ def main(argv=None) -> int:
     p.add_argument("--rank", action="store_true", help="rank discovered themes by the nascency gate (spec 3a)")
     p.add_argument("--assess", action="store_true",
                    help="fuse jury-timeline + corpus diffusion; compare vs hand-seeded baseline (spec 9.5)")
+    p.add_argument("--report", action="store_true", help="render the discovery HTML diagnostic")
+    p.add_argument("--open-browser", action="store_true", help="--report: open the HTML when done")
     p.add_argument("--funds", action="store_true", help="specialist-fund smart-money confirmation (spec 4b)")
     p.add_argument("--list", action="store_true", help="list discovered themes")
     p.add_argument("--watch", action="store_true", help="list Track-B listing-watch orgs")
@@ -258,6 +285,8 @@ def main(argv=None) -> int:
             cmd_rank(conn, args); did = True
         if args.assess:
             cmd_assess(conn, args); did = True
+        if args.report:
+            cmd_report(conn, args); did = True
         if args.funds:
             cmd_funds(conn, args); did = True
         if args.watch:

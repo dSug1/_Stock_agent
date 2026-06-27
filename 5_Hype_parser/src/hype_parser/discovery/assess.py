@@ -17,7 +17,7 @@ import logging
 
 from .. import diffusion as D
 from .. import themes as T
-from . import nascency
+from . import funds, nascency, resolve
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +91,34 @@ def compare(conn, cfg: dict, params: dict, *, current_year: int | None = None) -
         "median_discovered_beta_spec": _median(disc_betas),
     }
     return {"discovered": discovered, "seed_baseline": seeds, "summary": summary}
+
+
+def theme_juries(conn, theme_id: str) -> list[str]:
+    """Distinct jury sources backing a theme (the convergence evidence), for display."""
+    return [r["source_id"] for r in conn.execute(
+        "SELECT DISTINCT s.source_id FROM theme_convergence tc "
+        "JOIN jury_signals s ON s.signal_id=tc.signal_id WHERE tc.theme_id=? ORDER BY s.source_id",
+        (theme_id,))]
+
+
+def build_report(conn, cfg: dict, params: dict, *, current_year: int | None = None,
+                 new_buys: dict | None = None) -> dict:
+    """Assemble the full discovery report (one render-ready dict): fused/compared themes enriched with
+    their juries, Track-A tickers, Track-B watchlist, and specialist smart-money hits. Pure read."""
+    cmp = compare(conn, cfg, params, current_year=current_year)
+    fund_w = cfg.get("funds", {})
+    themes = []
+    for d in cmp["discovered"]:
+        tid = d["theme_id"]
+        ta = resolve.track_a_tickers(conn, tid)
+        tb = [r["org_name"] for r in conn.execute(
+            "SELECT org_name FROM theme_orgs WHERE theme_id=? AND listing_status='private' "
+            "ORDER BY org_name", (tid,))]
+        n_sig = conn.execute("SELECT COUNT(*) FROM theme_convergence WHERE theme_id=?", (tid,)).fetchone()[0]
+        sm = funds.cross_reference(ta, new_buys, fund_w) if (new_buys and ta) else []
+        themes.append({**d, "juries": theme_juries(conn, tid), "n_signals": n_sig,
+                       "track_a": ta, "track_b": tb, "smart_money": sm})
+    return {"summary": cmp["summary"], "themes": themes, "seed_baseline": cmp["seed_baseline"]}
 
 
 def _median(xs):

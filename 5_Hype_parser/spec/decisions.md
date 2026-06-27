@@ -1085,6 +1085,29 @@ their members at a progressively tighter tau (`convergence._split_oversized`, co
 
 ---
 
+## D33 (2026-06-26) — Discovery HTML report (makes the module's output consumable)
+
+The discovery module was fully functional (D27–D32) but its rich output was CLI-text only. `--report`
+renders a single self-contained HTML diagnostic — the discovery analogue of `render_radar` — to
+`_intermediate_outputs/discovery_report.html`.
+
+- **`render_discovery.render(report, out_path)`** (pure, inline-styled, no network) + **`assess.build_report`**
+  (assembles the render dict). Per discovered theme, ranked by combined score: the **juries** that
+  converged, **nascency** (β_jury / recency / runway), **corpus diffusion** (β_spec / p_main / gate when
+  measured, else "run radar"), **Track A** investable tickers, **smart-money** new buys, and the **Track
+  B** private watchlist (collapsed). A **hand-seeded baseline** table closes it for the §9.5 eyeball.
+- Read-only diagnostic ⇒ single self-contained HTML in `_intermediate_outputs/` (matching `render_radar`),
+  not the edit-persisting template+sidecar split (that convention is for reports that save user edits).
+- CLI `5_discovery.py --report [--open-browser]`. Live: 5 themes, ~9 KB, all sections present (Track-A
+  absent only because the post-D32-split themes have no resolved listed ticker — conditional rendering).
+  159 tests (was 157; +2).
+
+This is the consumable capstone of the discovery vertical (D27–D33). All remaining work is calibration
+(the ⚙ knobs on the back-test), data-gated wiring (per-source snapshot parsers, §4b ETF-delta, §3a
+backfill), or gated on the panel reaching n≥100 (the full forward-return back-test).
+
+---
+
 ## Repo conventions inherited (not numbered — carried from the monorepo)
 
 These are standing rules from the other components' decision logs + the repo memory index; they

@@ -57,7 +57,12 @@ This is the heart.
    No match ⇒ **Track B (private)** — recorded with a `listing_watch` so EDGAR can be monitored for an
    S-1/F-1/424B/S-4, flipping it to listed on first filing (the IPO is often the re-rating catalyst).
 
-### 3. Inspect + confirm  (`--list`, `--watch`, `--funds`)
+### 3. Inspect + confirm  (`--list`, `--watch`, `--funds`, `--assess`, `--report`)
+`--report` renders the whole picture as a single self-contained HTML diagnostic
+(`_intermediate_outputs/discovery_report.html`, the discovery analogue of the radar report): each
+discovered theme ranked by combined score with its juries, nascency, corpus β_spec, Track-A tickers,
+smart-money, and the Track-B watchlist, plus the hand-seeded baseline for comparison.
+
 `--list` shows the discovered themes with their horizon, jury breakdown, and Track-A tickers; `--watch`
 lists the Track-B private firms under EDGAR listing-watch.
 
@@ -149,7 +154,8 @@ src/hype_parser/discovery/
   funds.py          specialist-fund cross-reference (config + scorer + 2_Funds 13F new-buys reader)
   nascency.py       jury-timeline nascency gate / ranking (see discovery_nascency_explained.md)
   diffusion_bridge.py  zero-Claude diffusion queries so the radar can measure discovered themes (D30)
-  assess.py         fuse jury-timeline + corpus diffusion; compare discovered vs hand-seeded (D31)
+  assess.py         fuse jury-timeline + corpus diffusion; compare discovered vs hand-seeded (D31) + build_report (D33)
+(render_discovery.py at package root — the HTML diagnostic, D33)
 ```
 Schema: `db.py::_migration_8` (`jury_signals`, `theme_convergence`, `theme_orgs`, `themes` +cols).
 Tests: `tests/test_discovery.py` (18).

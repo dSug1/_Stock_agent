@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hype_parser import db
+from hype_parser import db, render_discovery
 from hype_parser.discovery import (assess, convergence, diffusion_bridge, funds, nascency, parsers,
                                     resolve, signals)
 from hype_parser.embed import HashingEmbedder
@@ -321,6 +321,48 @@ def test_assess_unmeasured_theme_is_jury_only(tmp_path):
     res = assess.assess_discovered(conn, CFG, ASSESS_PARAMS, current_year=2024)
     d = res[0]
     assert d["corpus_measured"] is False and d["combined_score"] == d["rank_score"]
+
+
+# ─── discovery HTML report ───────────────────────────────────────────────────
+
+def test_render_discovery_html(tmp_path):
+    report = {
+        "summary": {"n_discovered": 1, "n_discovered_measured": 1, "n_seed_measured": 1,
+                    "median_discovered_beta_spec": 0.08, "median_seed_beta_spec": 0.03},
+        "themes": [{
+            "theme_id": "disc:drones", "label": "next for drones",
+            "combined_score": 2.69, "rank_score": 2.49, "beta_jury": 0.31, "recency": 0.69,
+            "refined_horizon_years": 4.1, "n_leading_juries": 2, "n_signals": 34,
+            "juries": ["mit_tr_10", "yc_batch_rfs"],
+            "corpus": {"beta_spec": 0.08, "p_main": 0.0, "nascency_gate": True, "n_spec_total": 59},
+            "track_a": ["AVAV"], "track_b": ["Skydio", "Zipline"],
+            "smart_money": [{"ticker": "AVAV", "smart_money_score": 1.0, "buyers": ["X"], "n_buyers": 1}],
+        }],
+        "seed_baseline": [{"theme_id": "rag", "label": "RAG",
+                           "corpus": {"beta_spec": 0.04, "p_main": 0.0, "nascency_gate": True}}],
+    }
+    out = tmp_path / "disc.html"
+    render_discovery.render(report, out_path=str(out))
+    txt = out.read_text(encoding="utf-8")
+    assert "next for drones" in txt and "Track A" in txt and "AVAV" in txt
+    assert "Hand-seeded baseline" in txt and "RAG" in txt and "Skydio" in txt
+
+
+def test_build_report_assembles(tmp_path):
+    conn = _conn(tmp_path)
+    _disc_theme_with_jury(conn, "disc:d", [("mit_tr_10", 2023), ("darpa_eri", 2023),
+                                           ("mit_tr_10", 2022)], start_id=1)
+    _rising_series(conn, "disc:d")
+    conn.execute("INSERT INTO theme_orgs (theme_id,org_name,listing_status,ticker,listing_watch,"
+                 "first_seen,last_seen) VALUES ('disc:d','Acme','listed','ACME',0,'t','t')")
+    conn.execute("INSERT INTO theme_orgs (theme_id,org_name,listing_status,listing_watch,"
+                 "first_seen,last_seen) VALUES ('disc:d','Stealthy','private',1,'t','t')")
+    conn.commit()
+    rep = assess.build_report(conn, CFG, ASSESS_PARAMS, current_year=2024)
+    assert rep["summary"]["n_discovered"] == 1
+    th = rep["themes"][0]
+    assert "mit_tr_10" in th["juries"] and th["track_a"] == ["ACME"] and th["track_b"] == ["Stealthy"]
+    assert th["n_signals"] == 3 and th["corpus_measured"]
 
 
 # ─── diffusion bridge (queries for discovered themes) ───────────────────────
