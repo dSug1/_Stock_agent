@@ -76,8 +76,7 @@ def build_crude(conn, cfg, *, fetch_prices=None, fetch_float=None, themes_filter
     fetch_float = fetch_float or _default_fetch_float
     today = today or date.today().isoformat()
     cr = cfg["crude"]
-    horizons = cfg["horizons_weeks"]
-    prim = cr["primary_horizon_weeks"]
+    horizons = cfg["horizons_weeks"]      # the standard report windows; each theme adds its own prim_h
 
     if rebuild:
         conn.execute("DELETE FROM panel_features WHERE panel_id IN "
@@ -293,7 +292,7 @@ def main(argv=None) -> int:
                 fwd = f"{r['fwd']*100:+.0f}%" if r["fwd"] is not None else "n/a"
                 ms = f"{r['m_share']:+.2f}" if r["m_share"] is not None else "  -  "
                 print(f"  {r['ticker']:6} {r['theme']:20} t0={r['t0']} {r['label']:13} "
-                      f"{cfg['crude']['primary_horizon_weeks']}w={fwd:>6}  "
+                      f"{r['prim']:>3}w={fwd:>6}  "
                       f"narrative={r['narrative']:+.3f}  m_share={ms}")
             if args.verbose and skips:
                 print("\n  skipped:")
@@ -332,7 +331,11 @@ def main(argv=None) -> int:
                 feats = panel.read_features(conn, r["panel_id"])
                 rets = {row["horizon_weeks"]: row["fwd_return"]
                         for row in panel.read_returns(conn, r["panel_id"])}
-                rows.append({"fwd_return": rets.get(ks["primary_horizon_weeks"]),
+                # Horizon-aware (D40): use each row's own stored horizon_weeks if present (theme-aware
+                # build), else the pre-registered fixed primary horizon (anchor rows / fixed mode).
+                hz = feats.get("horizon_weeks")
+                hz = int(hz) if hz is not None else ks["primary_horizon_weeks"]
+                rows.append({"fwd_return": rets.get(hz),
                              "narrative": feats.get(ks["narrative_key"]),
                              **{c: feats.get(c) for c in ks["controls"]}})
             verdict = killswitch.run(

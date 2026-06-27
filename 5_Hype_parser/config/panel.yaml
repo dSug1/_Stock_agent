@@ -36,8 +36,16 @@ crude:
     ssm_mamba: QQQ
   cheap_drawdown: 0.25       # absolute fallback when a benchmark series is unavailable
   dd_lookback_months: 12     # trailing window for the drawdown
-  primary_horizon_weeks: 52  # horizon used for crude labelling + the crude kill-switch
-  hit_return: 1.00           # positive label: forward return >= +100% (the anchor bar); the
+  primary_horizon_weeks: 52  # fixed-mode horizon + the hand-seeded fallback reference
+  # Horizon-aware H (D40, spec D22): the label/return window = the theme's diffusion RUNWAY, not a fixed
+  # 52w — a slow theme (drones ~3.5yr) needs years for the re-rating, so 52w under-counts positives. A
+  # discovered theme uses its convergence horizon_years; hand-seeded fall back to default_horizon_weeks.
+  # Set horizon_mode: fixed to score every theme at primary_horizon_weeks (the pre-D40 behaviour).
+  horizon_mode: theme_aware
+  default_horizon_weeks: 52   # hand-seeded themes (no convergence horizon_years)
+  min_horizon_weeks: 26       # clamp band for theme-derived horizons (~6mo .. 4yr)
+  max_horizon_weeks: 208
+  hit_return: 1.00           # positive label: forward return >= +100% over THAT theme's window; the
                              #   kill-switch itself regresses CONTINUOUS return, so this only labels
   # m_share label clause (Stage B, D18): split the run into re-rating vs fundamental growth. A
   # positive must clear hit_return AND (where decomposable) be re-rating-driven. Needs SEC EDGAR
@@ -49,8 +57,9 @@ crude:
   max_per_theme: 40          # cap candidates per theme (keeps the yfinance fetch bounded)
   price_start: "2014-01-01"  # earliest daily price fetch (covers the panel eras + drawdown lookback)
   # time_to_catalyst is intentionally absent: no PIT catalyst calendar exists yet, so the crude
-  # control set drops it (the full panel restores it).
-  controls: [free_float, drawdown, sector, era]
+  # control set drops it (the full panel restores it). horizon_weeks partials out the mixed-window
+  # effect when horizon_mode: theme_aware (constant when fixed -> harmlessly dropped by the OLS).
+  controls: [free_float, drawdown, sector, era, horizon_weeks]
 
 # --- Stratification targets (Protocol 2.3) — Stage C representativeness check (D19) -------------
 strata:

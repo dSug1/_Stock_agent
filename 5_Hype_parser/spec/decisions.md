@@ -1329,6 +1329,69 @@ again) but carry ~0 membership, so the panel's nascency gate (`β>0 ∧ n_spec�
 cloud-native OSS themes resolve 0 (no listed filers). Lesson: a per-theme `--refresh`/EDGAR-only path would
 make this a one-command operation — a small radar-CLI follow-up.
 
+**First horizon-fixed rebuild result (the motivation for D40):** panel **57 → 87 rows** (+30, all from
+**drones** — UAVS/RCAT/DPRO/ONDS/AVAV/KTOS…), 5 positives. Of 12 discovered themes only drones contributed
+(the only one with BOTH dense membership *and* relevant tickers); nuclear + ai-* have tickers but too-thin
+membership (nascency gate filters), cloud-native have 0 tickers. Strata still violates: **n=87<100 AND
+positives 5≪50**. The ≥50-positives gap (~6% positive rate ⇒ ~n800) is the real wall → D40.
+
+---
+
+## D40 (2026-06-27) — Horizon-aware H (spec D22): the forward-return window = the theme's diffusion runway
+
+**Why (the ≥50-positives wall):** the crude panel labels a positive as forward-return ≥ +100% over a
+**fixed 52-week** window for every theme. But a nascent theme's re-rating plays out over its *diffusion
+runway* — drones' convergence horizon is ~3.5yr — so a 52w window systematically **under-counts** the
+re-rating, depressing the positive rate (5/87 ≈ 6%, which implies n≈800 to reach 50 positives). User picked
+this as the highest-leverage next push.
+
+**What:** each theme now gets its own horizon `H` = its diffusion runway. `panel_builder.theme_horizon_weeks`
+(pure, +2 tests): a DISCOVERED theme uses its convergence `horizon_years` (D29) × 52, clamped to
+`[min,max]_horizon_weeks` (26..208w); a hand-seeded theme (no `horizon_years`) falls back to
+`default_horizon_weeks`. `build_crude` computes `prim_h` per theme, fetches forward returns at the standard
+13/26/52 **∪ prim_h**, and labels + decomposes m_share (t0→t0+H) + feeds the kill-switch at `prim_h`. The
+chosen window is stored as a `horizon_weeks` feature and added to the crude **controls** (partials out the
+mixed-window effect; the OLS `pinv` tolerates it being constant in fixed mode). `--killswitch` reads each
+row's stored `horizon_weeks`. New config (`crude.horizon_mode: theme_aware | fixed`, `default/min/max_
+horizon_weeks`); **`horizon_mode: fixed` reproduces the exact pre-D40 single-horizon behaviour.**
+
+**Trade-off (expected):** a longer H needs more elapsed time, so some recent-t0 rows drop (n may dip), but
+each surviving row captures the full multi-year re-rating, so the positive *rate* should rise — the whole
+point. Result of the rebuild reported inline in the handoff §3 live-numbers. **183 tests.** Still INDICATIVE
+(yfinance bias, D20); H itself is a ⚙ (the runway×52 mapping + clamp band) to calibrate on the panel.
+
+---
+
+## D41 (2026-06-27) — Centroid enrichment for thin themes; and the arxiv-coverage structural finding
+
+**Goal:** the theme inventory showed only **drones** (of 12 discovered) contributes panel rows — it's the
+only one with BOTH dense membership AND tickers. **nuclear** has 67 great small-cap tickers (BWXT/OKLO/SMR/
+UEC/LTBR) and is a slow multi-year theme like drones, but membership was only 11 → fails the `n_spec≥5`
+nascency gate → 0 rows. Root cause: drones has **35 jury members** (many YC drone startups) → rich
+membership centroid; nuclear has **7** (mostly duplicate MIT-TR headlines + 1 startup) → thin centroid →
+few arxiv docs clear `tau_member`.
+
+**What:** `diffusion_bridge.derive_query` now **enriches the membership centroid** (descriptor + keywords)
+with the cluster's SHARED member vocabulary, while keeping the candidate-fetch query label-precise. Two
+guards against the D30 drift: (1) **document-frequency** gate (a term must appear in ≥`enrich_min_df` of
+member texts — the theme's common vocabulary, not one startup's tag); (2) **bigram-only** (a shared
+*phrase* like 'nuclear reactors' is theme vocabulary; a shared *unigram* across YC blurbs — 'defense',
+'industrials', 'saas' — is a sector tag). Live: nuclear centroid → `[nuclear power, nuclear reactors,
+reactors waste]`; drones stays clean `[drones]` (the tag drift is dropped). `_shared_member_terms` helper +
+2 tests (enrich vs drift). +`mean/means/like/just/only` stopwords. **185 tests.**
+
+**Result + the structural finding:** re-measuring nuclear lifted membership **11 → 19** (+73%) — the
+mechanism works — **but `max(n_spec)` is still 2**, below the `n_spec≥5` gate, so nuclear still contributes
+0 rows. The deeper cause is **not** the query: **arxiv under-represents nuclear ENERGY** (322 docs over the
+window, mostly nuclear *physics*; ~0.14 topical docs/month). The diffusion engine's specialist corpus is
+arxiv-dominated, which measures CS/bio themes well (drones/crispr/rag — preprint-heavy fields) but
+**structurally under-measures industrial/energy themes** (nuclear, batteries, materials). **The lever for
+those is wave-reweighting** — lean N_spec on patents (PatentsView) + DOE/ARPA-E/SBIR grants + news for
+industrial verticals, not arxiv. That's the next build for breadth beyond CS/bio; the enrichment here is
+the right general fix and helps any arxiv-present thin theme. Did NOT rebuild the panel (nuclear adds 0
+rows until the wave-reweight). min_n_spec_level stays 5 (a ⚙; lowering it to admit a 2-doc theme would
+re-open the D15 "theme barely exists" failure — defer to panel calibration).
+
 ---
 
 ## Repo conventions inherited (not numbered — carried from the monorepo)

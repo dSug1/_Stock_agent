@@ -587,6 +587,24 @@ def test_derive_query_degenerate_label_falls_back():
     assert q["keywords"] and q["arxiv_query"]                 # never empty
 
 
+def test_derive_query_enriches_centroid_with_shared_bigrams():
+    # A thin theme: the label is sparse but members share a topic BIGRAM -> it enriches the centroid
+    # (keywords/descriptor) WITHOUT broadening the candidate query (stays label-precise).
+    members = ["nuclear reactors waste", "new nuclear reactors design", "compact nuclear reactors"]
+    q = diffusion_bridge.derive_query("nuclear power", members)
+    assert "nuclear reactors" in q["keywords"]                # shared bigram enriches the centroid
+    assert "nuclear reactors" in q["descriptor"]
+    assert q["arxiv_query"] == 'all:"nuclear power"'           # candidate query stays label-precise
+
+
+def test_derive_query_enrichment_drops_unigram_sector_tags():
+    # YC sector tags ('defense') recur across blurbs (high doc-frequency) but are NOT theme vocabulary;
+    # the bigram-only enrichment filter must drop them (the D30 drift), leaving the clean label term.
+    yc = ["drone delivery defense", "drone mapping defense", "drone inspection defense"]
+    q = diffusion_bridge.derive_query("drones", yc)
+    assert q["keywords"] == ["drones"]                        # 'defense' unigram tag not admitted
+
+
 def test_assign_and_load_discovered_radar_themes(tmp_path):
     conn = _conn(tmp_path)
     conn.execute("INSERT INTO themes (theme_id,label,created_at,updated_at,discovered_from) "

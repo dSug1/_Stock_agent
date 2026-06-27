@@ -31,7 +31,7 @@ future rise era age world first best top leading meet inside guide explained
 company companies startup startups platform platforms solution solutions service services product
 products technology technologies tech app apps tool tools data ai powered based using build building
 make making help helping enable enabling provider providers software hardware system systems
-giving real people get getting use used more most very real
+giving real people get getting use used more most very real mean means like just only
 """.split())
 
 _WORD = re.compile(r"[a-z0-9][a-z0-9\-]+")
@@ -60,40 +60,74 @@ def _dedupe_overlap(terms: list[str]) -> list[str]:
     return kept
 
 
-def derive_query(label: str, member_texts=None, *, top_k: int = 4) -> dict:
-    """Zero-Claude diffusion queries for a discovered theme. **Label-first**: the convergent label IS
-    the topic, so the corpus query is built from it; member jury texts (startup blurbs) only fill in
-    when the label is too sparse — they DRIFT (e.g. YC sector tags 'defense'/'saas' pull an off-topic
-    corpus), so they never override the label. Bigrams rank above unigrams; near-duplicates dropped.
+def _shared_member_terms(member_texts, *, min_df_frac: float, max_terms: int, exclude) -> list[str]:
+    """The cluster's SHARED vocabulary: phrases appearing in >= min_df_frac of member texts (by
+    DOCUMENT frequency, so a term repeated within one blurb counts once). Document-frequency is what
+    separates the theme's common vocabulary ('reactors', 'waste' across many nuclear members) from
+    idiosyncratic per-startup tags (the D30 'defense'/'saas' drift, each in a single blurb). Already-
+    kept terms in `exclude` are skipped; near-duplicate unigrams of kept phrases are dropped."""
+    if not member_texts:
+        return []
+    n_docs = len(member_texts)
+    thresh = max(2, round(min_df_frac * n_docs))
+    df = Counter()
+    for text in member_texts:
+        for ph in set(_phrases(text)):                              # SET => document frequency
+            df[ph] += 1
+    # Multi-word phrases ONLY: a shared BIGRAM ('nuclear reactors', 'autonomous drones') is theme
+    # vocabulary; a shared UNIGRAM across YC blurbs is almost always a generic sector tag ('defense',
+    # 'industrials', 'saas') — the D30 drift. Restricting to phrases keeps the signal, drops the tags.
+    shared = [t for t, d in df.most_common() if d >= thresh and " " in t and t not in exclude]
+    return _dedupe_overlap(shared)[:max_terms]
 
-    Returns {keywords, arxiv_query, gdelt_query, wiki_article, descriptor}."""
+
+def derive_query(label: str, member_texts=None, *, top_k: int = 4, enrich_max: int = 3,
+                 enrich_min_df: float = 0.3) -> dict:
+    """Zero-Claude diffusion queries for a discovered theme. **Label-first**: the convergent label IS
+    the topic, so the candidate-fetch query is built from it (member blurbs DRIFT — YC sector tags
+    'defense'/'saas' pull an off-topic corpus — so they never drive the query). Bigrams rank above
+    unigrams; near-duplicates dropped.
+
+    The membership **centroid** (descriptor + keywords), however, is enriched with the cluster's SHARED
+    member vocabulary (document-frequency-gated, D41): a thin theme like nuclear (label 'nuclear power',
+    members mentioning 'reactors'/'waste') gets a richer centroid → more of the candidate corpus clears
+    tau_member, lifting membership without broadening the query into noise. The split is deliberate:
+    enrichment helps the centroid match-rate; the precise label keeps the candidate fetch on-topic.
+
+    Returns {keywords, arxiv_query, gdelt_query, edgar_query, wiki_article, descriptor}."""
     label_counts = Counter()
     for ph in _phrases(label):
         label_counts[ph] += 2 if " " in ph else 1                   # prefer specific bigrams
-    terms = _dedupe_overlap([t for t, _ in label_counts.most_common()])[:top_k]
+    label_terms = _dedupe_overlap([t for t, _ in label_counts.most_common()])[:top_k]
 
-    if not terms and member_texts:                                  # ONLY a content-less label enriches
-        member_counts = Counter()                                   #   from members (else they drift —
-        for text in member_texts:                                   #   YC sector tags pull off-topic)
+    # Centroid vocabulary = label terms + shared member vocabulary (DF-gated, drift-resistant).
+    centroid_terms = _dedupe_overlap(
+        label_terms + _shared_member_terms(member_texts, min_df_frac=enrich_min_df,
+                                           max_terms=enrich_max, exclude=set(label_terms)))
+
+    # Candidate-fetch query: the precise label; for a content-less label, fall back to member vocabulary.
+    query_terms = label_terms
+    if not query_terms and member_texts:                            # content-less label -> raw member terms
+        member_counts = Counter()
+        for text in member_texts:
             for ph in _phrases(text):
                 member_counts[ph] += 2 if " " in ph else 1
-        terms = _dedupe_overlap([t for t, _ in member_counts.most_common()])[:top_k]
-    if not terms:                                                   # degenerate -> raw label fallback
-        terms = [(_content_tokens(label) or [label.strip().lower() or "theme"])[0]]
-    arxiv = " OR ".join(f'all:"{t}"' for t in terms)
-    gdelt = " OR ".join(f'"{t}"' for t in terms)
-    edgar = " OR ".join(f'"{t}"' for t in terms)                    # SEC FTS wants quoted phrases (Wave 3)
+        query_terms = _dedupe_overlap([t for t, _ in member_counts.most_common()])[:top_k]
+    if not query_terms:                                             # degenerate -> raw label fallback
+        query_terms = [(_content_tokens(label) or [label.strip().lower() or "theme"])[0]]
+    if not centroid_terms:
+        centroid_terms = query_terms
+
+    arxiv = " OR ".join(f'all:"{t}"' for t in query_terms)
+    gdelt = " OR ".join(f'"{t}"' for t in query_terms)
+    edgar = " OR ".join(f'"{t}"' for t in query_terms)              # SEC FTS wants quoted phrases (Wave 3)
     return {
-        "keywords": terms,
+        "keywords": centroid_terms,                                 # the (enriched) membership centroid
         "arxiv_query": arxiv,
         "gdelt_query": gdelt,
         "edgar_query": edgar,                                       # ticker linkage for discovered themes
-        "wiki_article": terms[0].title(),                           # may 404; radar handles wiki misses
-        # A TOPIC-facing centroid descriptor. The promote() descriptor is the jury *blurbs*
-        # (startup-speak) — too far from research abstracts at tau_member, so membership came back empty.
-        # The radar centroid is encode([descriptor] + keywords); a topic descriptor + the query terms
-        # aligns it with the literature instead.
-        "descriptor": f"{label.strip()}. " + ", ".join(terms),
+        "wiki_article": query_terms[0].title(),                     # may 404; radar handles wiki misses
+        "descriptor": f"{label.strip()}. " + ", ".join(centroid_terms),
     }
 
 

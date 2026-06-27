@@ -218,3 +218,22 @@ def test_candidate_tickers_cap_applies_to_union():
     # Cap is applied AFTER the union so a Track-A name can survive even when EDGAR fills the head.
     out = pb.candidate_tickers(["A", "B", "C"], ["D", "E"], max_n=4)
     assert out == ["A", "B", "C", "D"]
+
+
+_CR_FIXED = {"horizon_mode": "fixed", "primary_horizon_weeks": 52}
+_CR_AWARE = {"horizon_mode": "theme_aware", "primary_horizon_weeks": 52,
+             "default_horizon_weeks": 52, "min_horizon_weeks": 26, "max_horizon_weeks": 208}
+
+
+def test_theme_horizon_fixed_mode_ignores_horizon_years():
+    assert pb.theme_horizon_weeks(3.5, _CR_FIXED) == 52       # fixed -> always primary
+    assert pb.theme_horizon_weeks(None, _CR_FIXED) == 52
+    assert pb.theme_horizon_weeks(3.5, {"primary_horizon_weeks": 52}) == 52   # mode absent => fixed
+
+
+def test_theme_horizon_theme_aware_uses_runway_and_clamps():
+    assert pb.theme_horizon_weeks(3.5, _CR_AWARE) == 182      # 3.5yr * 52
+    assert pb.theme_horizon_weeks(None, _CR_AWARE) == 52      # hand-seeded fallback
+    assert pb.theme_horizon_weeks(0, _CR_AWARE) == 52         # falsy runway -> default
+    assert pb.theme_horizon_weeks(10, _CR_AWARE) == 208       # clamp to max (would be 520)
+    assert pb.theme_horizon_weeks(0.1, _CR_AWARE) == 26       # clamp to min (would be ~5)

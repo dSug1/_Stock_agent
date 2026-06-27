@@ -194,3 +194,18 @@ Also fixed here: the discovery parsers' User-Agent lacked a contact, so SEC `com
 `resolve` silently returned an empty index (Track-A was zero for *every* theme). UA now matches
 `fundamentals`. Known follow-up: an FDA cluster's *label* is its sponsor name (panel Track-A is correct, but
 a poor theme name and a misleading radar query — re-label by drug-class text later).
+
+## D41 — centroid enrichment for thin themes (and the arxiv-coverage limit)
+
+Whether a discovered theme reaches the panel depends on its membership DENSITY: it must clear the panel's
+`n_spec≥5` nascency gate. That density tracks the number of jury members (drones: 35 YC drone startups →
+rich centroid → 187 arxiv members; nuclear: 7 → thin). `diffusion_bridge.derive_query` now enriches the
+membership **centroid** (descriptor + keywords) with the cluster's SHARED member vocabulary — but keeps the
+candidate-fetch query label-precise. Two drift guards (the D30 problem): a **document-frequency** gate (a
+term must recur across members, not within one blurb) and **bigram-only** (a shared phrase like "nuclear
+reactors" is theme vocabulary; a shared unigram across YC blurbs — "defense", "saas" — is a sector tag).
+
+This lifts arxiv-present thin themes (nuclear 11 → 19 member-months) but exposed a **structural limit**: the
+specialist corpus is arxiv-dominated, so it under-measures **industrial/energy** themes (nuclear is nuclear-
+*physics* on arxiv, not energy; `max(n_spec)` stayed 2). Those verticals need **wave-reweighting** — lean
+N_spec on patents + DOE/ARPA-E/SBIR grants + news instead of arxiv — which is the next breadth build.
