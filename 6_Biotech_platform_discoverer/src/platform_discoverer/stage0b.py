@@ -27,31 +27,44 @@ Enricher = Callable[[Company], Optional[dict]]
 
 
 def run(store: Store, config: dict, *, run_id: str | None = None,
-        enricher: Optional[Enricher] = None) -> dict:
-    """Run hard cuts over every company in the store. Returns a summary dict."""
+        enricher: Optional[Enricher] = None, max_enrich: int = 0) -> dict:
+    """Run hard cuts over every company in the store. Returns a summary dict.
+
+    ``enricher`` (yfinance) fills cap/liveness; at universe scale this is the slow step (one network
+    call per company). ``max_enrich`` (0 = unlimited) bounds the number of enrichment calls; companies
+    past the bound keep whatever cap they have (unknown → flagged, never dropped). Progress is logged.
+    """
     mc = config.get("market_cap", {}) or {}
     min_usd = mc.get("min_usd", 0)
     max_usd = mc.get("max_usd", float("inf"))
     keep_if_unknown = mc.get("keep_if_unknown", True)
     tol = mc.get("near_band_tolerance", 0.0) or 0.0
 
-    deleted_band = deleted_live = flagged_unknown = near_band = kept = 0
+    deleted_band = deleted_live = flagged_unknown = near_band = kept = enriched = 0
+    companies = store.all_companies()
+    total = len(companies)
 
-    for company in store.all_companies():
+    for company in companies:
         cap = company.mktcap_usd_fd
         live = company.is_live
 
-        if enricher is not None:
+        if enricher is not None and (not max_enrich or enriched < max_enrich):
+            enriched += 1
+            if enriched % 100 == 0:
+                log.info("stage0b: enriched %d/%d ...", enriched, total)
             info = enricher(company)
             if info:
                 if "mktcap_usd_fd" in info and info["mktcap_usd_fd"] is not None:
                     cap = info["mktcap_usd_fd"]
                 if "is_live" in info:
                     live = bool(info["is_live"])
-                # persist enrichment (also clears/sets the unknown flag implicitly on re-read)
+                # persist enrichment (cap/liveness + business description/sector/industry for M3).
                 store.upsert_company(
-                    replace(company, mktcap_usd_fd=cap, mktcap_unknown=(cap is None),
-                            is_live=live),
+                    replace(company, mktcap_usd_fd=cap, mktcap_unknown=(cap is None), is_live=live,
+                            business_description=info.get("business_description")
+                            or company.business_description,
+                            sector=info.get("sector") or company.sector,
+                            industry=info.get("industry") or company.industry),
                     run_id=run_id)
 
         ident = {"name": company.name, "ticker": company.primary_ticker,

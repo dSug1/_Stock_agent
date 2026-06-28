@@ -25,7 +25,7 @@ from .models import AuditEntry, Company, Evidence, Score
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class IllegalDeletionError(Exception):
@@ -129,7 +129,19 @@ def _migration_1(conn: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = {1: _migration_1}
+def _migration_2(conn: sqlite3.Connection) -> None:
+    # M3 (Stage 1) tags over the business description; sector/industry are extra tagging+scoring
+    # signal. All captured for free from the Stage-0b yfinance enrichment pass.
+    conn.executescript(
+        """
+        ALTER TABLE companies ADD COLUMN business_description TEXT;
+        ALTER TABLE companies ADD COLUMN sector TEXT;
+        ALTER TABLE companies ADD COLUMN industry TEXT;
+        """
+    )
+
+
+_MIGRATIONS = {1: _migration_1, 2: _migration_2}
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
@@ -212,8 +224,8 @@ class Store:
             """
             INSERT INTO companies (company_id, name, primary_ticker, exchange, country, isin, lei,
                 mktcap_usd_fd, mktcap_unknown, source_nets, ta_tags, dev_stage, stage1_excluded,
-                is_live, first_seen, last_seen)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                is_live, business_description, sector, industry, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(company_id) DO UPDATE SET
                 name=excluded.name, primary_ticker=excluded.primary_ticker,
                 exchange=excluded.exchange, country=excluded.country, isin=excluded.isin,
@@ -221,13 +233,18 @@ class Store:
                 mktcap_unknown=excluded.mktcap_unknown, source_nets=excluded.source_nets,
                 ta_tags=excluded.ta_tags, dev_stage=excluded.dev_stage,
                 stage1_excluded=excluded.stage1_excluded, is_live=excluded.is_live,
+                business_description=COALESCE(excluded.business_description,
+                                              companies.business_description),
+                sector=COALESCE(excluded.sector, companies.sector),
+                industry=COALESCE(excluded.industry, companies.industry),
                 last_seen=excluded.last_seen
             """,
             (company.company_id, company.name, company.primary_ticker, company.exchange,
              company.country, company.isin, company.lei, company.mktcap_usd_fd,
              int(company.mktcap_unknown), _json_or_none(company.source_nets),
              _json_or_none(company.ta_tags), company.dev_stage, int(company.stage1_excluded),
-             int(company.is_live), first_seen, company.last_seen or now_iso()),
+             int(company.is_live), company.business_description, company.sector, company.industry,
+             first_seen, company.last_seen or now_iso()),
         )
         self.conn.commit()
 
@@ -328,6 +345,29 @@ class Store:
         ).fetchone()
         return row["cursor"] if row else None
 
+    def get_evidence(self, company_id: str, source: str) -> Optional[dict]:
+        """Return {cursor, payload_hash, fetched_at, payload} for one (company, source), or None."""
+        row = self.conn.execute(
+            "SELECT cursor, payload_hash, fetched_at, payload_json FROM evidence "
+            "WHERE company_id=? AND source=?", (company_id, source)).fetchone()
+        if not row:
+            return None
+        return {"cursor": row["cursor"], "payload_hash": row["payload_hash"],
+                "fetched_at": row["fetched_at"], "payload": _loads(row["payload_json"], None)}
+
+    def last_scored_at(self, company_id: str) -> Optional[str]:
+        """Latest score ``run_id`` (an ISO timestamp) for a company, or None. MAX is chronological
+        because run_ids are ISO-8601. Used for the rescore-TTL guard (don't re-score within a year)."""
+        row = self.conn.execute(
+            "SELECT MAX(run_id) FROM scores WHERE company_id=?", (company_id,)).fetchone()
+        return row[0] if row and row[0] else None
+
+    def count_evidence(self, source: Optional[str] = None) -> int:
+        if source:
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM evidence WHERE source=?", (source,)).fetchone()[0]
+        return self.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
+
     # -- scores --
     def record_score(self, score: Score, *, run_id: Optional[str] = None) -> None:
         self.conn.execute(
@@ -394,7 +434,9 @@ def _row_to_company(row: sqlite3.Row) -> Company:
         mktcap_usd_fd=row["mktcap_usd_fd"], mktcap_unknown=bool(row["mktcap_unknown"]),
         source_nets=_loads(row["source_nets"], []), ta_tags=_loads(row["ta_tags"], []),
         dev_stage=row["dev_stage"], stage1_excluded=bool(row["stage1_excluded"]),
-        is_live=bool(row["is_live"]), first_seen=row["first_seen"], last_seen=row["last_seen"],
+        is_live=bool(row["is_live"]), business_description=row["business_description"],
+        sector=row["sector"], industry=row["industry"],
+        first_seen=row["first_seen"], last_seen=row["last_seen"],
     )
 
 

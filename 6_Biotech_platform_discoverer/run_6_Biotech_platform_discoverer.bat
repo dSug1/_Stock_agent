@@ -34,10 +34,16 @@ if not exist "data" mkdir "data"
 if not exist "Outputs" mkdir "Outputs"
 
 REM --- Stage 0: universe union + hard cuts -------------------
-REM Idempotent: re-running re-admits the union and re-applies the
-REM only two allowed deletions (mktcap_out_of_band / not_live).
-echo [6] Stage 0: assembling universe and applying hard cuts...
-python scripts\6_screen.py --stage 0 %*
+REM --universe enumerates the FULL listed universe (SEC US by SIC +
+REM Wikidata EU/Nordic) and PERSISTS it at Stage 0a in seconds.
+REM --enrich-yf then fills market cap/liveness via yfinance at Stage
+REM 0b (NETWORK-HEAVY: minutes; one call per ticker, bounded by
+REM config stage0b.max_enrich). The universe is saved before
+REM enrichment runs, so an interrupted enrich never loses it.
+REM Fast seed-only run: drop --universe. Idempotent re-runs re-apply
+REM the only two allowed deletions (mktcap_out_of_band / not_live).
+echo [6] Stage 0: enumerating full universe + applying hard cuts...
+python scripts\6_screen.py --stage 0 --universe --enrich-yf %*
 if errorlevel 1 (
     echo [FATAL] stage 0 failed.
     endlocal & exit /b 1

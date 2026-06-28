@@ -58,6 +58,9 @@ class Company:
     dev_stage: Optional[str] = None
     stage1_excluded: bool = False
     is_live: bool = True
+    business_description: Optional[str] = None   # yfinance longBusinessSummary (Stage 1 tags on it)
+    sector: Optional[str] = None
+    industry: Optional[str] = None
     first_seen: Optional[str] = None
     last_seen: Optional[str] = None
 

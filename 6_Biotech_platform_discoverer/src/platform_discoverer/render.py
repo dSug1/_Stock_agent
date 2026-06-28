@@ -85,6 +85,7 @@ tr:hover td{background:#11161d}
 def build_report(store: Store, config: Optional[dict] = None) -> str:
     s0a = _latest_summary(store, "stage0a", "universe_assembled")
     s0b = _latest_summary(store, "stage0b", "hard_cuts_done")
+    s1 = _latest_summary(store, "stage1", "tagging_done")
     companies = sorted(store.all_companies(), key=lambda c: (c.primary_ticker or c.name))
     deletions = _deletions(store)
     review = store.review_queue_dump()
@@ -124,6 +125,9 @@ def build_report(store: Store, config: Optional[dict] = None) -> str:
     card(s0b.get("deleted_mktcap_out_of_band", 0), "del · mktcap", "cut")
     card(s0b.get("deleted_not_live", 0), "del · not live", "cut")
     card(s0b.get("flagged_mktcap_unknown", 0), "flag · cap?", "flag")
+    if s1:
+        card(s1.get("tagged", 0), "0b · TA-tagged", "good")
+        card(s1.get("no_ta_tag", 0), "1 · no TA tag", "flag")
     p.append("</div>")
 
     # ── kept companies ──

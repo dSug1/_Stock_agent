@@ -1,0 +1,36 @@
+# Prestige-lab / awardee seed (spec §5.6.1) — founder & scientific-pedigree signal.
+#
+# Founder/SAB pedigree is one of the HIGHEST-PRECISION signals and the hardest to automate (Acrivon's
+# tell was the Olsen/Mann phosphoproteomics lineage). At Stage 2 we pull a company's top-publishing
+# scientists from OpenAlex (h-index) and match their names against this curated list of major
+# awardees / prestige-lab PIs / foundation-model-in-biology authors. A match surfaces as a scoring
+# signal and in the Claude memo. High manual upkeep, high discriminating power — extend freely.
+#
+# Matching is on NORMALIZED FULL NAME (exact) to avoid false positives on common surnames.
+
+awardees:
+  # Nobel-class / chemical biology relevant to in-scope mechanisms
+  - {name: "Carolyn Bertozzi", recognition: "Nobel Chemistry 2022 (bioorthogonal/glyco)", field: glycosylation}
+  - {name: "Jennifer Doudna", recognition: "Nobel Chemistry 2020 (CRISPR)", field: gene_editing}
+  - {name: "Emmanuelle Charpentier", recognition: "Nobel Chemistry 2020 (CRISPR)", field: gene_editing}
+  - {name: "David Baker", recognition: "Nobel Chemistry 2024 (de novo protein design)", field: protein_design}
+  - {name: "Demis Hassabis", recognition: "Nobel Chemistry 2024 (AlphaFold)", field: foundation_model_bio}
+  - {name: "John Jumper", recognition: "Nobel Chemistry 2024 (AlphaFold)", field: foundation_model_bio}
+  - {name: "Stuart Schreiber", recognition: "NAS; chemical biology / small-molecule probes", field: chemical_biology}
+  - {name: "Brian Druker", recognition: "Lasker 2009 (targeted kinase therapy)", field: kinase_oncology}
+  - {name: "Charles Sawyers", recognition: "NAS; Lasker; cancer signaling", field: oncology}
+  - {name: "Tony Hunter", recognition: "NAS; tyrosine phosphorylation", field: kinase_signaling}
+  - {name: "Matthias Mann", recognition: "proteomics / mass spectrometry pioneer", field: proteomics}
+  - {name: "Karl Deisseroth", recognition: "Lasker; Breakthrough Prize (optogenetics)", field: neuro_tools}
+  - {name: "Feng Zhang", recognition: "NAS; CRISPR tools", field: gene_editing}
+  - {name: "Aviv Regev", recognition: "single-cell / spatial genomics", field: single_cell}
+  - {name: "Eric Lander", recognition: "NAS; genomics", field: genomics}
+  # Foundation-model-in-biology authors
+  - {name: "Alexander Rives", recognition: "ESM protein language models", field: foundation_model_bio}
+  - {name: "Mohammed AlQuraishi", recognition: "ML protein structure / RGN", field: foundation_model_bio}
+  - {name: "Daphne Koller", recognition: "ML; insitro founder", field: ml_drug_discovery}
+
+# Optional: prestige labs by PI/institution (matched the same way, on PI name).
+labs:
+  - {pi: "Matthias Mann", lab: "Proteomics", institution: "Max Planck"}
+  - {pi: "Stuart Schreiber", lab: "Chemical Biology", institution: "Broad Institute"}

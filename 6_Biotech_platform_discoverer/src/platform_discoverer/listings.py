@@ -126,35 +126,31 @@ def _row_to_record(row: dict) -> Optional[ListingRecord]:
 
 # ── optional network enrichment (LOCAL prototype only) ──────────────────────
 
-def yfinance_enricher() -> Callable[[Company], Optional[dict]]:
+def yfinance_enricher(config: Optional[dict] = None) -> Callable[[Company], Optional[dict]]:
     """Return an enricher(company) -> {mktcap_usd_fd, is_live} | None using yfinance.
 
-    LOCAL-ONLY (yfinance ToS). Fail-open: import error or fetch error → None, so Stage 0b keeps the
-    company and flags ``mktcap_unknown`` rather than dropping it. Swap for a licensed provider before
-    any public deploy.
+    LOCAL-ONLY (yfinance ToS). Fail-open: import/fetch error → None, so Stage 0b keeps the company
+    and flags ``mktcap_unknown`` rather than dropping it. Cap is BASIC (no pre-funded warrants — M2b
+    deferral); the native cap is FX-converted to USD. Shares ``clients.market`` with the directory.
     """
-    try:
-        import yfinance  # noqa: F401
-    except ImportError:
-        log.warning("yfinance not installed; enrichment disabled (companies kept + flagged unknown)")
-        return lambda company: None
+    from .clients import market
+    from .fx import FXConverter
 
-    import yfinance as yf
+    fx = FXConverter.from_config(config)
 
     def enrich(company: Company) -> Optional[dict]:
         if not company.primary_ticker:
             return None
-        try:
-            info = yf.Ticker(company.primary_ticker).info or {}
-        except Exception as exc:                    # fail-open per spec §5.2
-            log.debug("yfinance enrich failed for %s: %s", company.primary_ticker, exc)
+        info = market.fetch_ticker_info(company.primary_ticker)
+        if not info:
             return None
-        cap = info.get("marketCap")                 # yfinance reports USD
-        # liveness heuristic: a delisted/dead ticker returns no price/cap fields
-        live = bool(cap) or bool(info.get("regularMarketPrice"))
-        result: dict = {"is_live": live}
-        if cap:
-            result["mktcap_usd_fd"] = float(cap)
+        cap = fx.to_usd(info.get("mktcap_native"), info.get("currency"))
+        result: dict = {"is_live": info.get("is_live", True)}
+        if cap is not None:
+            result["mktcap_usd_fd"] = cap
+        for key in ("business_description", "sector", "industry"):
+            if info.get(key):
+                result[key] = info[key]
         return result
 
     return enrich

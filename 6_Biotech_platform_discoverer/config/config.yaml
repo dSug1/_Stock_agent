@@ -2,21 +2,30 @@
 # All tunables live here so re-runs with different thresholds need no code change.
 
 run:
-  regions: ["US", "SE", "EU"]        # JPX/KRX deferred: add "JP","KR" in v2
+  regions: ["US", "SE", "DK", "EU"]  # US (SEC) + Sweden + Denmark + broad EU (Wikidata).
+                                     # JPX/KRX deferred: add "JP","KR" in v2.
   incremental: true
   max_companies_to_score: 200        # safety cap on Stage 4 inputs
 
 market_cap:
   min_usd: 50_000_000
   max_usd: 3_000_000_000
-  use_fully_diluted: true            # incl. pre-funded warrants where available
+  use_fully_diluted: false           # M2b: basic cap (yfinance marketCap, no pre-funded warrants).
+                                     # TODO refinement: FD/PFW share counts cross-checked vs filings.
   keep_if_unknown: true              # NEVER drop on missing cap; flag instead
+  near_band_tolerance: 0.15          # within 15% of a bound -> review_queue, NOT deleted
+                                     # (catches borderline names; honors §0.1 band + §13 recall)
   near_band_tolerance: 0.15          # within 15% of a bound -> review_queue, NOT deleted
                                      # (catches borderline names; honors §0.1 band + §13 recall)
 
 stage0a_nets:                        # union; a company passes if ANY net hits
   sector_codes:                      # BROAD set — not just "Biotechnology"
-    sic: ["2836", "2834", "8731", "3826", "3829"]
+    # SEC SIC codes for US enumeration. Broadened (2026-06-28) after a 2_Funds coverage check found
+    # real life-science names mis-coded outside the original 5 — esp. 8071 molecular-diagnostics labs
+    # (Grail/Castle/CareDx/Fulgent), 2835 IVD, 3841/3842/3845 devices. Over-inclusion is correct at
+    # Stage 0 (cardinal rule §0.2); narrowing happens later at scoring, never by exclusion here.
+    sic: ["2836", "2834", "2833", "2835", "8731", "8071",
+          "3826", "3827", "3829", "3841", "3842", "3845"]
     gics_industries: ["Biotechnology", "Pharmaceuticals",
                       "Life Sciences Tools & Services", "Health Care Equipment"]
     icb_equiv: ["Biotechnology", "Pharmaceuticals", "Medical Equipment",
@@ -24,12 +33,36 @@ stage0a_nets:                        # union; a company passes if ANY net hits
   index_membership: ["NBI", "Nordic Health", "Euronext Health"]   # per region
   name_keywords: ["therapeutic", "therapeutics", "bio", "pharma", "oncolog",
                   "genomic", "proteomic", "sciences", "immun", "onco", "tx"]
-  seed_lists: ["config/tracked_universe.csv"]   # analyst's existing names
+  seed_lists: ["config/tracked_universe.csv"]   # analyst's existing names (its OWN net)
+  directory:                         # M2b automated full-universe net (free hybrid)
+    sources: ["sec_us", "wikidata_eu"]   # US via SEC SIC; Europe/Nordic via Wikidata SPARQL
+    max_pages_per_sic: 40            # SEC browse-edgar pagination guard (~100 filers/page)
+    sec_rate_per_sec: 8              # SEC fair-access (<10 req/s)
+    wikidata_rate_per_sec: 2
+    # NOTE: the directory ENUMERATES only (fast). Market-cap/liveness enrichment (yfinance, slow,
+    # one call per ticker) is Stage 0b's job (`--enrich-yf`), so the full universe persists at 0a
+    # regardless of how long enrichment takes. Bound it with stage0b.max_enrich if needed.
+
+stage0b:
+  max_enrich: 0                      # cap yfinance enrichment calls (0 = unlimited). Companies past
+                                     # the cap keep unknown cap -> flagged, never dropped (recall-safe).
 
 stage1_filters:
   require_ta_tag: true               # but borderline -> review_queue, not delete
+  include_excluded: false            # set true to re-admit stage1_excluded companies into the
+                                     # Stage-2 harvest set WITHOUT re-harvesting (reversibility §5.3)
   allowed_stages: ["preclinical", "phase1", "phase2", "phase3", "platform"]
   deletion_allowed_reasons: ["mktcap_out_of_band", "not_live"]   # ENFORCED in DAO
+
+stage2:                              # evidence harvesting (free, high-signal core)
+  sources: ["openalex", "ctgov", "patents", "pedigree"]   # patents inert w/o PATENTSVIEW_API_KEY
+                                     # pedigree = top OpenAlex authors + prestige-awardee matches (§5.6.1)
+  incremental_ttl_days: 7            # skip re-harvesting a company+source seen within this window
+  prestige_labs: "config/prestige_labs.yaml"
+  openalex_rate_per_sec: 8           # OpenAlex polite pool (mailto from .env USER_AGENT email)
+  ctgov_rate_per_sec: 4
+  patents_rate_per_sec: 4
+  # openalex_mailto: you@example.com  # optional explicit polite-pool email
 
 stage3_embedding:
   prefer_local: true                 # reuse env capability if suitable
@@ -38,11 +71,23 @@ stage3_embedding:
   negative_penalty_lambda: 0.5       # company_sim = max_sim(pos) - lambda*max_sim(neg)
 
 stage4_scoring:
-  triage_model:   "claude-haiku-4-5-20251001"
+  triage_model:   "claude-haiku-4-5"
   score_model:    "claude-sonnet-4-6"
   finalize_model: "claude-opus-4-8"
-  use_batch_api: true                # async batch for the Sonnet pass
-  finalize_if_composite_between: [0.55, 0.75]  # contested band -> Opus
+  use_batch_api: true                # async batch (50% cost) for the Sonnet rubric pass
+  finalize_if_composite_between: [0.55, 0.75]  # contested band -> Opus adversarial re-score
+  score_live_excluded: true          # score ALL live companies incl stage1_excluded (recall-safe);
+                                     # Haiku triage does the cheap cut. false = score tagged-only.
+  rescore_ttl_days: 365              # a ticker scored within this window is NOT re-analysed (saves
+                                     # cost); --force-rescore overrides (the "reset").
+  # cost-estimate knobs (calibrated to the 2026-06-28 real run: 13 cos real-time ≈ $1.32):
+  est_input_tokens_per_company: 900   # richer bundle: + pedigree/patents/FDA designations
+  est_output_tokens_rubric: 600      # memos run long (~600 tok observed)
+  est_output_tokens_triage: 100
+  est_triage_keep_frac: 0.62         # fraction surviving Haiku triage (8/13 observed)
+  est_contested_frac: 0.2            # fraction of survivors landing in the Opus contested band
+  # NOTE: the estimate assumes the Batch API (50% off). A real-time run (--no-batch) costs ~2× the
+  # Sonnet/Opus tiers. Full-universe (589) ≈ $3 batch / ~$6 real-time — both under max_usd_per_run.
 
 composite_weights:                   # sum need not be 1; normalized internally
   A_proprietary_data: 0.28
@@ -54,6 +99,22 @@ composite_weights:                   # sum need not be 1; normalized internally
 penalties:
   architecture_moat_factor: 0.75     # composite *= this if moat == "architecture"
   marketing_verdict_factor: 0.50     # composite *= this if substance == "marketing"
+
+# Stage 5 ranking — OPTIONAL lifecycle / company-age weighting (proposal D2; OFF by default).
+# Applied as a transparent multiplier at ranking: rank_score = composite * lifecycle_weight(company).
+# Never alters the composite (auditable) and never deletes (recall-safe). Favours the "early but real"
+# window; deprioritizes companies where the ship has sailed / >20 yrs old. Needs an IPO/age signal
+# (yfinance firstTradeDate or SEC first-filing date) captured first — see decisions.md D2.
+stage5:
+  lifecycle:
+    enabled: false                   # set true to weight the ranking by company age
+    age_signal: "ipo_date"           # ipo_date (yfinance firstTradeDate) | first_sec_filing
+    young_grace_years: 3             # < this since IPO -> full weight (do NOT penalize the young, 3a)
+    sweet_max_years: 12              # 3..12 yrs = target zone, weight 1.0
+    old_threshold_years: 15          # > this -> linear decay toward floor
+    hard_old_years: 20               # >= this ("ship sailed") -> floor weight
+    floor: 0.5                       # minimum multiplier for old companies
+    use_appreciation: false          # phase 2: also discount names already heavily re-rated since IPO
 
 cost_controls:
   max_usd_per_run: 50                # hard stop; log and halt if exceeded

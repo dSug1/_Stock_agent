@@ -1,0 +1,208 @@
+"""Stage 4 — tiered Claude scoring (spec §5.6, §9, §10). Replaces the Stage-3 embedding pre-rank.
+
+At this universe size (~600), the embedding cut isn't needed for cost (see spec/decisions.md D1), so
+the candidate set goes straight into the cheap→expensive Claude funnel:
+
+  Tier 1  Haiku triage   — cheap keep/kill over EVERY live company (recall-safe; sees full evidence)
+  Tier 2  Sonnet rubric  — full §9.3 rubric over triage survivors, via the Batch API (50% cost)
+  Tier 3  Opus finalize  — re-score only the contested-band composites, with an adversarial pass
+
+Composite + confidence are computed in CODE (composite.py), not trusted from the model. Cost is
+estimated up front (no API) and the actual dispatch is gated + bounded by ``max_usd_per_run``.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from . import config as cfg
+from .clients.anthropic_client import PRICING
+from .models import Score
+from .scoring import composite, rubric
+from .store import Store, now_iso
+
+log = logging.getLogger(__name__)
+
+_EVIDENCE_SOURCES = ("openalex", "ctgov", "patents", "pedigree")
+
+
+# ── candidate set + bundles ─────────────────────────────────────────────────
+
+def _scored_within(store: Store, company_id: str, ttl_days: int) -> bool:
+    """True if the company has a Claude score newer than ``ttl_days`` (rescore-TTL guard)."""
+    last = store.last_scored_at(company_id)
+    if not last or ttl_days <= 0:
+        return False
+    try:
+        ts = datetime.fromisoformat(last)
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - ts < timedelta(days=ttl_days)
+
+
+def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False) -> list:
+    s4 = config.get("stage4_scoring", {}) or {}
+    cos = [c for c in store.all_companies() if c.is_live]
+    if not s4.get("score_live_excluded", True):
+        cos = [c for c in cos if not c.stage1_excluded]   # tagged-only mode
+    if tickers:
+        tset = {t.upper() for t in tickers}
+        cos = [c for c in cos if (c.primary_ticker or "").upper() in tset]
+    if not force:
+        # rescore-TTL: a ticker scored within the last year is not re-analysed (saves cost) unless
+        # --force-rescore. This is the "no need to repeat within 1 year unless we reset" guard.
+        ttl = int(s4.get("rescore_ttl_days", 365))
+        cos = [c for c in cos if not _scored_within(store, c.company_id, ttl)]
+    return cos
+
+
+def _evidence(store: Store, company_id: str) -> dict:
+    out = {}
+    for src in _EVIDENCE_SOURCES:
+        ev = store.get_evidence(company_id, src)
+        if ev and ev.get("payload"):
+            out[src] = ev["payload"]
+    return out
+
+
+def build_bundles(store: Store, config: dict, tickers=None, *, force=False) -> dict[str, dict]:
+    """{company_id: evidence-bundle} for every DUE candidate (the Claude input)."""
+    by_id = {c.company_id: c for c in _candidates(store, config, tickers, force=force)}
+    return {cid: rubric.build_bundle(c, _evidence(store, cid)) for cid, c in by_id.items()}
+
+
+# ── cost estimate (pure, no API) ────────────────────────────────────────────
+
+def estimate_cost(n: int, config: dict) -> dict:
+    """Project the tiered run cost for ``n`` candidates from config knobs + the pricing table."""
+    s4 = config.get("stage4_scoring", {}) or {}
+    in_tok = int(s4.get("est_input_tokens_per_company", 600))
+    out_rub = int(s4.get("est_output_tokens_rubric", 400))
+    out_tri = int(s4.get("est_output_tokens_triage", 100))
+    keep = float(s4.get("est_triage_keep_frac", 0.5))
+    contested = float(s4.get("est_contested_frac", 0.2))
+    tri_m, sco_m, fin_m = s4["triage_model"], s4["score_model"], s4["finalize_model"]
+    batch = bool(s4.get("use_batch_api", True))
+
+    def cost(model, companies, out_tok, batched):
+        p = next((v for k, v in PRICING.items() if model.startswith(k)), {"in": 5, "out": 25})
+        usd = (companies * (in_tok * p["in"] + out_tok * p["out"])) / 1_000_000
+        return usd * (0.5 if batched else 1.0)
+
+    n_survivors = round(n * keep)
+    n_contested = round(n_survivors * contested)
+    tiers = {
+        "triage_haiku": {"companies": n, "usd": round(cost(tri_m, n, out_tri, False), 2)},
+        "rubric_sonnet": {"companies": n_survivors,
+                          "usd": round(cost(sco_m, n_survivors, out_rub, batch), 2)},
+        "finalize_opus": {"companies": n_contested,
+                          "usd": round(cost(fin_m, n_contested, out_rub, False), 2)},
+    }
+    total = round(sum(t["usd"] for t in tiers.values()), 2)
+    return {"candidates": n, "tiers": tiers, "est_total_usd": total,
+            "max_usd_per_run": (config.get("cost_controls", {}) or {}).get("max_usd_per_run")}
+
+
+# ── orchestrator ────────────────────────────────────────────────────────────
+
+def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
+        run_id: Optional[str] = None, tickers=None, use_batch: Optional[bool] = None,
+        force: bool = False) -> dict:
+    """Estimate (dispatch=False) or run (dispatch=True) the tiered scorer.
+
+    ``client`` is an injected ``AnthropicClient`` (tests pass a fake); real runs construct one bounded
+    by ``cost_controls.max_usd_per_run``. ``tickers`` restricts to a specific set; ``use_batch``
+    overrides ``use_batch_api``. ``force`` re-scores even tickers scored within the rescore-TTL (the
+    "reset"); otherwise a ticker scored within the last year is skipped.
+    """
+    bundles = build_bundles(store, config, tickers, force=force)
+    if not dispatch:
+        est = estimate_cost(len(bundles), config)
+        est["note"] = ("counts only tickers DUE for scoring (not scored within "
+                       f"{config.get('stage4_scoring', {}).get('rescore_ttl_days', 365)}d); "
+                       "use --force-rescore to override")
+        return {"mode": "estimate", **est}
+
+    s4 = config["stage4_scoring"]
+    weights = config["composite_weights"]
+    penalties = config.get("penalties", {}) or {}
+    lo, hi = s4.get("finalize_if_composite_between", [0.55, 0.75])
+    if use_batch is None:
+        use_batch = bool(s4.get("use_batch_api", True))
+    taxonomy = cfg.load_taxonomy(s4.get("taxonomy", "config/taxonomy.yaml"))
+    rubric_system = rubric.build_rubric_system(taxonomy)
+
+    if client is None:
+        from .clients.anthropic_client import AnthropicClient
+        client = AnthropicClient(
+            max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50))
+
+    # Tier 1 — Haiku triage over every candidate (recall-safe)
+    survivors: dict[str, dict] = {}
+    killed = 0
+    for cid, bundle in bundles.items():
+        t = client.score_realtime(s4["triage_model"], rubric.TRIAGE_SYSTEM, rubric.TRIAGE_SCHEMA,
+                                  bundle, 256, validate=rubric.validate_triage)
+        if t and t.get("keep"):
+            survivors[cid] = bundle
+        else:
+            killed += 1
+            if t:
+                store.audit(stage="stage4", action="cut", company_id=cid, reason="triage_kill",
+                            run_id=run_id, detail={"prior": t.get("prior"), "why": t.get("reason")})
+
+    # Tier 2 — Sonnet full rubric over survivors (Batch API, or real-time if use_batch=False)
+    if use_batch:
+        rubric_out = client.score_batch(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
+                                        survivors, 1500, validate=rubric.validate_rubric)
+    else:
+        rubric_out = {}
+        for cid, b in survivors.items():
+            rj = client.score_realtime(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA, b,
+                                       1500, validate=rubric.validate_rubric)
+            if rj:
+                rubric_out[cid] = rj
+
+    scored: dict[str, dict] = {}
+    for cid, rj in rubric_out.items():
+        comp = composite.compute_composite(rj, weights, penalties)
+        conf = composite.compute_confidence(rj, evidence_sources=len(_evidence(store, cid)),
+                                            finalized=False)
+        scored[cid] = {"rubric": rj, "composite": comp, "confidence": conf, "model": s4["score_model"]}
+
+    # Tier 3 — Opus finalize on the contested band (adversarial)
+    finalized = 0
+    for cid, s in list(scored.items()):
+        if lo <= s["composite"] <= hi:
+            rj = client.score_realtime(s4["finalize_model"],
+                                       rubric_system + rubric.ADVERSARIAL_SUFFIX,
+                                       rubric.RUBRIC_SCHEMA, survivors[cid], 1500,
+                                       validate=rubric.validate_rubric)
+            if rj:
+                comp = composite.compute_composite(rj, weights, penalties)
+                conf = composite.compute_confidence(rj, evidence_sources=len(_evidence(store, cid)),
+                                                    finalized=True)
+                scored[cid] = {"rubric": rj, "composite": comp, "confidence": conf,
+                               "model": s4["finalize_model"]}
+                finalized += 1
+
+    # Persist
+    rid = run_id or now_iso()
+    for cid, s in scored.items():
+        ax = composite.axis_scores(s["rubric"])
+        store.record_score(Score(company_id=cid, run_id=rid, model=s["model"], json=s["rubric"],
+                                 A=ax["A_proprietary_data"], B=ax["B_compute_engine"],
+                                 C=ax["C_validation"], D=ax["D_mechanism"], E=ax["E_translation"],
+                                 composite=s["composite"], confidence=s["confidence"]), run_id=rid)
+
+    summary = {"mode": "dispatch", "candidates": len(bundles), "triage_killed": killed,
+               "scored": len(scored), "opus_finalized": finalized,
+               "cost_usd": round(getattr(client, "spent_usd", 0.0), 2),
+               "api_calls": getattr(client, "calls", 0)}
+    store.audit(stage="stage4", action="scored", reason="scoring_done", run_id=rid, detail=summary)
+    log.info("stage4: %s", summary)
+    return summary
