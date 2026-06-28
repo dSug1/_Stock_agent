@@ -11,6 +11,35 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
+@dataclass
+class ListingRecord:
+    """Raw provider output for one listing, BEFORE identity resolution (Stage 0a input).
+
+    Providers (seed CSV, market-data vendor, yfinance) emit these; ``dedup.collapse`` resolves
+    ADR/dual listings into one canonical record per company, then Stage 0a admits union-of-nets
+    members as ``Company`` rows. Mutable so dedup can merge fields across a listing group.
+    """
+
+    name: str
+    ticker: Optional[str] = None
+    exchange: Optional[str] = None
+    country: Optional[str] = None
+    sic: Optional[str] = None
+    gics_industry: Optional[str] = None
+    icb_equiv: Optional[str] = None
+    indices: list[str] = field(default_factory=list)
+    isin: Optional[str] = None
+    lei: Optional[str] = None
+    mktcap_native: Optional[float] = None
+    currency: Optional[str] = None
+    shares_fd: Optional[float] = None
+    mktcap_usd_fd: Optional[float] = None     # set if the provider already gives USD
+    is_primary: bool = False
+    is_live: bool = True
+    provenance: list[str] = field(default_factory=list)   # e.g. ["seed_list"], ["yfinance"]
+    secondary_listings: list[str] = field(default_factory=list)  # linked ADR/dual listings
+
+
 @dataclass(frozen=True)
 class Company:
     """A row of ``companies``. ``company_id`` is a stable hash(name|primary_listing)."""

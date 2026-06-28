@@ -11,6 +11,8 @@ market_cap:
   max_usd: 3_000_000_000
   use_fully_diluted: true            # incl. pre-funded warrants where available
   keep_if_unknown: true              # NEVER drop on missing cap; flag instead
+  near_band_tolerance: 0.15          # within 15% of a bound -> review_queue, NOT deleted
+                                     # (catches borderline names; honors §0.1 band + §13 recall)
 
 stage0a_nets:                        # union; a company passes if ANY net hits
   sector_codes:                      # BROAD set — not just "Biotechnology"

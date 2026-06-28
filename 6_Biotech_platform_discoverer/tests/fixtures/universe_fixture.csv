@@ -1,0 +1,16 @@
+ticker,name,exchange,country,sic,gics_industry,icb_equiv,indices,isin,mktcap_usd,currency,is_primary,is_live
+ACRV,Acrivon Therapeutics,NASDAQ,US,2836,Biotechnology,,NBI,US00489L1098,250000000,USD,1,1
+TNGX,Tango Therapeutics,NASDAQ,US,2836,Biotechnology,,,,300000000,USD,1,1
+IDYA,IDEAYA Biosciences,NASDAQ,US,2836,Biotechnology,,NBI,,1500000000,USD,1,1
+BOLD,Boundless Bio,NASDAQ,US,2836,Biotechnology,,,,400000000,USD,1,1
+RXRX,Recursion Pharmaceuticals,NASDAQ,US,8731,Life Sciences Tools & Services,,,,2500000000,USD,1,1
+SDGR,Schrodinger,NASDAQ,US,7372,,,,,1800000000,USD,1,1
+RLAY,Relay Therapeutics,NASDAQ,US,2836,Biotechnology,,,,1000000000,USD,1,1
+GAIP,Generic AI Pharma,NASDAQ,US,2836,Biotechnology,,,,80000000,USD,1,1
+GCRO,Generic Contract Research,NASDAQ,US,8731,Life Sciences Tools & Services,,,,120000000,USD,1,1
+MEGA,MegaPharma,NYSE,US,2834,Pharmaceuticals,,,,200000000000,USD,1,1
+TINY,Tiny Shell Bio,NASDAQ,US,2836,Biotechnology,,,,10000000,USD,1,1
+DEADX,Defunct Therapeutics,NASDAQ,US,2836,Biotechnology,,,,150000000,USD,1,0
+UNKN,Unknown Cap Sciences,STO,SE,,Biotechnology,,Nordic Health,,,SEK,1,1
+DUAL,DualListed Therapeutics,NASDAQ,US,2836,Biotechnology,,,SE0099999999,250000000,USD,,1
+DUAL.ST,DualListed Therapeutics,STO,SE,,,,Nordic Health,SE0099999999,,SEK,,1

@@ -1,0 +1,8 @@
+ticker,name,exchange,country,sic,gics_industry,icb_equiv,indices,isin,mktcap_usd,currency,is_primary,is_live
+ACRV,Acrivon Therapeutics,NASDAQ,US,2836,Biotechnology,,NBI,US00489L1098,71480000,USD,1,1
+BOLD,Boundless Bio,NASDAQ,US,2836,Biotechnology,,,,32130000,USD,1,1
+IDYA,IDEAYA Biosciences,NASDAQ,US,2836,Biotechnology,,NBI,,3200000000,USD,1,1
+RLAY,Relay Therapeutics,NASDAQ,US,2836,Biotechnology,,,,4040000000,USD,1,1
+RXRX,Recursion Pharmaceuticals,NASDAQ,US,8731,Life Sciences Tools & Services,,,,1690000000,USD,1,1
+SDGR,Schrodinger,NASDAQ,US,7372,,,,,1250000000,USD,1,1
+TNGX,Tango Therapeutics,NASDAQ,US,2836,Biotechnology,,,,5120000000,USD,1,1
