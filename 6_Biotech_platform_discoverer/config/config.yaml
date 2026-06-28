@@ -1,0 +1,58 @@
+# 6_Biotech_platform_discoverer — runtime config (spec §3).
+# All tunables live here so re-runs with different thresholds need no code change.
+
+run:
+  regions: ["US", "SE", "EU"]        # JPX/KRX deferred: add "JP","KR" in v2
+  incremental: true
+  max_companies_to_score: 200        # safety cap on Stage 4 inputs
+
+market_cap:
+  min_usd: 50_000_000
+  max_usd: 3_000_000_000
+  use_fully_diluted: true            # incl. pre-funded warrants where available
+  keep_if_unknown: true              # NEVER drop on missing cap; flag instead
+
+stage0a_nets:                        # union; a company passes if ANY net hits
+  sector_codes:                      # BROAD set — not just "Biotechnology"
+    sic: ["2836", "2834", "8731", "3826", "3829"]
+    gics_industries: ["Biotechnology", "Pharmaceuticals",
+                      "Life Sciences Tools & Services", "Health Care Equipment"]
+    icb_equiv: ["Biotechnology", "Pharmaceuticals", "Medical Equipment",
+                "Health Care"]
+  index_membership: ["NBI", "Nordic Health", "Euronext Health"]   # per region
+  name_keywords: ["therapeutic", "therapeutics", "bio", "pharma", "oncolog",
+                  "genomic", "proteomic", "sciences", "immun", "onco", "tx"]
+  seed_lists: ["config/tracked_universe.csv"]   # analyst's existing names
+
+stage1_filters:
+  require_ta_tag: true               # but borderline -> review_queue, not delete
+  allowed_stages: ["preclinical", "phase1", "phase2", "phase3", "platform"]
+  deletion_allowed_reasons: ["mktcap_out_of_band", "not_live"]   # ENFORCED in DAO
+
+stage3_embedding:
+  prefer_local: true                 # reuse env capability if suitable
+  similarity_cut_keep_top_frac: 0.40 # keep top 40% by archetype similarity
+  min_keep: 120                      # never cut below this (recall floor)
+  negative_penalty_lambda: 0.5       # company_sim = max_sim(pos) - lambda*max_sim(neg)
+
+stage4_scoring:
+  triage_model:   "claude-haiku-4-5-20251001"
+  score_model:    "claude-sonnet-4-6"
+  finalize_model: "claude-opus-4-8"
+  use_batch_api: true                # async batch for the Sonnet pass
+  finalize_if_composite_between: [0.55, 0.75]  # contested band -> Opus
+
+composite_weights:                   # sum need not be 1; normalized internally
+  A_proprietary_data: 0.28
+  B_compute_engine:   0.16           # high weight, but optional (never a gate)
+  C_validation:       0.24
+  D_mechanism:        0.16
+  E_translation:      0.16
+
+penalties:
+  architecture_moat_factor: 0.75     # composite *= this if moat == "architecture"
+  marketing_verdict_factor: 0.50     # composite *= this if substance == "marketing"
+
+cost_controls:
+  max_usd_per_run: 50                # hard stop; log and halt if exceeded
+  anthropic_max_concurrency: 4

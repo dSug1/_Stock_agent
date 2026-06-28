@@ -1,0 +1,123 @@
+# 6_Biotech_platform_discoverer — controlled mechanism vocabulary (spec §4).
+# Single canonical list referenced by BOTH the embedding archetypes (§8) and the Claude
+# D_mechanism field (§9). Each entry: id, branch, label, synonyms[], example_targets[], maturity.
+# maturity ∈ {validated, registrational, emerging, lab_stage} — a contextual prior in scoring,
+# NEVER a filter. Keep this file editable; extend the autoimmune/gpcr branches freely.
+
+mechanisms:
+  # ── Branch: oncology (the 24) ──────────────────────────────────────────────
+  - {id: ubiquitination_degradation, branch: oncology, label: "Ubiquitination / targeted degradation",
+     synonyms: ["protac", "molecular glue", "e3 ligase", "ubiquitin", "degrader"],
+     example_targets: ["CRBN", "VHL", "DCAF15"], maturity: registrational}
+  - {id: acetylation_hdac_bet_p300, branch: oncology, label: "Acetylation (HDAC / BET / p300)",
+     synonyms: ["hdac", "bet bromodomain", "brd4", "p300", "cbp", "acetyltransferase"],
+     example_targets: ["HDAC1", "BRD4", "EP300"], maturity: validated}
+  - {id: methylation_histone_dna, branch: oncology, label: "Histone / DNA methylation",
+     synonyms: ["ezh2", "dot1l", "dnmt", "histone methyltransferase", "prc2"],
+     example_targets: ["EZH2", "DOT1L", "DNMT1"], maturity: registrational}
+  - {id: methylation_synthetic_lethal_prmt5_mtap, branch: oncology, label: "PRMT5 / MTAP synthetic lethality",
+     synonyms: ["prmt5", "mtap deletion", "mta-cooperative", "methylthioadenosine"],
+     example_targets: ["PRMT5", "MAT2A"], maturity: emerging}
+  - {id: sumoylation, branch: oncology, label: "SUMOylation",
+     synonyms: ["sumo", "sae", "sumo-activating enzyme", "ubc9"],
+     example_targets: ["SAE1", "UBA2"], maturity: emerging}
+  - {id: glycosylation_oglcnac_siglec, branch: oncology, label: "Glycosylation (O-GlcNAc / Siglec)",
+     synonyms: ["glycan", "o-glcnac", "siglec", "sialic acid", "glyco-immune"],
+     example_targets: ["OGT", "SIGLEC9", "CD33"], maturity: emerging}
+  - {id: adp_ribosylation_parp_tankyrase, branch: oncology, label: "ADP-ribosylation (PARP / tankyrase)",
+     synonyms: ["parp", "tankyrase", "parp1", "parg", "ddr"],
+     example_targets: ["PARP1", "TNKS"], maturity: validated}
+  - {id: oncometabolite_metabolic_reprogramming, branch: oncology, label: "Oncometabolite / metabolic reprogramming",
+     synonyms: ["idh", "2-hg", "glutaminase", "metabolic reprogramming", "warburg"],
+     example_targets: ["IDH1", "IDH2", "GLS"], maturity: validated}
+  - {id: rna_m6a_epitranscriptome, branch: oncology, label: "RNA m6A epitranscriptome",
+     synonyms: ["m6a", "mettl3", "ythdf", "epitranscriptomics", "rna methylation"],
+     example_targets: ["METTL3", "FTO"], maturity: emerging}
+  - {id: llps_condensates, branch: oncology, label: "Liquid-liquid phase separation / condensates",
+     synonyms: ["biomolecular condensate", "phase separation", "llps", "membraneless"],
+     example_targets: ["MED1", "BRD4"], maturity: lab_stage}
+  - {id: chromothripsis, branch: oncology, label: "Chromothripsis",
+     synonyms: ["chromosomal shattering", "micronuclei", "genome instability"],
+     example_targets: ["CGAS", "STING"], maturity: lab_stage}
+  - {id: ecdna, branch: oncology, label: "Extrachromosomal DNA (ecDNA)",
+     synonyms: ["ecdna", "double minutes", "oncogene amplification", "extrachromosomal"],
+     example_targets: ["MYC", "CDK4"], maturity: emerging}
+  - {id: tad_topology_ctcf_cohesin, branch: oncology, label: "TAD topology (CTCF / cohesin)",
+     synonyms: ["ctcf", "cohesin", "topologically associating domain", "3d genome", "stag2"],
+     example_targets: ["CTCF", "STAG2", "SMC1A"], maturity: lab_stage}
+  - {id: integrins, branch: oncology, label: "Integrins",
+     synonyms: ["integrin", "itgb", "itgav", "rgd", "adhesion"],
+     example_targets: ["ITGB6", "ITGAV"], maturity: validated}
+  - {id: yap_taz_hippo_tead, branch: oncology, label: "YAP/TAZ–Hippo–TEAD",
+     synonyms: ["yap", "taz", "tead", "hippo pathway", "lats"],
+     example_targets: ["TEAD1", "YAP1", "WWTR1"], maturity: emerging}
+  - {id: piezo_mechano, branch: oncology, label: "Piezo / mechanotransduction",
+     synonyms: ["piezo1", "piezo2", "mechanosensing", "mechanotransduction"],
+     example_targets: ["PIEZO1", "PIEZO2"], maturity: lab_stage}
+  - {id: mhc_i_loss_antigen_presentation, branch: oncology, label: "MHC-I loss / antigen presentation",
+     synonyms: ["mhc class i", "antigen presentation", "b2m", "tap", "immune evasion"],
+     example_targets: ["B2M", "TAP1", "HLA-A"], maturity: emerging}
+  - {id: immune_exclusion_caf_collagen, branch: oncology, label: "Immune exclusion (CAF / collagen)",
+     synonyms: ["cancer-associated fibroblast", "stroma", "collagen", "desmoplasia", "tgfb"],
+     example_targets: ["FAP", "TGFB1", "LOXL2"], maturity: emerging}
+  - {id: metabolic_immune_suppression_adenosine, branch: oncology, label: "Metabolic immune suppression (adenosine)",
+     synonyms: ["adenosine", "cd73", "cd39", "a2ar", "hif"],
+     example_targets: ["NT5E", "ENTPD1", "ADORA2A"], maturity: validated}
+  - {id: splicing_sf3b1_rbm39, branch: oncology, label: "Splicing (SF3B1 / RBM39)",
+     synonyms: ["spliceosome", "sf3b1", "rbm39", "splicing modulator", "molecular glue splicing"],
+     example_targets: ["SF3B1", "RBM39"], maturity: emerging}
+  - {id: circrna, branch: oncology, label: "Circular RNA",
+     synonyms: ["circrna", "circular rna", "back-splicing"],
+     example_targets: ["CDR1as"], maturity: lab_stage}
+  - {id: ribosome_biogenesis_pol_i, branch: oncology, label: "Ribosome biogenesis (Pol I)",
+     synonyms: ["rna polymerase i", "ribosome biogenesis", "nucleolar stress", "rrna"],
+     example_targets: ["POLR1A", "RRN3"], maturity: lab_stage}
+  - {id: menin_kmt2a, branch: oncology, label: "Menin–KMT2A",
+     synonyms: ["menin", "kmt2a", "mll", "men1 inhibitor"],
+     example_targets: ["MEN1", "KMT2A"], maturity: registrational}
+  - {id: lsd1_demethylase, branch: oncology, label: "LSD1 demethylase",
+     synonyms: ["lsd1", "kdm1a", "histone demethylase"],
+     example_targets: ["KDM1A"], maturity: emerging}
+
+  # ── Branch: autoimmune (seed; extend freely) ──────────────────────────────
+  - {id: tyk2_jak, branch: autoimmune, label: "TYK2 / JAK",
+     synonyms: ["tyk2", "jak1", "jak2", "jak inhibitor", "allosteric tyk2"],
+     example_targets: ["TYK2", "JAK1"], maturity: validated}
+  - {id: tnf_il_axis, branch: autoimmune, label: "TNF / IL axis",
+     synonyms: ["tnf", "il-23", "il-17", "il-2", "interleukin", "cytokine"],
+     example_targets: ["TNF", "IL23A", "IL17A"], maturity: validated}
+  - {id: b_cell_depletion_degrader, branch: autoimmune, label: "B-cell depletion / degrader",
+     synonyms: ["cd19", "cd20", "btk degrader", "b-cell depletion", "car-t autoimmune"],
+     example_targets: ["CD19", "MS4A1", "BTK"], maturity: emerging}
+  - {id: treg_modulation, branch: autoimmune, label: "Treg modulation",
+     synonyms: ["regulatory t cell", "treg", "il-2 muteins", "foxp3"],
+     example_targets: ["IL2RA", "FOXP3"], maturity: emerging}
+  - {id: complement, branch: autoimmune, label: "Complement",
+     synonyms: ["complement", "c5", "c3", "factor b", "factor d"],
+     example_targets: ["C5", "C3", "CFB"], maturity: validated}
+  - {id: s1p_modulation, branch: autoimmune, label: "S1P modulation",
+     synonyms: ["sphingosine-1-phosphate", "s1p receptor", "s1p1"],
+     example_targets: ["S1PR1"], maturity: validated}
+  - {id: oral_macrocyclic_peptide_il_blockade, branch: autoimmune, label: "Oral macrocyclic peptide IL-blockade",
+     synonyms: ["macrocyclic peptide", "oral il-23", "oral peptide", "constrained peptide"],
+     example_targets: ["IL23R"], maturity: emerging}
+  - {id: tolerogenic_antigen_specific, branch: autoimmune, label: "Tolerogenic / antigen-specific",
+     synonyms: ["antigen-specific tolerance", "tolerogenic", "inverse vaccine", "immune tolerance"],
+     example_targets: ["PD-L1"], maturity: lab_stage}
+
+  # ── Branch: gpcr (seed; extend freely) ────────────────────────────────────
+  - {id: gpcr_orphan_deorphanization, branch: gpcr, label: "GPCR orphan deorphanization",
+     synonyms: ["orphan gpcr", "deorphanization", "gpr", "endogenous ligand discovery"],
+     example_targets: ["GPR15", "GPR65"], maturity: emerging}
+  - {id: gpcr_biased_agonism, branch: gpcr, label: "GPCR biased agonism",
+     synonyms: ["biased agonism", "g-protein biased", "beta-arrestin biased", "functional selectivity"],
+     example_targets: ["OPRM1", "AGTR1"], maturity: emerging}
+  - {id: gpcr_allosteric_modulation, branch: gpcr, label: "GPCR allosteric modulation",
+     synonyms: ["allosteric modulator", "pam", "nam", "allosteric site"],
+     example_targets: ["CASR", "GLP1R"], maturity: validated}
+  - {id: gpcr_structure_cryo_em_platform, branch: gpcr, label: "GPCR structure / cryo-EM platform",
+     synonyms: ["cryo-em", "structure-based gpcr", "gpcr structural biology", "structure platform"],
+     example_targets: ["GLP1R", "GIPR"], maturity: emerging}
+  - {id: gpcr_peptide_ligand_discovery, branch: gpcr, label: "GPCR peptide-ligand discovery",
+     synonyms: ["peptide ligand", "gpcr peptide", "incretin", "peptide discovery platform"],
+     example_targets: ["GLP1R", "GCGR"], maturity: validated}
