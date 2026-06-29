@@ -76,9 +76,11 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
 
 ## D. SCOPE EXPANSION (v2, only when warranted)
 
-12. **JP/KR regions** (spec §3, deferred). Add `JP`/`KR` to `run.regions` + DART/EDINET-aware
-    enumeration; the science signals (ClinicalTrials, web research) are already global, so detection
-    works even where filings are opaque.
+12. **JP/KR regions** — **WIRED (D25)** via the Wikidata net (`JP→Q17`, `KR→Q884` + `run.regions`):
+    ~27 JP/KR pharma/biotech enumerated (Takeda, Shionogi, Eisai, PeptiDream, Ono; Korean: Dae Hwa,
+    Chong Kun Dang). Still open: they're Tier 0 / unknown-cap (no yfinance for `.T`/`.KS` — needs the
+    licensed provider or a web check, like EU); and a **native DART/EDINET feed** for exhaustive
+    small-cap coverage (Wikidata is thinner). Science signals are already global.
 13. **Embedding semantic pre-rank (Stage 3)** — intentionally SKIPPED (D1) at ~589 companies. Revisit
     only if the universe grows to thousands (a Haiku pass over everything starts costing real money)
     or if semantic dedup/clustering becomes valuable. The `embed/` architecture slot stays open.

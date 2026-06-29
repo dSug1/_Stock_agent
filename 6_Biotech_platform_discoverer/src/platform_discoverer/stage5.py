@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
@@ -81,17 +82,27 @@ def _strip_suffix(norm: str) -> str:
     return re.sub(r"\s+", " ", _CORP_SUFFIX.sub(" ", norm)).strip()
 
 
+def _fold_accents(s: str) -> str:
+    """Strip diacritics so a Wikidata 'Galápagos' matches an SEC 'Galapagos' (NFKD + drop combining)."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(c))
+
+
+def _dedup_name(name: str) -> str:
+    """Accent-folded, suffix-stripped normalized name — the cross-source / cross-listing merge key."""
+    return _strip_suffix(normalize_name(_fold_accents(name)))
+
+
 def _dedup_signals(company: Company) -> set[str]:
     """Identity signals that make two company-ids the SAME real company (spec §5.7).
 
-    Two records merge if they share ANY signal (transitively): ISIN, or ticker+country. A record
-    WITHOUT a ticker falls back to its suffix-stripped normalized name. The seed-CSV-name vs
-    SEC-name double-id (e.g. ACRV "Acrivon Therapeutics" w/ ISIN vs "Acrivon Therapeutics, Inc."
-    without one) carries *different* identifiers per row — so a single per-row key misses it; a
-    shared-signal union does not (both carry ticker+country ``ACRV@US``). Legal-entity suffixes are
-    stripped for the name fallback; industry words (therapeutics/pharmaceuticals) are NOT, so
-    distinct companies sharing a stem stay separate. Genuine cross-listings were already collapsed
-    in ``dedup.collapse`` at Stage 0a; ticker is keyed WITH country to avoid a cross-exchange clash.
+    Two records merge if they share ANY signal (transitively): ISIN, ticker+country, OR
+    accent-folded suffix-stripped name. The NAME signal (D24) is now emitted for EVERY record, not
+    only ticker-less ones, so the same company enumerated via two nets — an ADR row ``PRGO@US`` and a
+    Wikidata row ``PRGO@Ireland``, or a dual listing ``ZEAL.CO``/``ZEAL`` — collapses to one. Legal
+    suffixes are stripped (inc/plc/ab/sa/nv/ag/…) but industry words (therapeutics/pharmaceuticals)
+    are NOT, so genuinely distinct companies sharing a stem stay separate. Ticker is still keyed WITH
+    country so a cross-exchange symbol clash (e.g. a German vs US ``MRK``) does NOT merge on ticker —
+    and won't on name either, since the names differ. ISIN remains the strongest signal.
     """
     sigs: set[str] = set()
     isin = (company.isin or "").strip().upper()
@@ -100,8 +111,9 @@ def _dedup_signals(company: Company) -> set[str]:
     ticker = (company.primary_ticker or "").strip().upper()
     if ticker:
         sigs.add(f"tkr:{ticker}@{(company.country or '').strip().upper()}")
-    else:
-        sigs.add(f"name:{_strip_suffix(normalize_name(company.name))}")
+    name_sig = _dedup_name(company.name)
+    if name_sig:
+        sigs.add(f"name:{name_sig}")
     return sigs
 
 

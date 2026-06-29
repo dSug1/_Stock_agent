@@ -1,9 +1,9 @@
-"""Europe + Nordic universe enumeration via Wikidata SPARQL (free, no key).
+"""International (Europe/Nordic + Japan/Korea) universe enumeration via Wikidata SPARQL (free, no key).
 
-SEC only covers US filers, so the European / Nordic listed-biotech universe needs another free
-source. Wikidata is the pragmatic one: query companies whose *industry* (P452) is biotechnology or
-pharmaceuticals, whose *country* (P17) is in-scope (Sweden, Denmark, and the broader EU set), and
-which have a *stock-exchange listing* (P414) carrying a *ticker* (P249 qualifier).
+SEC only covers US filers, so the non-US listed-biotech universe needs another free source. Wikidata
+is the pragmatic one: query companies whose *industry* (P452) is biotechnology or pharmaceuticals,
+whose *country* (P17) is in-scope (Sweden, Denmark, the broader EU set, and — D25 — Japan/South Korea),
+and which have a *stock-exchange listing* (P414) carrying a *ticker* (P249 qualifier).
 
 **Coverage caveat (honest):** Wikidata is notable-entity-biased — it captures mid/large and many
 small caps but will miss some nano-caps. It is a real, free pan-European net to start with; a
@@ -26,11 +26,13 @@ log = logging.getLogger(__name__)
 
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
 
-# Region code -> Wikidata country QID. "EU" expands to a broad European set (incl. SE/DK).
+# Region code -> Wikidata country QID. "EU" expands to a broad European set (incl. SE/DK). JP/KR (D25)
+# are single-country regions enumerated the same way — Wikidata covers TSE/KRX-listed pharma/biotech.
 COUNTRY_QID = {
     "SE": "Q34", "DK": "Q35", "FI": "Q33", "NO": "Q20",
     "DE": "Q183", "FR": "Q142", "NL": "Q55", "CH": "Q39", "GB": "Q145",
     "BE": "Q31", "IT": "Q38", "ES": "Q29", "AT": "Q40", "IE": "Q27",
+    "JP": "Q17", "KR": "Q884",
 }
 _EU_BROAD = ["SE", "DK", "FI", "NO", "DE", "FR", "NL", "CH", "GB", "BE", "IT", "ES", "AT", "IE"]
 

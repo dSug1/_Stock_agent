@@ -5,6 +5,39 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D25 (2026-06-29) — Wire Japan + South Korea enumeration (BUILT)
+
+ROADMAP item 12. Added `JP→Q17` / `KR→Q884` to `wikidata.COUNTRY_QID` and `JP`,`KR` to
+`run.regions`. The Wikidata net is region-parameterized, so no new client was needed — the directory
+provider already routes all non-US regions through `build_eu_records` (now "intl"). Live query returns
+**27 JP/KR pharma/biotech records** (Takeda, Sumitomo, Shionogi, Eisai, PeptiDream, Ono, Kyorin, AnGes;
+Korean: Dae Hwa, Kwang Dong, Chong Kun Dang). Enumerated **22 into the store** (18 JP, 4 KR), tagged,
+visible in the report. They sit Tier 0 / unknown-cap (Wikidata gives no cap; `.T`/`.KS` tickers don't
+enrich via yfinance — same caveat as EU, resolved by web check or the licensed provider). Coverage is
+thinner than a native DART/EDINET feed but it's the free reuse path; a native feed remains a future
+upgrade for exhaustive JP/KR small-cap coverage. The science signals (ClinicalTrials, web research) are
+already global, so scoring works regardless of filing opacity.
+
+---
+
+## D24 (2026-06-29) — Dedup duplicate company rows by accent-folded name (BUILT)
+
+**Problem.** The same company enumerated via two nets produced duplicate rows the dedup missed:
+ADR dups with the same ticker but different country (`PRGO@US` vs `PRGO@Ireland`), and dual listings
+with different tickers (`ZEAL.CO` vs `ZEAL`). `_dedup_signals` keyed `tkr:TICKER@COUNTRY` and only used
+name as a fallback when the ticker was absent — so neither case collapsed.
+
+**Fix (`stage5.py`).** The accent-folded, suffix-stripped normalized name is now emitted as a dedup
+signal for **every** record (not just ticker-less ones): `_dedup_name = _strip_suffix(normalize_name(
+_fold_accents(name)))`. `_fold_accents` (NFKD + drop combining marks) lets Wikidata `Galápagos` match
+SEC `Galapagos`. Accent folding is isolated to the dedup path (NOT `normalize_name`/`company_id_for`),
+so no company-id churn. Legal suffixes are stripped but industry words (therapeutics/pharmaceuticals)
+are not, and a cross-exchange ticker clash still can't merge (the names differ). Live: collapses exactly
+12 duplicate pairs (601→589 groups) — PRGO, Camurus, Galapagos, Evotec(SE/EVO), Molecular Partners,
+Schrödinger, Zealand, etc. — **zero false merges**. 3 new tests; 183 pass.
+
+---
+
 ## D23 (2026-06-29) — EU/Nordic IPO dates + Hikma cap web-checked → in-band EU names now tiered (DONE)
 
 Follow-up to D22. (1) **Hikma** cap web-verified at **$4.14B** (was a $5.5B mega-approx) — still above

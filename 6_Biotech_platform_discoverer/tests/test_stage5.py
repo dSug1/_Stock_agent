@@ -47,9 +47,9 @@ def _rubric(ticker="ACRV", moat="data", substance="substantive", a=5, c=5):
 
 
 def _seed(store, cid, ticker, *, name=None, composite=0.8, confidence=0.8, isin=None,
-          ipo_date=None, rubric=None):
+          ipo_date=None, rubric=None, country="US"):
     store.upsert_company(Company(company_id=cid, name=name or f"{ticker} Therapeutics",
-                                 primary_ticker=ticker, exchange="NASDAQ", country="US",
+                                 primary_ticker=ticker, exchange="NASDAQ", country=country,
                                  isin=isin, ipo_date=ipo_date, mktcap_usd_fd=5e8))
     r = rubric or _rubric(ticker)
     store.record_score(Score(company_id=cid, run_id=now_iso(), model="claude-sonnet-4-6",
@@ -160,6 +160,29 @@ def test_dedup_merges_when_identifiers_are_asymmetric(store):
     _seed(store, "id_sec", "ACRV", name="Acrivon Therapeutics, Inc.", composite=0.9, isin=None)
     ranked = stage5.rank(store, CONFIG, today=TODAY)
     assert len(ranked) == 1 and ranked[0]["merged_ids"] == ["id_seed"]
+
+
+def test_dedup_merges_dual_listing_by_name(store):
+    # D24: same company, two listings with DIFFERENT tickers (ZEAL.CO vs ZEAL), no ISIN -> name merges
+    _seed(store, "id_co", "ZEAL.CO", name="Zealand Pharma", composite=0.7)
+    _seed(store, "id_us", "ZEAL", name="Zealand Pharma", composite=0.9)
+    ranked = stage5.rank(store, CONFIG, today=TODAY)
+    assert len(ranked) == 1 and ranked[0]["composite"] == 0.9
+
+
+def test_dedup_merges_same_ticker_different_country_by_name(store):
+    # D24: ADR dup — same ticker, DIFFERENT country (PRGO@US vs PRGO@Ireland). ticker@country differs;
+    # name signal collapses them.
+    _seed(store, "id_us", "PRGO", name="PERRIGO Co plc", composite=0.6, country="US")
+    _seed(store, "id_ie", "PRGO", name="Perrigo Company Plc", composite=0.8, country="Ireland")
+    assert len(stage5.rank(store, CONFIG, today=TODAY)) == 1
+
+
+def test_dedup_folds_accents(store):
+    # D24: Wikidata 'Galápagos' vs SEC 'Galapagos' merge after diacritic folding
+    _seed(store, "id_a", "GLPG.BR", name="Galápagos NV", composite=0.6)
+    _seed(store, "id_b", "GLPG", name="Galapagos NV", composite=0.8)
+    assert len(stage5.rank(store, CONFIG, today=TODAY)) == 1
 
 
 def test_dedup_by_isin_isolated(tmp_path):

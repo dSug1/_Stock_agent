@@ -2,8 +2,9 @@
 # All tunables live here so re-runs with different thresholds need no code change.
 
 run:
-  regions: ["US", "SE", "DK", "EU"]  # US (SEC) + Sweden + Denmark + broad EU (Wikidata).
-                                     # JPX/KRX deferred: add "JP","KR" in v2.
+  regions: ["US", "SE", "DK", "EU", "JP", "KR"]  # US (SEC) + Sweden + Denmark + broad EU + Japan +
+                                     # South Korea, all via Wikidata for non-US (D25). JP/KR cap+IPO
+                                     # enrichment (.T/.KS tickers) still needs the licensed provider.
   incremental: true
   max_companies_to_score: 200        # safety cap on Stage 4 inputs
 
