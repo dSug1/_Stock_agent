@@ -81,9 +81,8 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
 
 ## E. HOUSEKEEPING
 
-14. **Per-milestone explainers for D9–D11.** M1–M8 have `spec/M*_explained.md`; the recent D9
-    (web research), D10 (observability), D11 (incremental) currently live only in `decisions.md`.
-    Add explainers if the per-milestone-doc convention is to be kept complete.
+14. ~~Per-milestone explainers for D9–D11.~~ **DONE** — `spec/post_M5_explained.md` covers everything
+    built after M5 (M6–M8 summarized + D9/D10/D11 in full).
 15. **§12 evidence-level incremental.** D11 covers config-change re-scoring; the "recompute only
     companies whose *evidence* changed since the prior run" gate for Stages 4/5 is still just the
     Stage-2 freshness TTL. `run_meta.config_hash` is recorded and available to build a stage-wide gate.
