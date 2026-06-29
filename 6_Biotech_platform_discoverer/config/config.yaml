@@ -97,8 +97,12 @@ stage4_scoring:
                                      # pubmed.ncbi.nlm.nih.gov, sec.gov); [] = unrestricted (D13)
   concurrency: 6                     # parallel real-time calls (triage + finalize) via AsyncAnthropic
                                      # (D13) — bounded fan-out, far faster than a sequential loop
-  request_timeout_s: 180             # per-request SDK timeout (D14). The SDK default is 10 MIN + 2
-                                     # retries, so a stalled call ballooned a run to ~1hr; bound it.
+  request_timeout_s: 600             # per-request SDK timeout. NOTE (D15b): a real rubric call
+                                     # (large prompt + complex schema + web_search) legitimately takes
+                                     # SEVERAL MINUTES — 180s falsely timed every call out (scored=0).
+                                     # Keep it generous; wall-clock is won by ASYNC concurrency + Batch,
+                                     # NOT a short timeout. The earlier "1hr hang" was 5 survivors x
+                                     # ~5min SEQUENTIALLY (pre-async), not a stall.
   max_retries: 1                     # SDK retry cap (D15). Default is 2; with the 180s timeout that's
                                      # 3×180s worst case per call — 1 tightens it to 2×180s.
   use_batch_api: true                # async batch (50% cost) for the Sonnet rubric pass
