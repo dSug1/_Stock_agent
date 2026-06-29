@@ -80,6 +80,22 @@ def due_tier_breakdown(store: Store, config: dict, tickers=None, *, force: bool 
     return tiering.tier_breakdown(due, config)
 
 
+def _persist_score(store: Store, cid: str, rj: dict, model: str, *, weights: dict, penalties: dict,
+                   evidence_n: int, finalized: bool, run_id: str, config_hash: str) -> dict:
+    """Compute composite/confidence for one rubric result and PERSIST it immediately (crash-safe:
+    each score is durable the moment it's produced, so a later error/hang never loses earlier work).
+    Idempotent on (company_id, run_id) — the Opus finalize upserts over the Sonnet row. Returns the
+    in-memory entry used to decide finalize-band membership."""
+    comp = composite.compute_composite(rj, weights, penalties)
+    conf = composite.compute_confidence(rj, evidence_sources=evidence_n, finalized=finalized)
+    ax = composite.axis_scores(rj)
+    store.record_score(Score(company_id=cid, run_id=run_id, model=model, json=rj,
+                             A=ax["A_proprietary_data"], B=ax["B_compute_engine"],
+                             C=ax["C_validation"], D=ax["D_mechanism"], E=ax["E_translation"],
+                             composite=comp, confidence=conf), run_id=run_id, config_hash=config_hash)
+    return {"rubric": rj, "composite": comp, "confidence": conf, "model": model}
+
+
 def _evidence(store: Store, company_id: str) -> dict:
     out = {}
     for src in _EVIDENCE_SOURCES:
@@ -187,6 +203,11 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
             max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50),
             web_search_cost_per_search=float(wr.get("cost_per_1k_searches_usd", 10)) / 1000.0)
 
+    # run_id + scoring-config hash fixed up front so every incrementally-persisted score is stamped
+    # consistently (§12 config-change re-runs) and shares one run_id.
+    rid = run_id or now_iso()
+    chash = cfg.config_hash(config)
+
     # Tier 1 — Haiku triage over every candidate (recall-safe)
     survivors: dict[str, dict] = {}
     killed = 0
@@ -199,29 +220,31 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
             killed += 1
             if t:
                 store.audit(stage="stage4", action="cut", company_id=cid, reason="triage_kill",
-                            run_id=run_id, detail={"prior": t.get("prior"), "why": t.get("reason")})
+                            run_id=rid, detail={"prior": t.get("prior"), "why": t.get("reason")})
 
-    # Tier 2 — Sonnet full rubric over survivors (Batch API, or real-time if use_batch=False)
+    # Tier 2 — Sonnet full rubric over survivors. Each score is PERSISTED the instant it's produced
+    # (crash-safe — a later hang/error never discards earlier survivors' web-search work).
+    scored: dict[str, dict] = {}
     if use_batch:
         rubric_out = client.score_batch(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
                                         survivors, 1500, validate=rubric.validate_rubric,
                                         tools=web_tool)
+        for cid, rj in rubric_out.items():
+            scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
+                                         penalties=penalties, evidence_n=len(_evidence(store, cid)),
+                                         finalized=False, run_id=rid, config_hash=chash)
     else:
-        rubric_out = {}
         for cid, b in survivors.items():
             rj = client.score_realtime(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA, b,
                                        1500, validate=rubric.validate_rubric, tools=web_tool)
             if rj:
-                rubric_out[cid] = rj
+                scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
+                                             penalties=penalties,
+                                             evidence_n=len(_evidence(store, cid)),
+                                             finalized=False, run_id=rid, config_hash=chash)
 
-    scored: dict[str, dict] = {}
-    for cid, rj in rubric_out.items():
-        comp = composite.compute_composite(rj, weights, penalties)
-        conf = composite.compute_confidence(rj, evidence_sources=len(_evidence(store, cid)),
-                                            finalized=False)
-        scored[cid] = {"rubric": rj, "composite": comp, "confidence": conf, "model": s4["score_model"]}
-
-    # Tier 3 — Opus finalize on the contested band (adversarial)
+    # Tier 3 — Opus finalize on the contested band (adversarial). The re-score upserts the same
+    # (company_id, run_id) row, so it's also durable immediately.
     finalized = 0
     for cid, s in list(scored.items()):
         if lo <= s["composite"] <= hi:
@@ -230,23 +253,11 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
                                        rubric.RUBRIC_SCHEMA, survivors[cid], 1500,
                                        validate=rubric.validate_rubric, tools=web_tool)
             if rj:
-                comp = composite.compute_composite(rj, weights, penalties)
-                conf = composite.compute_confidence(rj, evidence_sources=len(_evidence(store, cid)),
-                                                    finalized=True)
-                scored[cid] = {"rubric": rj, "composite": comp, "confidence": conf,
-                               "model": s4["finalize_model"]}
+                scored[cid] = _persist_score(store, cid, rj, s4["finalize_model"], weights=weights,
+                                             penalties=penalties,
+                                             evidence_n=len(_evidence(store, cid)),
+                                             finalized=True, run_id=rid, config_hash=chash)
                 finalized += 1
-
-    # Persist (stamp each score with the scoring-config hash for §12 config-change re-runs)
-    rid = run_id or now_iso()
-    chash = cfg.config_hash(config)
-    for cid, s in scored.items():
-        ax = composite.axis_scores(s["rubric"])
-        store.record_score(Score(company_id=cid, run_id=rid, model=s["model"], json=s["rubric"],
-                                 A=ax["A_proprietary_data"], B=ax["B_compute_engine"],
-                                 C=ax["C_validation"], D=ax["D_mechanism"], E=ax["E_translation"],
-                                 composite=s["composite"], confidence=s["confidence"]),
-                           run_id=rid, config_hash=chash)
 
     summary = {"mode": "dispatch", "candidates": len(bundles), "triage_killed": killed,
                "scored": len(scored), "opus_finalized": finalized,

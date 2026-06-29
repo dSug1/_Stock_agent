@@ -269,6 +269,39 @@ def test_rescore_ttl_expired_is_due(store):
     assert "a1" in {c.company_id for c in stage4._candidates(store, CONFIG)}   # >1yr ago -> due
 
 
+def test_stage4_persists_incrementally_survives_crash(store):
+    """Crash-safety: a hang/error mid-run must not discard scores already computed. A client that
+    crashes during the Opus finalize leaves the earlier rubric scores durably persisted."""
+    _seed_scoring(store)                                  # a1=ACRV, a2=ACON, x1=XYZZ
+
+    class CrashClient:
+        def __init__(self):
+            self.spent_usd = 0.0; self.calls = 0; self.web_searches = 0
+
+        def score_realtime(self, model, system, schema, bundle, max_tokens, *, validate=None,
+                           max_retries=3, tools=None, max_pause_turns=4):
+            self.calls += 1
+            if schema is rubric.TRIAGE_SCHEMA:
+                keep = (bundle.get("ticker") or "").startswith("A")
+                return {"keep": keep, "prior": 0.5, "reason": "x"}
+            if model == CONFIG["stage4_scoring"]["finalize_model"]:
+                raise RuntimeError("simulated crash during finalize")   # mid-run failure
+            if (bundle.get("ticker") or "") == "ACON":                   # contested → triggers finalize
+                return _good_rubric(ticker="ACON",
+                                    A_proprietary_data={"score": 3, "modality": "", "scale_evidence": "", "citation": ""},
+                                    C_validation={"score": 3, "validation_type": "", "citation": ""})
+            return _good_rubric(ticker=bundle.get("ticker"))
+
+        def score_batch(self, *a, **k):
+            return {}
+
+    with pytest.raises(RuntimeError):
+        stage4.run(store, CONFIG, dispatch=True, client=CrashClient(), run_id="rc", use_batch=False)
+    rows = {r["company_id"] for r in
+            store.conn.execute("SELECT company_id FROM scores WHERE run_id='rc'").fetchall()}
+    assert {"a1", "a2"} <= rows     # both rubric scores persisted BEFORE the finalize crash
+
+
 def test_stage4_dispatch_tiers_and_persists(store):
     _seed_scoring(store)
     fake = FakeClient()
