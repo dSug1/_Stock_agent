@@ -5,6 +5,30 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D22 (2026-06-29) — EU/Nordic market caps populated by manual web check (DONE)
+
+**Why.** D21 enumerated ~66 EU/Nordic names but yfinance can't resolve foreign tickers → all sat in
+Tier 0 / unknown-cap. User asked for a direct web check of their market caps (no Claude API).
+
+**Done.** Web-searched current market caps (June 2026) and wrote them to the store:
+- **32 web-verified caps** (individual WebSearch): incl. Bavarian Nordic $2.41B, Camurus $2.90B,
+  Almirall $2.79B, Galapagos $1.87B, Perrigo $1.52B, Compass $1.40B, Evotec $1.10B, DBV $0.95B,
+  Molecular Partners $0.14B, Orexo $0.07B, Zealand $3.30B, Genmab $15B, etc.
+- **16 mega-caps** assigned approximate values (Novo/Sanofi/Novartis/AZN/GSK/JNJ/Bayer/Merck KGaA/
+  Sandoz/Novonesis/Qiagen/Alkermes/Jazz/BioNTech/…) — all ≫$3B so band-cut regardless; flagged
+  `mega_cap_approx` (not individually web-verified).
+- **18 marked not-live** (acquired/delisted; Morphosys + Orchard web-confirmed, rest documented M&A:
+  Shire→Takeda, Allergan→AbbVie, Horizon→Amgen, GW→Jazz, Mylan→Viatris, Prosensa→BioMarin, …).
+
+After Stage-0b band logic: mega-caps deleted `mktcap_out_of_band`, defunct deleted `not_live`, leaving
+**~11 in-band EU/Nordic biotechs** visible (several now tiered: Camurus T2, Bavarian Nordic/Galapagos
+T3). Full 66-row mapping persisted to `data/eu_market_caps_web_2026-06-29.csv` (re-runnable audit
+record, since the working DB is gitignored). **Caveat:** this is a one-off manual enrichment; the
+durable fix remains the licensed-provider swap (ROADMAP item 9), which also brings EU **IPO dates** so
+the remaining Tier-0 EU names (cap known, age unknown) can be tiered + scored.
+
+---
+
 ## D20 (2026-06-29) — Surface triage-killed companies in the HTML report (BUILT)
 
 **Why.** Only ~13 companies showed Claude results in the report; the ~59 companies Haiku *triage-killed*
