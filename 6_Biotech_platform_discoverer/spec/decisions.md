@@ -5,6 +5,21 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D20 (2026-06-29) — Surface triage-killed companies in the HTML report (BUILT)
+
+**Why.** Only ~13 companies showed Claude results in the report; the ~59 companies Haiku *triage-killed*
+(evaluated, cut before the rubric) had no score row and were indistinguishable from never-scored names —
+the work done was invisible. User asked to "highlight them in red and move to the bottom."
+
+**Built (`render.py`).** `_triaged_out(store)` reads the `stage4/cut/triage_kill` audit rows →
+`{company_id: why}`. `build_data` sets `triaged_out=True` + `triage_reason` on any unscored row whose
+group was triage-killed (scored takes precedence). The JS `sortRows` sinks `triaged_out` rows to the
+bottom of every tier regardless of the active sort column; CSS renders them red (row tint + red ticker);
+the status cell shows "triaged out"; the expand panel shows the Haiku reason. New funnel card "triaged
+out". 3 new tests (test_render.py); 180 pass. Live: 13 scored + 27 triaged-out (deduped) in the report.
+
+---
+
 ## D19 (2026-06-29) — Evidence-level incremental re-scoring §12 (E15) (BUILT)
 
 **Problem.** D11 re-opens a ticker for scoring on a *config* change; the Stage-2 TTL refreshes *harvest*.

@@ -11,6 +11,8 @@ The UI mirrors ``3_Biopharmcatalyst_parser``'s catalyst-scores report features:
     ticks it (persisted in ``localStorage``) once reviewed and the highlight clears.
   * **collapsible Claude results** — click a row to expand its rubric memo / axes / moat / mechanisms.
   * **new-items filter** — show only new (unacknowledged) or only acknowledged rows.
+  * **triaged-out rows (D20)** — companies Haiku killed at triage (no rubric) render RED and sink to the
+    bottom of every tier, with the kill reason in the expand panel; distinct from never-scored names.
 
 Security: the sidecar is JSON (no HTML), the template escapes everything client-side (``escapeHtml``),
 and there are no external resources or hrefs — nothing here can execute injected markup.
@@ -40,6 +42,18 @@ def _latest_summary(store: Store, stage: str, reason: str) -> dict:
     return {}
 
 
+def _triaged_out(store: Store) -> dict[str, str]:
+    """{company_id: reason} for every company killed at Haiku triage (audit stage4/cut/triage_kill).
+    Latest kill wins. Used to render triaged-out companies red + at the bottom (vs never-scored)."""
+    out: dict[str, str] = {}
+    for r in store.conn.execute(
+            "SELECT company_id, detail_json FROM audit_log "
+            "WHERE stage='stage4' AND action='cut' AND reason='triage_kill' ORDER BY ts"):
+        d = json.loads(r["detail_json"]) if r["detail_json"] else {}
+        out[r["company_id"]] = d.get("why") or "killed at Haiku triage (no rubric run)"
+    return out
+
+
 def _row_for(company, score, merged_ids, config, today) -> dict:
     rubric = (score.json if score else {}) or {}
     row: dict[str, Any] = {
@@ -59,6 +73,7 @@ def _row_for(company, score, merged_ids, config, today) -> dict:
         "stage1_excluded": bool(company.stage1_excluded),
         "merged_ids": merged_ids,
         "scored": score is not None,
+        "triaged_out": False,        # set in build_data for companies Haiku killed before the rubric
     }
     if score is not None:
         moat = rubric.get("moat_location") or {}
@@ -89,6 +104,7 @@ def build_data(store: Store, config: Optional[dict] = None, *, today=None) -> di
     config = config or {}
     review_ids = {r["company_id"] for r in store.review_queue_dump()}
     scores = store.latest_scores()
+    triaged = _triaged_out(store)            # company_id -> kill reason (Haiku triage, no rubric)
     live = [c for c in store.all_companies() if c.is_live]
     entries = [{"company": c, "score": scores.get(c.company_id)} for c in live]
 
@@ -106,6 +122,14 @@ def build_data(store: Store, config: Optional[dict] = None, *, today=None) -> di
         row = _row_for(rep["company"], rep["score"], merged, config, today)
         row["review"] = rep["company"].company_id in review_ids or any(
             m["company"].company_id in review_ids for m in members)
+        # A company evaluated by Haiku triage and killed (no rubric) — show it red, at the bottom, so the
+        # work done is visible and it's distinct from a never-scored name. Scored takes precedence.
+        if not row["scored"]:
+            hit = next((m["company"].company_id for m in members
+                        if m["company"].company_id in triaged), None)
+            if hit:
+                row["triaged_out"] = True
+                row["triage_reason"] = triaged[hit]
         rows.append(row)
 
     s0b = _latest_summary(store, "stage0b", "hard_cuts_done")
@@ -126,6 +150,7 @@ def build_data(store: Store, config: Optional[dict] = None, *, today=None) -> di
             "live": len(live),
             "companies_shown": len(rows),
             "scored": sum(1 for r in rows if r["scored"]),
+            "triaged_out": sum(1 for r in rows if r.get("triaged_out")),
             "deleted_mktcap": s0b.get("deleted_mktcap_out_of_band", 0),
             "deleted_not_live": s0b.get("deleted_not_live", 0),
             "flagged_unknown_cap": s0b.get("flagged_mktcap_unknown", 0),
@@ -183,6 +208,11 @@ tbody tr.expanded{background:var(--rowhi)}
 tbody tr.unack{background:rgba(63,185,80,.08)}
 tbody tr.unack:hover,tbody tr.unack.expanded{background:rgba(63,185,80,.14)}
 tr.expand-row.unack>td{background:rgba(63,185,80,.06)}
+tbody tr.triaged{background:rgba(248,81,73,.09)}
+tbody tr.triaged:hover,tbody tr.triaged.expanded{background:rgba(248,81,73,.16)}
+tbody tr.triaged .ticker{color:var(--red)}
+tbody tr.triaged td{color:var(--dim)}
+tr.expand-row.triaged>td{background:rgba(248,81,73,.06)}
 tbody td{padding:7px 6px;vertical-align:top;overflow-wrap:anywhere}
 th:nth-child(1),td:nth-child(1){width:3%}
 th:nth-child(2),td:nth-child(2){width:7%}
@@ -282,7 +312,10 @@ _JS = r"""
     return true;
   }
   function sortRows(rows){const c=state.sortCol,d=state.sortDir==='asc'?1:-1;
-    return rows.slice().sort((a,b)=>{let av=a[c],bv=b[c];
+    return rows.slice().sort((a,b)=>{
+      // triaged-out companies always sink to the bottom, regardless of the active sort column
+      if(!!a.triaged_out!==!!b.triaged_out)return a.triaged_out?1:-1;
+      let av=a[c],bv=b[c];
       if(av==null&&bv==null)return 0;if(av==null)return 1;if(bv==null)return -1;
       if(typeof av==='string'&&typeof bv==='string')return av.localeCompare(bv)*d;
       return (av-bv)*d})}
@@ -335,6 +368,11 @@ _JS = r"""
       if(r.memo)h+='<h4>Memo</h4><div class="memo">'+esc(r.memo)+'</div>';
       if(r.disconfirming)h+='<h4>Disconfirming evidence</h4><div class="memo disc">'
         +esc(r.disconfirming)+'</div>';
+    }else if(r.triaged_out){
+      h+='<h4>Claude triage</h4><div class="memo disc">Killed at Haiku triage — evaluated by the cheap '
+        +'recall-safe triage pass and NOT advanced to the full Sonnet rubric (it did not look like an '
+        +'Acrivon-pattern platform match).'+(r.triage_reason?(' Reason: '+esc(r.triage_reason)):'')
+        +' Re-run Stage 4 with --force-rescore to re-evaluate.</div>';
     }else{
       h+='<h4>Claude score</h4><div class="muted">Not scored yet — this company is in a tier that '
         +'was not selected for the Claude run (or scoring has not run). Re-run Stage 4 selecting its tier.</div>';
@@ -349,10 +387,12 @@ _JS = r"""
     const tb=document.getElementById('rows-body');
     if(!sorted.length){tb.innerHTML='<tr><td colspan="10" class="no-rows">No companies match the current filters.</td></tr>';return}
     tb.innerHTML=sorted.map((r,i)=>{
-      const unack=isNew(r)?' unack':'';
+      // triaged-out rows render RED (not the green "new" highlight) and carry a 'triaged' class
+      const cls=[(isNew(r)&&!r.triaged_out)?'unack':'',r.triaged_out?'triaged':''].filter(Boolean).join(' ');
       const statusCell=r.scored?'<span class="tag substantive">scored</span>'
+        :r.triaged_out?'<span class="tag marketing">triaged out</span>'
         :(isNew(r)?'<span class="muted">new</span>':'<span class="muted">—</span>');
-      return '<tr data-id="'+esc(r.company_id)+'" class="'+unack.trim()+'">'
+      return '<tr data-id="'+esc(r.company_id)+'" class="'+cls+'">'
         +'<td class="num">'+(i+1)+'</td>'
         +'<td><span class="ticker">'+esc(r.ticker||'—')+'</span></td>'
         +'<td>'+esc(r.name||'')+'</td>'
@@ -368,7 +408,8 @@ _JS = r"""
       const tr=tb.querySelector('tr[data-id="'+CSS.escape(state.expandedId)+'"]');
       if(tr){const r=rows.find(x=>x.company_id===state.expandedId);
         const tr2=document.createElement('tr');
-        tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'');
+        tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'')
+          +(tr.classList.contains('triaged')?' triaged':'');
         tr2.innerHTML='<td colspan="10">'+buildPanel(r)+'</td>';
         tr.classList.add('expanded');tr.parentNode.insertBefore(tr2,tr.nextSibling);
       }else state.expandedId=null;
@@ -386,7 +427,8 @@ _JS = r"""
     document.querySelectorAll('tr.expand-row').forEach(e=>e.remove());
     document.querySelectorAll('tr.expanded').forEach(e=>e.classList.remove('expanded'));
     const tr2=document.createElement('tr');
-    tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'');
+    tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'')
+      +(tr.classList.contains('triaged')?' triaged':'');
     tr2.innerHTML='<td colspan="10">'+buildPanel(r)+'</td>';
     tr.classList.add('expanded');tr.parentNode.insertBefore(tr2,tr.nextSibling);
     state.expandedId=id;
@@ -402,6 +444,7 @@ _JS = r"""
     const f=d.funnel||{};
     document.getElementById('cards').innerHTML=
       card(f.live,'live companies','good')+card(f.scored,'Claude-scored','good')
+      +card(f.triaged_out,'triaged out','cut')
       +card(f.companies_shown,'rows (deduped)')+card(f.deleted_mktcap,'del · mkt cap','cut')
       +card(f.deleted_not_live,'del · not live','cut')+card(f.flagged_unknown_cap,'flag · cap?','flag');
   }

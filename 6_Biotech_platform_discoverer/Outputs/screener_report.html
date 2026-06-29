@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="template-version" content="c6463b1a83f4">
+<meta name="template-version" content="a0f646bf18bd">
 <title>Acrivon-Pattern Screener</title>
 <style>
 :root{--bg:#0d1117;--elev:#161b22;--rowhi:#11161d;--border:#21262d;--text:#c9d1d9;
@@ -49,6 +49,11 @@ tbody tr.expanded{background:var(--rowhi)}
 tbody tr.unack{background:rgba(63,185,80,.08)}
 tbody tr.unack:hover,tbody tr.unack.expanded{background:rgba(63,185,80,.14)}
 tr.expand-row.unack>td{background:rgba(63,185,80,.06)}
+tbody tr.triaged{background:rgba(248,81,73,.09)}
+tbody tr.triaged:hover,tbody tr.triaged.expanded{background:rgba(248,81,73,.16)}
+tbody tr.triaged .ticker{color:var(--red)}
+tbody tr.triaged td{color:var(--dim)}
+tr.expand-row.triaged>td{background:rgba(248,81,73,.06)}
 tbody td{padding:7px 6px;vertical-align:top;overflow-wrap:anywhere}
 th:nth-child(1),td:nth-child(1){width:3%}
 th:nth-child(2),td:nth-child(2){width:7%}
@@ -191,7 +196,10 @@ This report expects a sibling <code>screener_report_data.js</code>. Run
     return true;
   }
   function sortRows(rows){const c=state.sortCol,d=state.sortDir==='asc'?1:-1;
-    return rows.slice().sort((a,b)=>{let av=a[c],bv=b[c];
+    return rows.slice().sort((a,b)=>{
+      // triaged-out companies always sink to the bottom, regardless of the active sort column
+      if(!!a.triaged_out!==!!b.triaged_out)return a.triaged_out?1:-1;
+      let av=a[c],bv=b[c];
       if(av==null&&bv==null)return 0;if(av==null)return 1;if(bv==null)return -1;
       if(typeof av==='string'&&typeof bv==='string')return av.localeCompare(bv)*d;
       return (av-bv)*d})}
@@ -244,6 +252,11 @@ This report expects a sibling <code>screener_report_data.js</code>. Run
       if(r.memo)h+='<h4>Memo</h4><div class="memo">'+esc(r.memo)+'</div>';
       if(r.disconfirming)h+='<h4>Disconfirming evidence</h4><div class="memo disc">'
         +esc(r.disconfirming)+'</div>';
+    }else if(r.triaged_out){
+      h+='<h4>Claude triage</h4><div class="memo disc">Killed at Haiku triage — evaluated by the cheap '
+        +'recall-safe triage pass and NOT advanced to the full Sonnet rubric (it did not look like an '
+        +'Acrivon-pattern platform match).'+(r.triage_reason?(' Reason: '+esc(r.triage_reason)):'')
+        +' Re-run Stage 4 with --force-rescore to re-evaluate.</div>';
     }else{
       h+='<h4>Claude score</h4><div class="muted">Not scored yet — this company is in a tier that '
         +'was not selected for the Claude run (or scoring has not run). Re-run Stage 4 selecting its tier.</div>';
@@ -258,10 +271,12 @@ This report expects a sibling <code>screener_report_data.js</code>. Run
     const tb=document.getElementById('rows-body');
     if(!sorted.length){tb.innerHTML='<tr><td colspan="10" class="no-rows">No companies match the current filters.</td></tr>';return}
     tb.innerHTML=sorted.map((r,i)=>{
-      const unack=isNew(r)?' unack':'';
+      // triaged-out rows render RED (not the green "new" highlight) and carry a 'triaged' class
+      const cls=[(isNew(r)&&!r.triaged_out)?'unack':'',r.triaged_out?'triaged':''].filter(Boolean).join(' ');
       const statusCell=r.scored?'<span class="tag substantive">scored</span>'
+        :r.triaged_out?'<span class="tag marketing">triaged out</span>'
         :(isNew(r)?'<span class="muted">new</span>':'<span class="muted">—</span>');
-      return '<tr data-id="'+esc(r.company_id)+'" class="'+unack.trim()+'">'
+      return '<tr data-id="'+esc(r.company_id)+'" class="'+cls+'">'
         +'<td class="num">'+(i+1)+'</td>'
         +'<td><span class="ticker">'+esc(r.ticker||'—')+'</span></td>'
         +'<td>'+esc(r.name||'')+'</td>'
@@ -277,7 +292,8 @@ This report expects a sibling <code>screener_report_data.js</code>. Run
       const tr=tb.querySelector('tr[data-id="'+CSS.escape(state.expandedId)+'"]');
       if(tr){const r=rows.find(x=>x.company_id===state.expandedId);
         const tr2=document.createElement('tr');
-        tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'');
+        tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'')
+          +(tr.classList.contains('triaged')?' triaged':'');
         tr2.innerHTML='<td colspan="10">'+buildPanel(r)+'</td>';
         tr.classList.add('expanded');tr.parentNode.insertBefore(tr2,tr.nextSibling);
       }else state.expandedId=null;
@@ -295,7 +311,8 @@ This report expects a sibling <code>screener_report_data.js</code>. Run
     document.querySelectorAll('tr.expand-row').forEach(e=>e.remove());
     document.querySelectorAll('tr.expanded').forEach(e=>e.classList.remove('expanded'));
     const tr2=document.createElement('tr');
-    tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'');
+    tr2.className='expand-row'+(tr.classList.contains('unack')?' unack':'')
+      +(tr.classList.contains('triaged')?' triaged':'');
     tr2.innerHTML='<td colspan="10">'+buildPanel(r)+'</td>';
     tr.classList.add('expanded');tr.parentNode.insertBefore(tr2,tr.nextSibling);
     state.expandedId=id;
@@ -311,6 +328,7 @@ This report expects a sibling <code>screener_report_data.js</code>. Run
     const f=d.funnel||{};
     document.getElementById('cards').innerHTML=
       card(f.live,'live companies','good')+card(f.scored,'Claude-scored','good')
+      +card(f.triaged_out,'triaged out','cut')
       +card(f.companies_shown,'rows (deduped)')+card(f.deleted_mktcap,'del · mkt cap','cut')
       +card(f.deleted_not_live,'del · not live','cut')+card(f.flagged_unknown_cap,'flag · cap?','flag');
   }
