@@ -171,7 +171,9 @@ def test_estimate_includes_web_search_when_enabled():
 def test_web_search_tool_shape():
     from platform_discoverer.clients.anthropic_client import web_search_tool
     t = web_search_tool(5)
-    assert t["type"] == "web_search_20260209" and t["name"] == "web_search" and t["max_uses"] == 5
+    # D16: default is the BASIC variant (honors max_uses, ~10x faster than the dynamic-filtering one).
+    assert t["type"] == "web_search_20250305" and t["name"] == "web_search" and t["max_uses"] == 5
+    assert web_search_tool(3, tool_type="web_search_20260209")["type"] == "web_search_20260209"
 
 
 # ── Stage 4 orchestration with a fake client ────────────────────────────────

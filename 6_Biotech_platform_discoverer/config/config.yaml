@@ -89,12 +89,22 @@ stage4_scoring:
   # (replacing the dismissed OpenAlex harvest). Triage (Haiku) stays search-free (cheap recall cut).
   web_research:
     enabled: true
+    tool_type: "web_search_20250305" # D16: BASIC web-search variant. Measured: it honors max_uses and
+                                     # a real rubric call finishes in ~45-70s. The dynamic-filtering
+                                     # "web_search_20260209" ran ~20 searches (ignored max_uses) and
+                                     # TIMED OUT >600s — 10x+ slower. 3_Biopharmcatalyst_parser uses the
+                                     # basic variant too. Switch back only if focused filtering is worth
+                                     # the latency.
     max_searches_per_company: 3      # bound the server-tool loop so it completes quickly (avoids long
                                      # pause_turn loops; 3 ≈ publications + founders + one follow-up)
     cost_per_1k_searches_usd: 10     # Anthropic web-search billing (separate from tokens)
     est_searches_per_company: 3      # for the pre-dispatch cost estimate
     allowed_domains: []              # optional whitelist to focus searches (e.g. nature.com,
                                      # pubmed.ncbi.nlm.nih.gov, sec.gov); [] = unrestricted (D13)
+  max_output_tokens: 12500           # D16: rubric/finalize output cap. WAS 1500 — too small: every call
+                                     # hit stop=max_tokens and the rubric JSON was TRUNCATED (invalid →
+                                     # dropped → scored=0). 12500 matches 3_Biopharmcatalyst_parser
+                                     # (module_7.yaml) — generous headroom so axes+memo always complete.
   concurrency: 6                     # parallel real-time calls (triage + finalize) via AsyncAnthropic
                                      # (D13) — bounded fan-out, far faster than a sequential loop
   request_timeout_s: 600             # per-request SDK timeout. NOTE (D15b): a real rubric call

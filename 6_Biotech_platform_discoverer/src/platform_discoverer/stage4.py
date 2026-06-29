@@ -194,11 +194,13 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     # pedigree itself (replacing OpenAlex). Triage stays search-free. allowed_domains focuses it (D13).
     wr = s4.get("web_research", {}) or {}
     conc = int(s4.get("concurrency", 6))
+    out_tok = int(s4.get("max_output_tokens", 4000))   # D16: was hardcoded 1500 -> truncated rubric JSON
     web_tool = None
     if wr.get("enabled", True):
         from .clients.anthropic_client import web_search_tool
         web_tool = [web_search_tool(int(wr.get("max_searches_per_company", 5)),
-                                    allowed_domains=wr.get("allowed_domains") or None)]
+                                    allowed_domains=wr.get("allowed_domains") or None,
+                                    tool_type=wr.get("tool_type", "web_search_20250305"))]
 
     if client is None:
         from .clients.anthropic_client import AnthropicClient
@@ -247,13 +249,13 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
             log.info("stage4: persisted batch_id %s to run_meta(%s) — resume with --resume %s",
                      bid, rid, rid)
         rubric_out = client.score_batch(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
-                                        survivors, 1500, validate=rubric.validate_rubric,
+                                        survivors, out_tok, validate=rubric.validate_rubric,
                                         tools=web_tool, on_submit=_save_batch_id)
         for cid, rj in rubric_out.items():
             _persist_rubric(cid, rj)
     else:
         client.score_realtime_many(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
-                                   survivors, 1500, validate=rubric.validate_rubric, tools=web_tool,
+                                   survivors, out_tok, validate=rubric.validate_rubric, tools=web_tool,
                                    concurrency=conc, on_result=_persist_rubric)
 
     # Tier 3 — Opus finalize on the contested band (adversarial), parallel (D13), persisted per-item.
@@ -267,7 +269,7 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
 
     contested = {cid: survivors[cid] for cid, s in scored.items() if lo <= s["composite"] <= hi}
     client.score_realtime_many(s4["finalize_model"], rubric_system + rubric.ADVERSARIAL_SUFFIX,
-                               rubric.RUBRIC_SCHEMA, contested, 1500, validate=rubric.validate_rubric,
+                               rubric.RUBRIC_SCHEMA, contested, out_tok, validate=rubric.validate_rubric,
                                tools=web_tool, concurrency=conc, on_result=_persist_final)
     finalized = final_count["n"]
 

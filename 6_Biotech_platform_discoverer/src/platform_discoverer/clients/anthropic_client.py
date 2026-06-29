@@ -41,12 +41,13 @@ class BudgetExceeded(RuntimeError):
     """Raised when a call would push spend past ``max_usd`` (spec §14 hard stop)."""
 
 
-def web_search_tool(max_uses: int = 5, allowed_domains: Optional[list] = None) -> dict:
-    """The web_search server tool (dynamic-filtering variant; Sonnet 4.6 / Opus 4.8). Bounding
-    ``max_uses`` keeps the server-side tool loop short so it finishes within one call (no pause_turn).
-    ``allowed_domains`` (optional) restricts searches to a curated whitelist (focus + cost), mirroring
-    3_Biopharmcatalyst_parser's dispatch."""
-    tool: dict = {"type": "web_search_20260209", "name": "web_search", "max_uses": int(max_uses)}
+def web_search_tool(max_uses: int = 5, allowed_domains: Optional[list] = None,
+                    tool_type: str = "web_search_20250305") -> dict:
+    """The web_search server tool. Default is the BASIC ``web_search_20250305`` variant — measured
+    ~45-70s/call and it HONORS ``max_uses``. The dynamic-filtering ``web_search_20260209`` runs a
+    code-execution sandbox per search, ignores max_uses (ran ~20 searches), and timed out >600s — so
+    it is NOT the default here (D16). ``allowed_domains`` restricts searches to a curated whitelist."""
+    tool: dict = {"type": tool_type, "name": "web_search", "max_uses": int(max_uses)}
     if allowed_domains:
         tool["allowed_domains"] = list(allowed_domains)
     return tool

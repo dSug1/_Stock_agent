@@ -5,6 +5,46 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D16 (2026-06-29) — Speed up Stage-4 Claude calls: basic web_search variant + larger output cap (BUILT)
+
+**Problem.** Stage-4 scoring was far slower than `3_Biopharmcatalyst_parser`'s dispatch (user: "the
+return time for 3_Biopharmcatalyst_parser was much faster"). Real-time runs appeared to hang and a
+batch never produced results.
+
+**Diagnosis (measured, not guessed).** Timed one real Acrivon rubric call (Sonnet 4.6, identical
+prompt/schema) under each permutation, `max_retries=0`:
+
+| web_search | output | time | searches |
+|---|---|---|---|
+| `web_search_20260209` (dynamic-filtering) + structured | — | **>600s TIMEOUT** | — |
+| `web_search_20260209` + free-form JSON | 277s | **20** (ignored max_uses=3) |
+| `web_search_20250305` (basic) + structured | 71s | 3 |
+| `web_search_20250305` (basic) + free-form JSON | 44s | 3 |
+
+Two root causes: (1) the dynamic-filtering `web_search_20260209` runs a code-execution sandbox per
+search, **ignores `max_uses`** (ran ~20 searches), and is **10x+ slower** (timed out) — whereas
+`3_Biopharmcatalyst_parser` uses the basic `web_search_20250305` which honors `max_uses`; (2) every call
+hit `stop_reason=max_tokens` at `max_tokens=1500` — the rubric JSON was **truncated → invalid → dropped
+(scored=0)**.
+
+**Built.**
+- `web_search_tool()` gains a `tool_type` param, **default now `web_search_20250305`** (basic). Config
+  knob `stage4_scoring.web_research.tool_type`.
+- `stage4_scoring.max_output_tokens: 12500` (matches `3_Biopharmcatalyst_parser/module_7.yaml`),
+  replacing the hardcoded `1500` at all three Stage-4 call sites (triage stays 256).
+- Updated `test_web_search_tool_shape`; 169 tests pass.
+
+**Validation.** Re-dispatched 8 tickers real-time: `scored:4, web_searches:12` (exactly 3/company —
+`max_uses` honored), no timeout, $0.73. ACRV 0.968/0.904 with memos citing real web findings
+(~120k-phosphosite dataset); GRAL 0.904/0.760 citing CCGA/STRIVE; ACET 0.486. Full untruncated memos.
+
+**Lesson captured in project memory** (`feedback_claude_web_search_variant_and_output_cap`): prefer the
+basic web_search variant for bounded fast calls; size `max_output_tokens` to the full response or
+structured output silently truncates; structured output is ~40% slower than a free-form JSON fence;
+diagnose API speed empirically on the real call.
+
+---
+
 ## D15 (2026-06-29) — max_retries=1 + per-item async persistence (BUILT)
 
 Two tightenings on top of D13/D14: (1) `AnthropicClient(max_retries=1)` (SDK default 2) on both the
