@@ -53,18 +53,23 @@ def web_search_tool(max_uses: int = 5, allowed_domains: Optional[list] = None) -
 
 
 class AnthropicClient:
-    def __init__(self, *, max_usd: float = 50.0, web_search_cost_per_search: float = 0.01):
+    def __init__(self, *, max_usd: float = 50.0, web_search_cost_per_search: float = 0.01,
+                 request_timeout_s: float = 180.0):
         self.max_usd = float(max_usd)
         self.spent_usd = 0.0
         self.calls = 0
         self.web_searches = 0
         self.web_search_cost_per_search = float(web_search_cost_per_search)
+        # Per-request timeout. The SDK default is 10 MINUTES + 2 retries, so a single stalled call
+        # balloons to ~30 min and a few of them look like a multi-hour hang (the real cause of the
+        # earlier wedged runs — a single web_search call completes in ~20s). Bound it.
+        self.request_timeout_s = float(request_timeout_s)
         self._sdk = None
 
     def _client(self):
         if self._sdk is None:
             import anthropic  # lazy — only needed on dispatch
-            self._sdk = anthropic.Anthropic()
+            self._sdk = anthropic.Anthropic(timeout=self.request_timeout_s)
         return self._sdk
 
     # -- cost --
@@ -187,7 +192,7 @@ class AnthropicClient:
                 return cid, None
 
         async def _run():
-            aclient = AsyncAnthropic()
+            aclient = AsyncAnthropic(timeout=self.request_timeout_s)
             sem = asyncio.Semaphore(max(1, int(concurrency)))
             pairs = await asyncio.gather(*[_one(aclient, sem, cid, b) for cid, b in items.items()])
             return {cid: r for cid, r in pairs if r is not None}

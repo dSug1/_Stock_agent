@@ -204,7 +204,8 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
         from .clients.anthropic_client import AnthropicClient
         client = AnthropicClient(
             max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50),
-            web_search_cost_per_search=float(wr.get("cost_per_1k_searches_usd", 10)) / 1000.0)
+            web_search_cost_per_search=float(wr.get("cost_per_1k_searches_usd", 10)) / 1000.0,
+            request_timeout_s=float(s4.get("request_timeout_s", 180)))
 
     # run_id + scoring-config hash fixed up front so every incrementally-persisted score is stamped
     # consistently (§12 config-change re-runs) and shares one run_id.

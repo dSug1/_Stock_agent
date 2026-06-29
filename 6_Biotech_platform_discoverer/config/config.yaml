@@ -97,6 +97,8 @@ stage4_scoring:
                                      # pubmed.ncbi.nlm.nih.gov, sec.gov); [] = unrestricted (D13)
   concurrency: 6                     # parallel real-time calls (triage + finalize) via AsyncAnthropic
                                      # (D13) — bounded fan-out, far faster than a sequential loop
+  request_timeout_s: 180             # per-request SDK timeout (D14). The SDK default is 10 MIN + 2
+                                     # retries, so a stalled call ballooned a run to ~1hr; bound it.
   use_batch_api: true                # async batch (50% cost) for the Sonnet rubric pass
   finalize_if_composite_between: [0.55, 0.75]  # contested band -> Opus adversarial re-score
   score_live_excluded: true          # score ALL live companies incl stage1_excluded (recall-safe);

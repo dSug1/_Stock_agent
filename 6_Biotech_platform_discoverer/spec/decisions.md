@@ -5,6 +5,18 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D14 (2026-06-29) — Bound the per-request SDK timeout (the real cause of the "hangs") (BUILT)
+
+Root-caused the two ~1hr wedged Stage-4 runs: NOT web search. A direct probe showed a single
+`web_search_20260209` Sonnet call completes in **~20s** (SDK 0.97.0, 2 searches + dynamic-filtering
+code execution). The real cause: `AnthropicClient` built the SDK with **no timeout → the 10-minute
+default + 2 retries**, so any transient network stall on one call balloons to ~30 min, and a couple of
+those across a run look like a multi-hour hang (the batch run was stuck in `batches.create()` — no
+batch ever appeared in the account's batch list). Fix: `AnthropicClient(request_timeout_s=180)` passed
+to both `Anthropic(timeout=…)` and `AsyncAnthropic(timeout=…)`; config `stage4_scoring.request_timeout_s`.
+Now a stalled call fails fast and (with D13 async + crash-safe persist) the run stays bounded and
+durable. Lesson added to memory `feedback_persist_during_long_api_batches`.
+
 ## D13 (2026-06-29) — Claude-API optimizations reapplied from 3_Biopharmcatalyst_parser (BUILT)
 
 After a real-time web-search run hung ~1hr (sequential per-company web_search) and a stop lost all
