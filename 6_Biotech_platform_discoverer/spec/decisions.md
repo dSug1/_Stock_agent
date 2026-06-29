@@ -5,6 +5,34 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D8 (2026-06-29) — Data-coverage fairness: a no-OpenAlex company must not be penalized (BUILT)
+
+Analyst concern: are biotechs with no OpenAlex record penalized? They were, at the margin — two
+vectors: (a) `compute_confidence` drops with fewer evidence sources (mechanical, by design); (b) the
+rubric could read an OpenAlex *coverage gap* as genuine absence of science and dock the A axis (rules
+5/6). Since OpenAlex indexes <5% of small/early biotech as institutions (live: 29/589 openalex,
+12/589 pedigree, vs 439/589 ctgov), this unfairly hit exactly the names the screen targets. Three
+fixes (BUILT, code-only — take effect on re-score / re-harvest):
+
+1. **`build_bundle` `data_coverage_note`** — when `publications`/`pedigree`/`patent_estate` are
+   absent, the bundle now says so explicitly: "ABSENT DATA, not negative evidence … do not lower any
+   axis." (verified live on ACRV, whose only evidence is ctgov.)
+2. **Rubric rule (10) DATA-COVERAGE FAIRNESS** (takes precedence over rule 5 for missing
+   OpenAlex/patent signals) + rule 6 scoped so "thin author list" only bites when a pedigree field IS
+   present, not when it's entirely absent.
+3. **Fallback pedigree** (`openalex.fetch_top_authors` → `parse_authors_from_works`) — when a company
+   has no OpenAlex *institution* record, tally authors from works matching its raw affiliation string
+   (`raw_affiliation_strings.search`), so names still feed prestige matching (h-index unavailable).
+
+**KEY INFRA FINDING — OpenAlex "429" is a depleting $-BUDGET, not just req/s.** The 429 body reads
+"this request costs $0.001 but you only have $0.0007 remaining"; the singular `raw_affiliation_string`
+(no s) returns 400 (invalid field) while the correct `raw_affiliation_strings.search` returns 429 —
+proving the filter is valid and the limiter is a credit budget that refills over time. This reframes
+the whole 429 story: the polite-pool `mailto` raises the budget, but bulk harvests + bursts exhaust it
+(hence sparse universe coverage is partly budget, partly genuine institution-coverage gaps). Mitigation
+is fail-open everywhere (429 → None → status quo); a future improvement is budget-aware pacing /
+spreading the harvest. 155 tests. NEXT: re-score the seeds to confirm no-OpenAlex names aren't docked.
+
 ## D7 (2026-06-29) — Keep the $3B ceiling; positives above it are "graduated", not failures (DECIDED)
 
 The D6 seed-eval flagged TNGX ($5.1B) / IDYA ($3.5B) — known positives — deleted at the band ceiling.

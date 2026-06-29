@@ -88,6 +88,20 @@ def test_openalex_parse_authors():
     assert a[0]["name"] == "Carolyn Bertozzi" and a[0]["h_index"] == 150
 
 
+def test_openalex_parse_authors_from_works_fallback():
+    # the no-institution fallback: tally distinct authors across works (by affiliation string)
+    payload = {"results": [
+        {"authorships": [{"author": {"display_name": "Carolyn Bertozzi"}},
+                         {"author": {"display_name": "Jane Doe"}}]},
+        {"authorships": [{"author": {"display_name": "Carolyn Bertozzi"}},
+                         {"author": {"display_name": ""}}]}]}
+    a = openalex.parse_authors_from_works(payload)
+    assert a[0]["name"] == "Carolyn Bertozzi" and a[0]["works_count"] == 2   # most frequent first
+    assert a[0]["via"] == "works_affiliation"
+    assert all(x["name"] for x in a)                                         # blank author dropped
+    assert {x["name"] for x in a} == {"Carolyn Bertozzi", "Jane Doe"}
+
+
 def test_prestige_match_exact_only():
     from platform_discoverer import prestige
     idx = prestige.build_index({"awardees": [

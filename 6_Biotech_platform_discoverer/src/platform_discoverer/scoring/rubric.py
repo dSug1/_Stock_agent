@@ -67,6 +67,20 @@ def build_bundle(company, evidence: dict[str, Any]) -> dict:
                           | set(scan_designations(company.business_description)))
     if designations:
         bundle["fda_designations"] = designations
+
+    # DATA-COVERAGE FAIRNESS (D8): name the signals that simply weren't available so the model treats
+    # them as ABSENT DATA, not negative evidence. OpenAlex indexes <5% of small/early-stage biotech as
+    # institutions, so a missing publications/pedigree signal is overwhelmingly a coverage gap — it
+    # must NOT drag the proprietary-data (A) axis. See rubric rule (10).
+    gaps = [label for present, label in
+            ((oa, "publications"), (ped, "pedigree"), (pv, "patent_estate")) if not present]
+    if gaps:
+        bundle["data_coverage_note"] = (
+            "NOT AVAILABLE from the data sources (ABSENT DATA, not negative evidence — small/early "
+            "biotech routinely have no OpenAlex institution record or indexed patents): "
+            + ", ".join(gaps) + ". Do not lower any axis for these; score from the evidence that IS "
+            "present (description, mechanism tags, clinical, FDA designations, and any present signals)."
+        )
     return bundle
 
 
@@ -96,7 +110,8 @@ Rules:
     authors, and major recognitions (Nobel / NAS / Lasker / Breakthrough Prize / foundation-model-in-
     biology authors) materially raise confidence that the proprietary-data engine (A) is real and
     deep. Weigh the `pedigree` field accordingly and name any prestige recognition in the memo. A
-    near-empty author list / no recognized names is itself informative (lower A confidence).
+    thin author list WHEN a `pedigree` field IS present is mildly informative (modest A-confidence
+    haircut); but pedigree ENTIRELY ABSENT is a coverage gap, NOT a signal — see rule (10).
 (7) AWARDS & FDA BREAKTHROUGHS corroborate translation/validation: FDA designations (Breakthrough
     Therapy/Device, RMAT, Fast Track, Orphan, PRIME) and external recognitions lift E (and sometimes
     C). Treat them as CORROBORATION, not proof — they don't substitute for the underlying proprietary
@@ -109,6 +124,15 @@ Rules:
     exists). A low E (no clinical assets yet) for a clearly early company should lower the score only
     modestly, not dominate it; the absence of late-stage trials is NOT evidence against a real data
     engine. Reserve low A/C scores for companies that lack the data/validation, not for youth.
+(10) DATA-COVERAGE FAIRNESS (takes precedence over rule 5 for missing OpenAlex/patent signals):
+    OpenAlex indexes fewer than ~5% of small/early-stage biotech as institutions, so an absent
+    `publications`/`pedigree` (or `patent_estate`) is OVERWHELMINGLY a coverage gap, NOT evidence
+    against the platform. When `data_coverage_note` lists a missing signal, DO NOT lower A (or any
+    axis) for that absence — score from the evidence that IS present (description, mechanism tags,
+    clinical, FDA). Rule 5's "score low if evidence is absent" means the COMPANY'S OWN evidence is
+    genuinely weak, never that a single source (OpenAlex/patents) failed to index it. A small company
+    with a credible described data engine + in-scope mechanism should NOT be docked merely for having
+    no OpenAlex footprint.
 
 Calibration anchor (Acrivon Therapeutics — desired behaviour): A=5 (proprietary ~120k-phosphosite
 drug-response dataset is the moat), B=3 capped-not-maxed (ESM-2 ensemble is disclosed/replicable —

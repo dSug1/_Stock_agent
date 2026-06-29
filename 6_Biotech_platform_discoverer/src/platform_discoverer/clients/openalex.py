@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 ENDPOINT = "https://api.openalex.org/institutions"
 AUTHORS_ENDPOINT = "https://api.openalex.org/authors"
+WORKS_ENDPOINT = "https://api.openalex.org/works"
 
 
 def _name_matches(target: str, found: str) -> bool:
@@ -94,15 +95,51 @@ def _institution_id(company_name: str, limiter, mailto) -> Optional[str]:
     return None
 
 
+def parse_authors_from_works(payload: dict, *, per_page: int = 10) -> list[dict]:
+    """Aggregate distinct authors across a works payload → [{name, works_count}] (no h-index).
+
+    The fallback pedigree path for companies with NO OpenAlex institution record (≈95% of small-cap
+    biotech): we can't filter authors by institution id, so we pull the company's works by raw
+    affiliation string and tally their authors. Names still feed prestige-awardee matching (the
+    high-precision signal); h-index is simply unavailable here.
+    """
+    tally: dict[str, dict] = {}
+    for w in payload.get("results") or []:
+        for a in w.get("authorships") or []:
+            name = ((a.get("author") or {}).get("display_name") or "").strip()
+            if not name:
+                continue
+            t = tally.setdefault(name, {"name": name, "works_count": 0, "via": "works_affiliation"})
+            t["works_count"] += 1
+    return sorted(tally.values(), key=lambda x: -x["works_count"])[:per_page]
+
+
 def fetch_top_authors(company_name: str, *, limiter: Optional[_net.RateLimiter] = None,
                       mailto: Optional[str] = None, per_page: int = 10) -> Optional[list[dict]]:
-    """The company's highest-h-index OpenAlex authors (its scientific founders/SAB proxy). Fail-open."""
+    """The company's highest-h-index OpenAlex authors (its scientific founders/SAB proxy). Fail-open.
+
+    Primary path uses the company's OpenAlex *institution* record. When none exists (the dominant case
+    for small/early-stage biotech), falls back to authors aggregated from works matching the company's
+    raw affiliation string — so a missing institution record is a coverage gap, not a dead end."""
     iid = _institution_id(company_name, limiter, mailto)
-    if not iid:
-        return None
-    params = {"filter": f"affiliations.institution.id:{iid}",
-              "sort": "summary_stats.h_index:desc", "per_page": str(per_page)}
+    if iid:
+        params = {"filter": f"affiliations.institution.id:{iid}",
+                  "sort": "summary_stats.h_index:desc", "per_page": str(per_page)}
+        if mailto:
+            params["mailto"] = mailto
+        payload = _net.safe_json(f"{AUTHORS_ENDPOINT}?{urllib.parse.urlencode(params)}",
+                                 limiter=limiter)
+        authors = parse_authors(payload) if payload else None
+        if authors:
+            return authors
+    # fallback — no institution record (or it yielded no authors): tally authors from works whose
+    # raw affiliation string mentions the company. Fail-open: an invalid filter / no hits → None.
+    params = {"filter": f"raw_affiliation_strings.search:{_net.clean_name(company_name)}",
+              "sort": "cited_by_count:desc", "per_page": "25"}
     if mailto:
         params["mailto"] = mailto
-    payload = _net.safe_json(f"{AUTHORS_ENDPOINT}?{urllib.parse.urlencode(params)}", limiter=limiter)
-    return parse_authors(payload) if payload else None
+    payload = _net.safe_json(f"{WORKS_ENDPOINT}?{urllib.parse.urlencode(params)}", limiter=limiter)
+    if not payload:
+        return None
+    authors = parse_authors_from_works(payload, per_page=per_page)
+    return authors or None

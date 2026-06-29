@@ -53,6 +53,32 @@ def test_rubric_system_prompt_includes_vocab_and_pedigree_guidance():
     assert "PEDIGREE" in s and "FDA" in s            # weighs founder pedigree + FDA breakthroughs
 
 
+def test_rubric_system_prompt_has_data_coverage_fairness_rule():
+    s = rubric.build_rubric_system(TAXONOMY)
+    assert "DATA-COVERAGE FAIRNESS" in s and "coverage gap" in s
+    assert "data_coverage_note" in s                 # rule (10) references the bundle field
+
+
+def test_build_bundle_data_coverage_note_when_signals_absent():
+    c = Company(company_id="c1", name="Tiny Bio", primary_ticker="TINY",
+                business_description="proprietary screening platform")
+    # only ctgov present → publications/pedigree/patent_estate are coverage gaps
+    b = rubric.build_bundle(c, {"ctgov": {"trial_count": 1}})
+    note = b.get("data_coverage_note", "")
+    assert "publications" in note and "pedigree" in note and "patent_estate" in note
+    assert "ABSENT DATA" in note
+
+
+def test_build_bundle_no_coverage_note_when_all_present():
+    c = Company(company_id="c1", name="Full Bio", primary_ticker="FULL")
+    b = rubric.build_bundle(c, {
+        "openalex": {"works_count": 10},
+        "pedigree": {"top_authors": [{"name": "X"}]},
+        "patents": {"patent_count": 3},
+        "ctgov": {"trial_count": 2}})
+    assert "data_coverage_note" not in b
+
+
 def test_build_bundle_includes_pedigree_patents_and_fda():
     c = Company(company_id="c1", name="Acrivon Therapeutics", primary_ticker="ACRV",
                 business_description="granted FDA Breakthrough Device designation")
