@@ -5,6 +5,23 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D26 (2026-06-29) — JP/KR market caps + IPO/founding dates web-checked → in-band JP/KR tiered (DONE)
+
+Follow-up to D25 (analogue of D22/D23 for EU). Web-checked current (June 2026) market caps + IPO/
+founding dates for all 22 enumerated JP/KR names and wrote them to the store: **19 caps + dates set**,
+**2 marked not-live** (Hisamitsu 4530 — MBO/privatization 2026; Sawai 4555 — reorganized into Sawai
+Group Holdings 4887). After Stage-0b: 7 mega-caps deleted out-of-band (Takeda $47B, Astellas, Shionogi,
+Eisai, Ono, Sumitomo, Asahi Kasei), Rohto ($3.35B) → near-band review. Dates use the current entity's
+actual listing where known (PeptiDream 2013, AnGes 2002, Aska 2021, Chong Kun Dang 2013) else a
+founding-year proxy (the established OTC/generic names — Kyorin 1923, Morishita 1893, Wakamoto 1929,
+Il-Yang 1946, Kwang Dong 1963, Dae Hwa 1984, Fuji 1959). **12 in-band JP/KR now tiered:** PeptiDream /
+Chong Kun Dang / Aska **T2**, Kyorin **T3**, and 8 small-caps (AnGes, Fuji, Taiko, Wakamoto, Morishita,
+Kwang Dong, Il-Yang, Dae Hwa) **T4**. Persisted to `data/jpkr_market_caps_web_2026-06-29.csv`. Same
+caveat as EU: one-off manual enrichment; the licensed provider (or a native DART/EDINET feed) is the
+durable path. PeptiDream (peptide-discovery platform, T2) is the most Acrivon-pattern-relevant JP name.
+
+---
+
 ## D25 (2026-06-29) — Wire Japan + South Korea enumeration (BUILT)
 
 ROADMAP item 12. Added `JP→Q17` / `KR→Q884` to `wikidata.COUNTRY_QID` and `JP`,`KR` to
