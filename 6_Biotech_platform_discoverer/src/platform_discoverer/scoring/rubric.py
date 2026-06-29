@@ -27,8 +27,10 @@ def build_bundle(company, evidence: dict[str, Any]) -> dict:
     identity + cap + description + Stage-1 tags + harvested publication/clinical/patent summaries.
     """
     from ..clients.clinicaltrials import scan_designations
+    from ..clients.edgar_fulltext import BUNDLE_EXCERPT_CHARS
     ct = evidence.get("ctgov") or {}
     pv = evidence.get("patents") or {}
+    ed = evidence.get("edgar") or {}
     bundle: dict[str, Any] = {
         "company": company.name,
         "ticker": company.primary_ticker,
@@ -40,6 +42,13 @@ def build_bundle(company, evidence: dict[str, Any]) -> dict:
         # NOTE (D9): publications + scientific/founder pedigree are NOT pre-harvested — the scorer
         # researches them live via web_search. Do not expect a publications/pedigree field here.
     }
+    if ed.get("item1_business"):
+        # 10-K Item 1 "Business" excerpt (B5/D17) — the company's OWN platform/technology narrative,
+        # far richer than the yfinance blurb. The richest free signal for the A/B data-engine judgment.
+        bundle["sec_10k_business"] = {
+            "form": ed.get("form"), "filing_date": ed.get("filing_date"),
+            "excerpt": ed["item1_business"][:BUNDLE_EXCERPT_CHARS],
+        }
     if pv:
         bundle["patent_estate"] = {
             "patent_count": pv.get("patent_count"),

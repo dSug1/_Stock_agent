@@ -26,7 +26,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from .clients import _net, clinicaltrials, patentsview
+from .clients import _net, clinicaltrials, edgar_fulltext, patentsview, sec_submissions
 from .models import Evidence
 from .store import Store, now_iso
 
@@ -64,6 +64,11 @@ def build_harvesters(config: dict) -> dict[str, Harvester]:
         harvesters["ctgov"] = lambda c: clinicaltrials.fetch(c.name, limiter=ct_lim)
     if "patents" in enabled:
         harvesters["patents"] = lambda c: patentsview.fetch(c.name, limiter=pv_lim, api_key=pv_key)
+    if "edgar" in enabled:
+        # 10-K Item 1 "Business" (B5/D17). One shared rate limiter + the cik↔ticker map fetched once.
+        edgar_lim = _net.RateLimiter(float(s2.get("edgar_rate_per_sec", 6)))
+        cik_map = sec_submissions.build_ticker_cik_map(limiter=edgar_lim)
+        harvesters["edgar"] = lambda c: edgar_fulltext.fetch(c, ticker_cik_map=cik_map, limiter=edgar_lim)
     return harvesters
 
 

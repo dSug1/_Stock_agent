@@ -57,7 +57,10 @@ stage1_filters:
   deletion_allowed_reasons: ["mktcap_out_of_band", "not_live"]   # ENFORCED in DAO
 
 stage2:                              # evidence harvesting (free, high-signal core)
-  sources: ["ctgov", "patents"]      # OpenAlex DISMISSED (D9): institution coverage <5% of small biotech
+  sources: ["ctgov", "patents", "edgar"]   # edgar (D17/B5): 10-K Item 1 "Business" narrative — the
+                                     # richest free description signal for the A/B data-engine judgment
+                                     # (US filers only; fail-open; non-US tickers simply get no edgar row).
+                                     # OpenAlex DISMISSED (D9): institution coverage <5% of small biotech
                                      # + depleting $-budget 429s. Publications + scientific pedigree are
                                      # now researched by the Stage-4 Claude call via web search (D9).
                                      # patents inert w/o PATENTSVIEW_API_KEY.
@@ -65,6 +68,7 @@ stage2:                              # evidence harvesting (free, high-signal co
   prestige_labs: "config/prestige_labs.yaml"   # injected into the Stage-4 prompt for pedigree matching
   ctgov_rate_per_sec: 4
   patents_rate_per_sec: 4
+  edgar_rate_per_sec: 6              # SEC fair-access (<10 req/s); shared by the cik-map + 10-K fetches
 
 stage3_embedding:
   prefer_local: true                 # reuse env capability if suitable
