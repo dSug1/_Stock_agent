@@ -1,0 +1,13 @@
+ticker,label,name,note
+ACRV,positive,Acrivon Therapeutics,canonical Acrivon-pattern anchor (phosphoproteomics data engine + InViKA + OncoSignature CDx)
+TNGX,positive,Tango Therapeutics,synthetic-lethality platform; mechanism-pure positive
+IDYA,positive,IDEAYA Biosciences,synthetic-lethality / precision oncology positive
+BOLD,positive,Boundless Bio,ecDNA oncology platform positive
+RXRX,borderline,Recursion Pharmaceuticals,AI-discovery; large phenomics data but validation/CDx thin
+SDGR,borderline,Schrodinger,physics-sim platform; architecture moat not proprietary-data moat
+RLAY,borderline,Relay Therapeutics,motion-based drug discovery; borderline data-vs-architecture
+CRL,negative,Charles River Laboratories,pure CRO — services not a platform
+MEDP,negative,Medpace Holdings,pure CRO — services not a platform
+ICLR,negative,ICON plc,pure CRO — services not a platform
+BRKR,negative,Bruker,tools/instruments vendor — not a drug platform
+A,negative,Agilent Technologies,tools/instruments vendor — not a drug platform

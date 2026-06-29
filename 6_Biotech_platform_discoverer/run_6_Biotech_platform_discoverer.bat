@@ -61,7 +61,17 @@ if errorlevel 1 (
     endlocal & exit /b 1
 )
 
-REM --- Render the HTML funnel report and open it -------------
+REM --- Seed-eval validation harness (spec §13) --------------
+REM FREE + read-only: scores the labeled seed set through the funnel and reports precision/recall +
+REM per-stage survival to Outputs\seed_eval.md. Flags loudly if a known positive was deleted at the
+REM hard cut (a spec-level failure). The screen is not trusted until this passes.
+echo [6] Seed-eval validation (precision/recall + survival)...
+python scripts\6_eval.py
+if errorlevel 1 (
+    echo [WARN] seed-eval failed (non-fatal) — continuing.
+)
+
+REM --- Render the HTML report and open it --------------------
 echo [6] Rendering HTML report...
 python scripts\6_render.py --open-browser
 if errorlevel 1 (
@@ -69,5 +79,5 @@ if errorlevel 1 (
     endlocal & exit /b 1
 )
 
-echo [6] done. Report: Outputs\screener_report.html
+echo [6] done. Report: Outputs\screener_report.html  Seed-eval: Outputs\seed_eval.md
 endlocal

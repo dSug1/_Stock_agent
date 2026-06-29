@@ -71,6 +71,18 @@ def test_epoch_to_iso_date():
     assert market._epoch_to_iso_date(0) is None
 
 
+def test_first_trade_date_field_fallbacks():
+    # current yfinance exposes firstTradeDateMilliseconds (ms), not firstTradeDateEpochUtc (s)
+    assert market._first_trade_date({"firstTradeDateMilliseconds": 1668522600000}) == "2022-11-15"
+    assert market._first_trade_date({"firstTradeDateEpochUtc": 1620604800}) == "2021-05-10"
+    assert market._first_trade_date({"ipoExpectedDate": "2022-11-15"}) == "2022-11-15"
+    # epoch fields win over the expected-date string
+    assert market._first_trade_date(
+        {"firstTradeDateMilliseconds": 1668522600000, "ipoExpectedDate": "1999-01-01"}) == "2022-11-15"
+    assert market._first_trade_date({}) is None
+    assert market._first_trade_date({"ipoExpectedDate": "not-a-date"}) is None
+
+
 # ── lifecycle weight ──────────────────────────────────────────────────────────
 
 def test_lifecycle_disabled_is_always_one():

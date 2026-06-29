@@ -5,6 +5,61 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D7 (2026-06-29) — Keep the $3B ceiling; positives above it are "graduated", not failures (DECIDED)
+
+The D6 seed-eval flagged TNGX ($5.1B) / IDYA ($3.5B) — known positives — deleted at the band ceiling.
+**Analyst decision: KEEP the `$50M–3B` band** (spec §0.1). The screen deliberately targets the "early
+but real" small-cap window; a positive that has re-rated above $3B has *graduated* and is out of scope
+by design, not a screen failure.
+
+Encoded in the harness so the signal stays honest: `seed_eval._disposition` classifies a positive's
+Stage-0 deletion — **`graduated`** (cap > ceiling, accepted) vs **`below_floor`** (cap < floor) /
+**`not_live`** (genuine losses). `spec_failure` now fires ONLY on genuine losses; graduates are
+reported under `graduated_positives` with an ℹ️ note. Live: TNGX/IDYA → graduated, `spec_failure=False`,
+`positives_lost_pre_scoring=0`. The flag is preserved for what it's meant to catch — a positive lost
+*below* the floor or for liveness — so a real Stage-0 bug would still scream. 150 tests pass.
+
+## D6 (2026-06-29) — Seed-eval validation harness §13 (BUILT)
+
+The trust gate. `seed_eval.py` + `scripts/6_eval.py` score the labeled seed set
+(`config/seed_labels.csv`) through the funnel and report **precision / recall + per-stage survival** →
+`Outputs/seed_eval.md`, metrics persisted to `run_meta.metrics_json`. Read-only and FREE (no API): it
+evaluates whatever scores already exist; it does NOT dispatch scoring.
+
+**Labels** (`config/seed_labels.csv`, analyst-editable): positives = ACRV/TNGX/IDYA/BOLD; borderline
+AI-discovery = RXRX/SDGR/RLAY; negatives = CRL/MEDP/ICLR (CROs) + BRKR/A (tools). Three labels, not
+two — **borderline** is reported separately and never counted in precision/recall (the store
+`seed_labels` table still only accepts positive|negative; borderline is CSV-only).
+
+**Decisions:**
+- **Per-seed funnel position is the headline, not just P/R.** For each seed we resolve: deleted at
+  Stage 0 (with reason, recovered from the audit log since the row is gone) / absent (never entered) /
+  in-store + tier + tagged + has-evidence + scored + composite. The spec's load-bearing check is a
+  **positive DELETED at the hard cut** → `spec_failure=True` + a loud banner; that is a Stage-0 bug to
+  fix before trusting the run (a positive can only be lost invisibly at Stage 0).
+- **Unscored ≠ lost.** A positive that is in-band and retained but simply not scored yet is reported
+  `unscored`, NOT a failure (scoring costs money / runs on selected tiers). P/R are computed only over
+  pos/neg seeds that HAVE a composite, at `seed_eval.decision_threshold` (0.6). Both a strict
+  confusion matrix (TP/FP/FN/TN) and a survival table per group are emitted.
+- **`--persist-labels`** optionally writes pos/neg into the store `seed_labels` table; default off
+  (eval stays read-only).
+
+Wired into the run `.bat` after Stage 5 (free). 148 tests pass (was 137).
+
+**LIVE FIRST RUN (2026-06-29) — the harness immediately earned its keep.** It flagged a SPEC-LEVEL
+FAILURE: positives **TNGX ($5.1B)** and **IDYA ($3.5B)** (+ borderline **RLAY $4.0B**) were deleted at
+Stage 0b as `mktcap_out_of_band` — they've re-rated ABOVE the `$50M–3B` ceiling. Precision/recall came
+out 1.0/1.0 but over only 1 scored positive (ACRV) + 0 scored negatives (all 5 negatives correctly
+deleted out-of-band) — not yet statistically meaningful. **Open analyst decision (handoff PENDING 0b):**
+raise `market_cap.max_usd` so graduated positives stay in, vs. accept the band targets the early window
+and these are out-of-scope graduates. The band is analyst-authored (§0.1) — left unchanged pending that
+call. This is exactly the calibration loop §13 exists for.
+
+**yfinance field fix (part of this batch):** `ipo_date` capture (D4) read the obsolete
+`firstTradeDateEpochUtc`; current yfinance uses `firstTradeDateMilliseconds` + `ipoExpectedDate`.
+`market._first_trade_date` now tries all three — populated 3/589 before the fix, 589/589 after, which
+is what activated the tiers.
+
 ## D5 (2026-06-29) — Market-cap × age TIERING upstream of Claude + interactive tiered report (BUILT)
 
 Analyst request: **(1)** move the IPO-date signal UPSTREAM of the Claude call (use it as a filter, not

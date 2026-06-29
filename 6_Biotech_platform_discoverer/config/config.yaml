@@ -129,6 +129,12 @@ stage5:
     floor: 0.5                       # minimum multiplier for old companies
     use_appreciation: false          # phase 2: also discount names already heavily re-rated since IPO
 
+# Seed-eval validation harness (spec §13) — score the labeled seed set through the funnel and report
+# precision/recall + per-stage survival. The screen is NOT trusted until this passes. Read-only.
+seed_eval:
+  labels_path: "config/seed_labels.csv"   # ticker,label(positive|negative|borderline),name,note
+  decision_threshold: 0.6                  # composite >= this ⇒ predicted positive (Acrivon-pattern)
+
 cost_controls:
   max_usd_per_run: 50                # hard stop; log and halt if exceeded
   anthropic_max_concurrency: 4

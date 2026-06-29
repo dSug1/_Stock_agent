@@ -19,13 +19,35 @@ log = logging.getLogger(__name__)
 
 
 def _epoch_to_iso_date(epoch: Optional[float]) -> Optional[str]:
-    """Unix-seconds → ISO 'YYYY-MM-DD' (UTC), or None. yfinance firstTradeDateEpochUtc → ipo_date."""
+    """Unix-seconds → ISO 'YYYY-MM-DD' (UTC), or None."""
     if not epoch:
         return None
     try:
         return datetime.fromtimestamp(float(epoch), tz=timezone.utc).date().isoformat()
     except (ValueError, OverflowError, OSError):
         return None
+
+
+def _first_trade_date(info: dict) -> Optional[str]:
+    """The listing's first-trade date as ISO 'YYYY-MM-DD' (the Stage-5/tiering IPO-age signal).
+
+    yfinance has moved this field around across versions, so try, in order: ``firstTradeDateUtc``/
+    ``firstTradeDateEpochUtc`` (seconds), ``firstTradeDateMilliseconds`` (ms — the current field),
+    then the ``ipoExpectedDate`` string. None if none are present/parseable.
+    """
+    for key in ("firstTradeDateEpochUtc", "firstTradeDateUtc"):
+        iso = _epoch_to_iso_date(info.get(key))
+        if iso:
+            return iso
+    ms = info.get("firstTradeDateMilliseconds")
+    if ms:
+        iso = _epoch_to_iso_date(float(ms) / 1000.0)
+        if iso:
+            return iso
+    expected = (info.get("ipoExpectedDate") or "").strip()
+    if len(expected) == 10 and expected[4] == "-":   # 'YYYY-MM-DD'
+        return expected
+    return None
 
 
 def fetch_ticker_info(ticker: str) -> Optional[dict]:
@@ -56,6 +78,6 @@ def fetch_ticker_info(ticker: str) -> Optional[dict]:
         "country": info.get("country"),
         "name": info.get("longName") or info.get("shortName"),
         "business_description": info.get("longBusinessSummary"),   # Stage 1 (M3) tags on this
-        "ipo_date": _epoch_to_iso_date(info.get("firstTradeDateEpochUtc")),   # Stage-5 age signal
+        "ipo_date": _first_trade_date(info),                                  # Stage-5/tiering age signal
         "is_live": bool(cap) or bool(price),
     }
