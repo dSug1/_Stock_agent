@@ -58,13 +58,15 @@ def run(store: Store, config: dict, *, run_id: str | None = None,
                     cap = info["mktcap_usd_fd"]
                 if "is_live" in info:
                     live = bool(info["is_live"])
-                # persist enrichment (cap/liveness + business description/sector/industry for M3).
+                # persist enrichment (cap/liveness + business description/sector/industry for M3 +
+                # ipo_date for the Stage-5 lifecycle age signal).
                 store.upsert_company(
                     replace(company, mktcap_usd_fd=cap, mktcap_unknown=(cap is None), is_live=live,
                             business_description=info.get("business_description")
                             or company.business_description,
                             sector=info.get("sector") or company.sector,
-                            industry=info.get("industry") or company.industry),
+                            industry=info.get("industry") or company.industry,
+                            ipo_date=info.get("ipo_date") or company.ipo_date),
                     run_id=run_id)
 
         ident = {"name": company.name, "ticker": company.primary_ticker,

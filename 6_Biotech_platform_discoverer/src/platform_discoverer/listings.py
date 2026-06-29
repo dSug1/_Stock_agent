@@ -148,7 +148,7 @@ def yfinance_enricher(config: Optional[dict] = None) -> Callable[[Company], Opti
         result: dict = {"is_live": info.get("is_live", True)}
         if cap is not None:
             result["mktcap_usd_fd"] = cap
-        for key in ("business_description", "sector", "industry"):
+        for key in ("business_description", "sector", "industry", "ipo_date"):
             if info.get(key):
                 result[key] = info[key]
         return result

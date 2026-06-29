@@ -17,7 +17,7 @@ import logging
 import sys
 
 from platform_discoverer import config as cfg
-from platform_discoverer import stage0a, stage0b, stage1, stage2, stage4
+from platform_discoverer import stage0a, stage0b, stage1, stage2, stage4, stage5, tiering
 from platform_discoverer.directory import ListingDirectoryProvider
 from platform_discoverer.listings import SeedCSVProvider, yfinance_enricher
 from platform_discoverer.store import Store, now_iso
@@ -39,8 +39,10 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Acrivon-pattern screener orchestrator")
     p.add_argument("--db", default="data/store.db")
     p.add_argument("--config", default="config/config.yaml")
-    p.add_argument("--stage", default="0", choices=["0", "0a", "0b", "1", "2", "4"],
+    p.add_argument("--stage", default="0", choices=["0", "0a", "0b", "1", "2", "4", "5"],
                    help="which stage(s) to run (more added in later milestones)")
+    p.add_argument("--out", default="Outputs/shortlist.md",
+                   help="Stage 5: path for the exported house-format shortlist Markdown")
     p.add_argument("--taxonomy", default="config/taxonomy.yaml")
     p.add_argument("--dispatch", action="store_true",
                    help="Stage 4: actually call the Claude API (costs money). Default = cost estimate "
@@ -54,6 +56,10 @@ def main(argv=None) -> int:
     p.add_argument("--force-rescore", action="store_true",
                    help="Stage 4: re-score even tickers scored within the rescore-TTL (the 'reset'). "
                         "By default a ticker scored in the last year is skipped.")
+    p.add_argument("--tiers", default=None,
+                   help="Stage 4: which market-cap×age tiers to score, e.g. '1,2' or 'all' "
+                        "(1=small&young, 2=large&young, 3=large&old, 4=small&old, 0=untiered). "
+                        "Omit for an interactive prompt; with --yes and no --tiers, defaults to all.")
     p.add_argument("--limit", type=int, default=None,
                    help="cap companies processed (Stage 2 harvest) — useful for a bounded first run")
     p.add_argument("--include-excluded", action="store_true",
@@ -99,24 +105,47 @@ def main(argv=None) -> int:
                                  incremental=not args.no_incremental, tickers=tickers)
             print(f"stage2: {summary}")
         if args.stage == "4":
+            # IPO-date × market-cap TIER GATE — applied UPSTREAM of the Claude call (spec §5.6).
+            # Resolve which tiers to score: explicit --tiers, else interactive prompt, else (with
+            # --yes) all tiers.
+            breakdown = stage4.due_tier_breakdown(store, config, tickers, force=args.force_rescore)
+            if args.tiers is not None:
+                sel_tiers = tiering.parse_tier_selection(args.tiers)
+            elif args.yes:
+                sel_tiers = set(tiering.ALL_TIERS)
+            else:
+                print("\nDue candidates by tier (market cap × years-since-IPO):")
+                for t in tiering.ALL_TIERS:
+                    print(f"  [{t}] {tiering.tier_label(t):<28} {breakdown.get(t, 0)}")
+                resp = input("Which tiers to run the Claude scorer on? (e.g. 1,2 / all): ")
+                sel_tiers = tiering.parse_tier_selection(resp)
+            print(f"selected tiers: {sorted(sel_tiers)}")
+
             est = stage4.run(store, config, dispatch=False, tickers=tickers,
-                             force=args.force_rescore)
+                             force=args.force_rescore, tiers=sel_tiers)
             print(f"stage4 cost estimate: {est}")
             if not args.dispatch:
                 print("(estimate only — re-run with --dispatch to score via the Claude API)")
+            elif est["candidates"] == 0:
+                print("no DUE candidates in the selected tiers — nothing to score.")
             else:
                 ok = args.yes
                 if not ok:
                     resp = input(f"\nDispatch Claude scoring of {est['candidates']} companies "
+                                 f"in tiers {sorted(sel_tiers)} "
                                  f"(~${est['est_total_usd']}, cap ${est['max_usd_per_run']})? [y/N]: ")
                     ok = resp.strip().lower() == "y"
                 if ok:
                     summary = stage4.run(store, config, dispatch=True, run_id=run_id,
                                         tickers=tickers, use_batch=not args.no_batch,
-                                        force=args.force_rescore)
+                                        force=args.force_rescore, tiers=sel_tiers)
                     print(f"stage4: {summary}")
                 else:
                     print("aborted — no API calls made.")
+        if args.stage == "5":
+            summary = stage5.run(store, config, run_id=run_id, out_path=args.out)
+            print(f"stage5: {summary}")
+            print(f"shortlist: {summary['shortlist_path']}")
         print(f"companies in store: {store.count_companies()}")
         rq = store.review_queue_dump()
         if rq:

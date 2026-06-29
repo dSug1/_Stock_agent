@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from . import config as cfg
+from . import tiering
 from .clients.anthropic_client import PRICING
 from .models import Score
 from .scoring import composite, rubric
@@ -44,7 +45,8 @@ def _scored_within(store: Store, company_id: str, ttl_days: int) -> bool:
     return datetime.now(timezone.utc) - ts < timedelta(days=ttl_days)
 
 
-def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False) -> list:
+def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False,
+                tiers=None) -> list:
     s4 = config.get("stage4_scoring", {}) or {}
     cos = [c for c in store.all_companies() if c.is_live]
     if not s4.get("score_live_excluded", True):
@@ -52,12 +54,24 @@ def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False
     if tickers:
         tset = {t.upper() for t in tickers}
         cos = [c for c in cos if (c.primary_ticker or "").upper() in tset]
+    if tiers is not None:
+        # tier gate (spec §5.6): score only the operator-selected market-cap × age tiers. This is the
+        # IPO-date filter applied UPSTREAM of the Claude call.
+        tset = set(tiers)
+        cos = [c for c in cos if tiering.compute_tier(c, config) in tset]
     if not force:
         # rescore-TTL: a ticker scored within the last year is not re-analysed (saves cost) unless
         # --force-rescore. This is the "no need to repeat within 1 year unless we reset" guard.
         ttl = int(s4.get("rescore_ttl_days", 365))
         cos = [c for c in cos if not _scored_within(store, c.company_id, ttl)]
     return cos
+
+
+def due_tier_breakdown(store: Store, config: dict, tickers=None, *, force: bool = False) -> dict:
+    """{tier: count} over the DUE candidate set (post ticker/TTL filter, pre tier gate) — drives the
+    interactive "which tiers do you want to score?" prompt. Covers all of ``tiering.ALL_TIERS``."""
+    due = _candidates(store, config, tickers, force=force)
+    return tiering.tier_breakdown(due, config)
 
 
 def _evidence(store: Store, company_id: str) -> dict:
@@ -69,9 +83,10 @@ def _evidence(store: Store, company_id: str) -> dict:
     return out
 
 
-def build_bundles(store: Store, config: dict, tickers=None, *, force=False) -> dict[str, dict]:
+def build_bundles(store: Store, config: dict, tickers=None, *, force=False,
+                  tiers=None) -> dict[str, dict]:
     """{company_id: evidence-bundle} for every DUE candidate (the Claude input)."""
-    by_id = {c.company_id: c for c in _candidates(store, config, tickers, force=force)}
+    by_id = {c.company_id: c for c in _candidates(store, config, tickers, force=force, tiers=tiers)}
     return {cid: rubric.build_bundle(c, _evidence(store, cid)) for cid, c in by_id.items()}
 
 
@@ -111,20 +126,23 @@ def estimate_cost(n: int, config: dict) -> dict:
 
 def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
         run_id: Optional[str] = None, tickers=None, use_batch: Optional[bool] = None,
-        force: bool = False) -> dict:
+        force: bool = False, tiers=None) -> dict:
     """Estimate (dispatch=False) or run (dispatch=True) the tiered scorer.
 
     ``client`` is an injected ``AnthropicClient`` (tests pass a fake); real runs construct one bounded
     by ``cost_controls.max_usd_per_run``. ``tickers`` restricts to a specific set; ``use_batch``
     overrides ``use_batch_api``. ``force`` re-scores even tickers scored within the rescore-TTL (the
-    "reset"); otherwise a ticker scored within the last year is skipped.
+    "reset"); otherwise a ticker scored within the last year is skipped. ``tiers`` (a set of tier ints
+    from ``tiering``) gates scoring to the operator-selected market-cap × age tiers (None = all).
     """
-    bundles = build_bundles(store, config, tickers, force=force)
+    bundles = build_bundles(store, config, tickers, force=force, tiers=tiers)
     if not dispatch:
         est = estimate_cost(len(bundles), config)
         est["note"] = ("counts only tickers DUE for scoring (not scored within "
-                       f"{config.get('stage4_scoring', {}).get('rescore_ttl_days', 365)}d); "
-                       "use --force-rescore to override")
+                       f"{config.get('stage4_scoring', {}).get('rescore_ttl_days', 365)}d"
+                       + (f"; tiers {sorted(tiers)}" if tiers is not None else "")
+                       + "); use --force-rescore to override")
+        est["selected_tiers"] = sorted(tiers) if tiers is not None else None
         return {"mode": "estimate", **est}
 
     s4 = config["stage4_scoring"]
@@ -201,6 +219,7 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
 
     summary = {"mode": "dispatch", "candidates": len(bundles), "triage_killed": killed,
                "scored": len(scored), "opus_finalized": finalized,
+               "selected_tiers": sorted(tiers) if tiers is not None else None,
                "cost_usd": round(getattr(client, "spent_usd", 0.0), 2),
                "api_calls": getattr(client, "calls", 0)}
     store.audit(stage="stage4", action="scored", reason="scoring_done", run_id=rid, detail=summary)

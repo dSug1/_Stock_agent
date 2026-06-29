@@ -25,7 +25,7 @@ from .models import AuditEntry, Company, Evidence, Score
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class IllegalDeletionError(Exception):
@@ -141,7 +141,15 @@ def _migration_2(conn: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = {1: _migration_1, 2: _migration_2}
+def _migration_3(conn: sqlite3.Connection) -> None:
+    # M6 (Stage 5) lifecycle weighting needs a company-age signal. ipo_date is the listing's first
+    # trade date (yfinance firstTradeDateEpochUtc, fallback SEC first-filing date), ISO 'YYYY-MM-DD'.
+    # Populated on the next Stage-0b enrich; NULL until then (lifecycle_weight then treats age as
+    # unknown → full weight, recall-safe). See spec/decisions.md D2/D4.
+    conn.executescript("ALTER TABLE companies ADD COLUMN ipo_date TEXT;")
+
+
+_MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3}
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
@@ -224,8 +232,8 @@ class Store:
             """
             INSERT INTO companies (company_id, name, primary_ticker, exchange, country, isin, lei,
                 mktcap_usd_fd, mktcap_unknown, source_nets, ta_tags, dev_stage, stage1_excluded,
-                is_live, business_description, sector, industry, first_seen, last_seen)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                is_live, business_description, sector, industry, ipo_date, first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(company_id) DO UPDATE SET
                 name=excluded.name, primary_ticker=excluded.primary_ticker,
                 exchange=excluded.exchange, country=excluded.country, isin=excluded.isin,
@@ -237,6 +245,7 @@ class Store:
                                               companies.business_description),
                 sector=COALESCE(excluded.sector, companies.sector),
                 industry=COALESCE(excluded.industry, companies.industry),
+                ipo_date=COALESCE(excluded.ipo_date, companies.ipo_date),
                 last_seen=excluded.last_seen
             """,
             (company.company_id, company.name, company.primary_ticker, company.exchange,
@@ -244,7 +253,7 @@ class Store:
              int(company.mktcap_unknown), _json_or_none(company.source_nets),
              _json_or_none(company.ta_tags), company.dev_stage, int(company.stage1_excluded),
              int(company.is_live), company.business_description, company.sector, company.industry,
-             first_seen, company.last_seen or now_iso()),
+             company.ipo_date, first_seen, company.last_seen or now_iso()),
         )
         self.conn.commit()
 
@@ -384,6 +393,30 @@ class Store:
                    reason=score.model, run_id=score.run_id or run_id,
                    detail={"composite": score.composite})
 
+    def latest_scores(self) -> dict[str, Score]:
+        """The most recent score per company (MAX run_id, ISO-chronological). Stage-5 ranking input."""
+        rows = self.conn.execute(
+            "SELECT s.* FROM scores s JOIN "
+            "(SELECT company_id, MAX(run_id) AS mr FROM scores GROUP BY company_id) m "
+            "ON s.company_id=m.company_id AND s.run_id=m.mr"
+        ).fetchall()
+        return {r["company_id"]: _row_to_score(r) for r in rows}
+
+    # -- run metadata (§15) --
+    def record_run_meta(self, run_id: str, *, started: Optional[str] = None,
+                        finished: Optional[str] = None, config_hash: Optional[str] = None,
+                        cost_usd: Optional[float] = None, metrics: Any = None) -> None:
+        """Upsert a ``run_meta`` row — the per-run summary/metrics record (spec §12/§15)."""
+        self.conn.execute(
+            "INSERT INTO run_meta(run_id, started, finished, config_hash, cost_usd, metrics_json) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(run_id) DO UPDATE SET started=COALESCE(excluded.started, run_meta.started), "
+            "finished=excluded.finished, config_hash=excluded.config_hash, "
+            "cost_usd=excluded.cost_usd, metrics_json=excluded.metrics_json",
+            (run_id, started, finished, config_hash, cost_usd, _json_or_none(metrics)),
+        )
+        self.conn.commit()
+
     # -- seed labels --
     def set_seed_label(self, company_id: str, label: str) -> None:
         if label not in ("positive", "negative"):
@@ -435,8 +468,16 @@ def _row_to_company(row: sqlite3.Row) -> Company:
         source_nets=_loads(row["source_nets"], []), ta_tags=_loads(row["ta_tags"], []),
         dev_stage=row["dev_stage"], stage1_excluded=bool(row["stage1_excluded"]),
         is_live=bool(row["is_live"]), business_description=row["business_description"],
-        sector=row["sector"], industry=row["industry"],
+        sector=row["sector"], industry=row["industry"], ipo_date=row["ipo_date"],
         first_seen=row["first_seen"], last_seen=row["last_seen"],
+    )
+
+
+def _row_to_score(row: sqlite3.Row) -> Score:
+    return Score(
+        company_id=row["company_id"], run_id=row["run_id"], model=row["model"],
+        json=_loads(row["json"], {}), A=row["A"], B=row["B"], C=row["C"], D=row["D"], E=row["E"],
+        composite=row["composite"], confidence=row["confidence"],
     )
 
 

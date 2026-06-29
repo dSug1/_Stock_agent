@@ -61,6 +61,7 @@ class Company:
     business_description: Optional[str] = None   # yfinance longBusinessSummary (Stage 1 tags on it)
     sector: Optional[str] = None
     industry: Optional[str] = None
+    ipo_date: Optional[str] = None               # listing first-trade date (ISO); Stage-5 age signal
     first_seen: Optional[str] = None
     last_seen: Optional[str] = None
 

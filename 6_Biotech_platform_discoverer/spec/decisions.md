@@ -5,6 +5,87 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D5 (2026-06-29) — Market-cap × age TIERING upstream of Claude + interactive tiered report (BUILT)
+
+Analyst request: **(1)** move the IPO-date signal UPSTREAM of the Claude call (use it as a filter, not
+only the Stage-5 ranking tilt); **(2)** bucket tickers into **4 tiers** by market cap (`$400M`) AND
+IPO age (`20yr`): T1 small&young, T2 large&young, T3 large&old, T4 small&old; **(3)** ask which tiers
+to score at run time; **(4)** render with the `3_Biopharmcatalyst_parser` report features (tier tabs,
+green-highlight + acknowledge checkbox for seen-tracking, collapsible Claude results, new-items filter).
+
+**Built.**
+- **`tiering.py`** — `compute_tier(company, config)` → 1-4, or **0 = untiered** when cap OR ipo_date is
+  missing. Tier 0 is a deliberate addition (the user named 4 tiers; missing data needs a home):
+  recall-safe, never hidden, operator can still select it. Boundary: `cap < threshold` = small,
+  `age < threshold` = young (so the threshold value itself counts as large/old). Computed on the fly
+  (never persisted) so it always tracks current cap/IPO. Config `tiers.{mktcap_threshold_usd,
+  ipo_age_threshold_years}`. `age_years` now lives here; `stage5` imports it (one definition).
+- **Stage 4 tier gate** — `_candidates(..., tiers=set)` filters the DUE set by tier BEFORE any API
+  call; `due_tier_breakdown()` feeds the prompt. `run(..., tiers=)` carries `selected_tiers` into the
+  estimate + dispatch summary + audit. The gate is the IPO-date filter "upstream of Claude."
+- **CLI** — `--tiers 1,2|all` or, when omitted, an **interactive prompt** showing due-candidate counts
+  per tier and asking which to score; `--yes` with no `--tiers` defaults to all. Aborts cleanly if the
+  selected tiers have 0 due candidates.
+- **Interactive report** — `render.py` rewritten as a **template + data-sidecar** pair
+  (`screener_report.html` hash-stable + `screener_report_data.js` rewritten per run; repo
+  html-template-data-split convention). Features ported from 3_: **tier tabs** (T1 default → T4,
+  Untiered, All, with counts), **green highlight + acknowledge checkbox** (localStorage
+  `pd_screener_acknowledged_v1`, PK = company_id; every company starts NEW until ticked — no
+  bootstrap-seed, unlike 3_, because the screener has no "prior batch" to pre-ack), **collapsible
+  Claude panel** (memo / axes / moat / mechanisms / disconfirming), **new-items filter** (any / new /
+  ack) + ticker search + min-composite + scored-only. Duplicate company-ids collapse via the Stage-5
+  shared-signal union so each real company is one row.
+
+**Operational note — tiers need `ipo_date`.** It populates on the next Stage-0b `--enrich-yf`
+(yfinance `firstTradeDateEpochUtc`, wired in D4). Until then every company is **Tier 0 (untiered)** —
+verified live (581 untiered, the 6 scored among them). The run `.bat` already does `--enrich-yf`, so
+the next full run fills the tiers. SEC first-filing fallback for `ipo_date` remains deferred (D4/D2).
+
+**Relationship to D2 lifecycle multiplier:** tiering is now the PRIMARY use of IPO age (a hard
+upstream filter the operator controls); the Stage-5 `lifecycle_weight` multiplier stays as an optional,
+off-by-default downstream re-ranking tilt. They don't conflict — one gates *what gets scored*, the
+other tilts *ordering of what was scored*. 137 tests pass (was 114).
+
+## D4 (2026-06-29) — Stage 5 rank/dedup/export BUILT (+ lifecycle prereq) (BUILT)
+
+The terminal stage (spec §5.7): rank → dedup → refresh review queue → persist run_meta → export the
+analyst-house-format shortlist. No API, no deletions. Built as `stage5.py` + `--stage 5` (writes
+`Outputs/shortlist.md`). Three sub-decisions:
+
+**(a) Dedup is presentation-layer, not a row deletion.** The cardinal rule (§0.2) forbids deleting a
+company for being a duplicate. So Stage-5 dedup collapses duplicate company-ids *only in the ranked
+shortlist* — it keeps the best-scored representative and records the others as `merged_ids`; every row
+survives in the store (`get_company` still returns them). Verified by test. The primary ADR/dual
+collapse still happens earlier in `dedup.collapse` (before rows exist); this is the safety net for the
+seed-CSV-name vs SEC-name double-id (ACRV/RXRX).
+
+**(b) Dedup matches on SHARED SIGNALS via union-find, not a single per-row key.** First attempt used a
+"strongest identifier per row" key (ISIN → ticker+country → name) — but it FAILED on the live ACRV
+case: the seed row carries an ISIN while the SEC row does not, so they landed in different key tiers
+(`isin:…` vs `tkr:ACRV@US`) and never merged (RXRX merged only because neither row had an ISIN). Fix:
+each row emits a SET of signals {isin, ticker+country | name-when-tickerless}; rows are unioned if they
+share ANY signal (transitive). Legal-entity suffixes (Inc/Corp/Ltd/AB/…) are stripped for the name
+fallback; industry words (therapeutics/pharmaceuticals) are NOT, so distinct companies sharing a stem
+stay separate. Live result: 8 scored rows → 6 shortlist rows (ACRV + RXRX each collapsed).
+
+**(c) Lifecycle age-weighting wired but OFF by default (D2 Lever 2).** `rank_score = composite ×
+lifecycle_weight(age)`; weight is 1.0 for age ≤ `old_threshold_years` (the young are never penalized,
+rule 3a), decays linearly to `floor` between `old_threshold` and `hard_old_years`, and sits at `floor`
+beyond (ship sailed, rule 3b). Unknown age → 1.0 (recall-safe). It NEVER alters the auditable composite
+and never deletes — only reorders. **Prereq built:** schema **v3** adds `companies.ipo_date`;
+`market.fetch_ticker_info` now reads `firstTradeDateEpochUtc` → ISO date, persisted on the next 0b
+enrich (NULL until then). SEC first-filing fallback + market-cap-appreciation discount remain deferred
+(D2 phase 2). Config: `stage5.lifecycle.enabled` (false), `stage5.shortlist_top` (25),
+`stage5.review.*` thresholds.
+
+**Review-queue refresh (§11):** scored names with `substance_check ∈ {marketing, mixed}` or
+high-composite-but-low-confidence are routed back to the review queue for a human look. (On the current
+store all 6 trip it — evidence is sparse because OpenAlex 429'd during the test harvest, so confidence
+is low; re-harvest will lift confidence and clear most. See handoff PENDING #3.)
+
+114 tests pass (was 98). Render's "Composite scores" section was upgraded to a deduped, lifecycle-aware
+**Ranked shortlist** (axes + rank_score) driven by `stage5.rank`.
+
 ## D3 (2026-06-28) — Rescore-TTL: don't re-analyse a ticker within a year (BUILT)
 
 Analyst request: once a ticker has been through the Claude scorer, don't run it again for **1 year**

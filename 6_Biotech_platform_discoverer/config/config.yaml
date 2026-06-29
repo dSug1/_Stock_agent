@@ -70,6 +70,14 @@ stage3_embedding:
   min_keep: 120                      # never cut below this (recall floor)
   negative_penalty_lambda: 0.5       # company_sim = max_sim(pos) - lambda*max_sim(neg)
 
+# Tiering (spec §5.6) — bucket the universe by market cap × company age UPSTREAM of the Claude call,
+# so the operator chooses which tiers to spend scoring budget on. Tier 1 = small & young (priority);
+# Tier 4 = small & old; Tier 0 = untiered (cap or IPO date missing — recall-safe, never hidden).
+# IPO age needs companies.ipo_date (populated on Stage-0b --enrich-yf). See decisions.md D5.
+tiers:
+  mktcap_threshold_usd: 400_000_000  # < this = "small"; >= this = "large"
+  ipo_age_threshold_years: 20        # < this = "young"; >= this = "old"
+
 stage4_scoring:
   triage_model:   "claude-haiku-4-5"
   score_model:    "claude-sonnet-4-6"
@@ -106,6 +114,11 @@ penalties:
 # window; deprioritizes companies where the ship has sailed / >20 yrs old. Needs an IPO/age signal
 # (yfinance firstTradeDate or SEC first-filing date) captured first — see decisions.md D2.
 stage5:
+  shortlist_top: 25                  # how many ranked companies get a full prose memo in the export
+  review:                            # §11: route borderline scored names back to the review queue
+    low_confidence_max: 0.5          # confidence <= this AND composite >= high_composite_min -> review
+    high_composite_min: 0.6          # a high-composite but low-confidence hit is worth a human look
+    flag_marketing_mixed: true       # substance_check.verdict in {marketing, mixed} -> review
   lifecycle:
     enabled: false                   # set true to weight the ranking by company age
     age_signal: "ipo_date"           # ipo_date (yfinance firstTradeDate) | first_sec_filing
