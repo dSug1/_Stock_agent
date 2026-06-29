@@ -203,9 +203,16 @@ class FakeClient:
         return _fake_rubric_for(bundle)
 
     def score_realtime_many(self, model, system, schema, items, max_tokens, *, validate=None,
-                            tools=None, concurrency=6, max_pause_turns=4, max_retries=2):
-        return {cid: self.score_realtime(model, system, schema, b, max_tokens, validate=validate)
-                for cid, b in items.items()}
+                            tools=None, concurrency=6, max_pause_turns=4, validation_retries=2,
+                            on_result=None):
+        out = {}
+        for cid, b in items.items():
+            r = self.score_realtime(model, system, schema, b, max_tokens, validate=validate)
+            if r is not None:
+                if on_result is not None:
+                    on_result(cid, r)
+                out[cid] = r
+        return out
 
     def score_batch(self, model, system, schema, bundles, max_tokens, *, validate=None, tools=None,
                     on_submit=None, **kw):
@@ -292,13 +299,20 @@ def test_stage4_persists_incrementally_survives_crash(store):
             self.spent_usd = 0.0; self.calls = 0; self.web_searches = 0
 
         def score_realtime_many(self, model, system, schema, items, max_tokens, *, validate=None,
-                                tools=None, concurrency=6, max_pause_turns=4, max_retries=2):
+                                tools=None, concurrency=6, max_pause_turns=4, validation_retries=2,
+                                on_result=None):
             if schema is rubric.TRIAGE_SCHEMA:
                 return {cid: {"keep": (b.get("ticker") or "").startswith("A"), "prior": 0.5,
                               "reason": "x"} for cid, b in items.items()}
             if model == CONFIG["stage4_scoring"]["finalize_model"]:
                 raise RuntimeError("simulated crash during finalize")    # mid-run failure
-            return {cid: _fake_rubric_for(b) for cid, b in items.items()}
+            out = {}
+            for cid, b in items.items():
+                rj = _fake_rubric_for(b)
+                if on_result is not None:
+                    on_result(cid, rj)               # persist rubric per-item (durable before crash)
+                out[cid] = rj
+            return out
 
         def score_batch(self, *a, **k):
             return {}

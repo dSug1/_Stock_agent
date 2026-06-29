@@ -205,7 +205,8 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
         client = AnthropicClient(
             max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50),
             web_search_cost_per_search=float(wr.get("cost_per_1k_searches_usd", 10)) / 1000.0,
-            request_timeout_s=float(s4.get("request_timeout_s", 180)))
+            request_timeout_s=float(s4.get("request_timeout_s", 180)),
+            max_retries=int(s4.get("max_retries", 1)))
 
     # run_id + scoring-config hash fixed up front so every incrementally-persisted score is stamped
     # consistently (§12 config-change re-runs) and shares one run_id.
@@ -228,10 +229,16 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
                 store.audit(stage="stage4", action="cut", company_id=cid, reason="triage_kill",
                             run_id=rid, detail={"prior": t.get("prior"), "why": t.get("reason")})
 
-    # Tier 2 — Sonnet full rubric over survivors. Each score is PERSISTED the instant it's produced
-    # (crash-safe — a later hang/error never discards earlier survivors' web-search work). Batch path
-    # persists the batch_id on submit so a crashed poll can be resumed (D13).
+    # Tier 2 — Sonnet full rubric over survivors. Each score is PERSISTED the instant it's produced —
+    # the async path persists INSIDE each task via on_result (per-item durability during the parallel
+    # tier); the batch path persists each result as it's read (+ batch_id saved on submit for resume).
     scored: dict[str, dict] = {}
+
+    def _persist_rubric(cid, rj):
+        scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
+                                     penalties=penalties, evidence_n=len(_evidence(store, cid)),
+                                     finalized=False, run_id=rid, config_hash=chash)
+
     if use_batch:
         def _save_batch_id(bid):
             store.record_run_meta(rid, started=rid, config_hash=chash,
@@ -242,27 +249,27 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
         rubric_out = client.score_batch(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
                                         survivors, 1500, validate=rubric.validate_rubric,
                                         tools=web_tool, on_submit=_save_batch_id)
+        for cid, rj in rubric_out.items():
+            _persist_rubric(cid, rj)
     else:
-        rubric_out = client.score_realtime_many(s4["score_model"], rubric_system,
-                                                rubric.RUBRIC_SCHEMA, survivors, 1500,
-                                                validate=rubric.validate_rubric, tools=web_tool,
-                                                concurrency=conc)
-    for cid, rj in rubric_out.items():
-        scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
-                                     penalties=penalties, evidence_n=len(_evidence(store, cid)),
-                                     finalized=False, run_id=rid, config_hash=chash)
+        client.score_realtime_many(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
+                                   survivors, 1500, validate=rubric.validate_rubric, tools=web_tool,
+                                   concurrency=conc, on_result=_persist_rubric)
 
-    # Tier 3 — Opus finalize on the contested band (adversarial), parallel (D13). Each re-score
-    # upserts the same (company_id, run_id) row, so it's also durable immediately.
-    contested = {cid: survivors[cid] for cid, s in scored.items() if lo <= s["composite"] <= hi}
-    final_out = client.score_realtime_many(
-        s4["finalize_model"], rubric_system + rubric.ADVERSARIAL_SUFFIX, rubric.RUBRIC_SCHEMA,
-        contested, 1500, validate=rubric.validate_rubric, tools=web_tool, concurrency=conc)
-    for cid, rj in final_out.items():
+    # Tier 3 — Opus finalize on the contested band (adversarial), parallel (D13), persisted per-item.
+    final_count = {"n": 0}
+
+    def _persist_final(cid, rj):
         scored[cid] = _persist_score(store, cid, rj, s4["finalize_model"], weights=weights,
                                      penalties=penalties, evidence_n=len(_evidence(store, cid)),
                                      finalized=True, run_id=rid, config_hash=chash)
-    finalized = len(final_out)
+        final_count["n"] += 1
+
+    contested = {cid: survivors[cid] for cid, s in scored.items() if lo <= s["composite"] <= hi}
+    client.score_realtime_many(s4["finalize_model"], rubric_system + rubric.ADVERSARIAL_SUFFIX,
+                               rubric.RUBRIC_SCHEMA, contested, 1500, validate=rubric.validate_rubric,
+                               tools=web_tool, concurrency=conc, on_result=_persist_final)
+    finalized = final_count["n"]
 
     summary = {"mode": "dispatch", "candidates": len(bundles), "triage_killed": killed,
                "scored": len(scored), "opus_finalized": finalized,

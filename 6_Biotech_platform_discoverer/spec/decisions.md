@@ -5,6 +5,16 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D15 (2026-06-29) — max_retries=1 + per-item async persistence (BUILT)
+
+Two tightenings on top of D13/D14: (1) `AnthropicClient(max_retries=1)` (SDK default 2) on both the
+sync and async clients — with the 180s timeout (D14) this caps a wedged call's worst case at 2×180s
+instead of 3×180s; config `stage4_scoring.max_retries`. (2) `score_realtime_many(on_result=…)` fires a
+persist callback **inside each async task the instant its score returns**, so the parallel rubric +
+finalize tiers persist per-item (durable mid-gather) rather than only after the whole `gather` —
+matching the batch path's per-result persistence. asyncio is single-threaded so the synchronous
+`record_score` inside the task is race-free. 169 tests pass.
+
 ## D14 (2026-06-29) — Bound the per-request SDK timeout (the real cause of the "hangs") (BUILT)
 
 Root-caused the two ~1hr wedged Stage-4 runs: NOT web search. A direct probe showed a single

@@ -54,22 +54,25 @@ def web_search_tool(max_uses: int = 5, allowed_domains: Optional[list] = None) -
 
 class AnthropicClient:
     def __init__(self, *, max_usd: float = 50.0, web_search_cost_per_search: float = 0.01,
-                 request_timeout_s: float = 180.0):
+                 request_timeout_s: float = 180.0, max_retries: int = 1):
         self.max_usd = float(max_usd)
         self.spent_usd = 0.0
         self.calls = 0
         self.web_searches = 0
         self.web_search_cost_per_search = float(web_search_cost_per_search)
-        # Per-request timeout. The SDK default is 10 MINUTES + 2 retries, so a single stalled call
-        # balloons to ~30 min and a few of them look like a multi-hour hang (the real cause of the
-        # earlier wedged runs — a single web_search call completes in ~20s). Bound it.
+        # Per-request timeout + SDK retry cap. The SDK default is 10 MIN timeout + 2 retries, so a
+        # single stalled call balloons to ~30 min (×retries) and a few look like a multi-hour hang —
+        # the real cause of the earlier wedged runs (a single web_search call completes in ~20s).
+        # Bound BOTH: 180s timeout × (max_retries+1) caps a wedged call's worst case.
         self.request_timeout_s = float(request_timeout_s)
+        self.max_retries = int(max_retries)
         self._sdk = None
 
     def _client(self):
         if self._sdk is None:
             import anthropic  # lazy — only needed on dispatch
-            self._sdk = anthropic.Anthropic(timeout=self.request_timeout_s)
+            self._sdk = anthropic.Anthropic(timeout=self.request_timeout_s,
+                                            max_retries=self.max_retries)
         return self._sdk
 
     # -- cost --
@@ -155,11 +158,13 @@ class AnthropicClient:
     def score_realtime_many(self, model: str, system: str, schema: dict, items: dict[str, dict],
                             max_tokens: int, *, validate=None, tools: Optional[list] = None,
                             concurrency: int = 6, max_pause_turns: int = 4,
-                            max_retries: int = 2) -> dict[str, dict]:
+                            validation_retries: int = 2, on_result=None) -> dict[str, dict]:
         """Score many bundles in PARALLEL via AsyncAnthropic with a bounded semaphore — far faster
         wall-clock than a sequential `score_realtime` loop (the cause of the ~1hr web-search run).
-        Returns {id: data} (failed/None items dropped). Same pause_turn + cost/search tracking as the
-        sync path; asyncio is single-threaded so the `_track` increments are safe."""
+        Returns {id: data} (failed/None items dropped). ``on_result(cid, data)`` fires inside each task
+        the instant that item's score is produced — so results are PERSISTED as each returns (per-item
+        durability during the parallel tier, not only after the gather). Same pause_turn + cost/search
+        tracking; asyncio is single-threaded so the `_track`/persist increments are safe."""
         if not items:
             return {}
         self._guard()
@@ -167,7 +172,7 @@ class AnthropicClient:
 
         async def _one(aclient, sem, cid, bundle):
             async with sem:
-                for _ in range(max_retries):
+                for _ in range(validation_retries):
                     try:
                         params = self._params(model, system, schema, bundle, max_tokens, tools)
                         msg = await aclient.messages.create(**params)
@@ -186,13 +191,17 @@ class AnthropicClient:
                         return cid, None
                     try:
                         data = self._extract(msg)
-                        return cid, (validate(data) if validate else data)
+                        data = validate(data) if validate else data
                     except Exception as exc:  # noqa: BLE001
                         log.debug("validation failed, retrying: %s", exc)
+                        continue
+                    if on_result is not None:
+                        on_result(cid, data)            # persist this item NOW (durable per-item)
+                    return cid, data
                 return cid, None
 
         async def _run():
-            aclient = AsyncAnthropic(timeout=self.request_timeout_s)
+            aclient = AsyncAnthropic(timeout=self.request_timeout_s, max_retries=self.max_retries)
             sem = asyncio.Semaphore(max(1, int(concurrency)))
             pairs = await asyncio.gather(*[_one(aclient, sem, cid, b) for cid, b in items.items()])
             return {cid: r for cid, r in pairs if r is not None}
