@@ -71,6 +71,15 @@ if errorlevel 1 (
     echo [WARN] seed-eval failed (non-fatal) — continuing.
 )
 
+REM --- Run summary / observability (spec §15) ---------------
+REM FREE + read-only: per-run Markdown digest (funnel + tier breakdown + shortlist + top movers vs
+REM last run + seed validation + cost) -> Outputs\run_<id>_summary.md + Outputs\run_summary.md.
+echo [6] Writing run summary...
+python scripts\6_summary.py
+if errorlevel 1 (
+    echo [WARN] run summary failed (non-fatal) — continuing.
+)
+
 REM --- Render the HTML report and open it --------------------
 echo [6] Rendering HTML report...
 python scripts\6_render.py --open-browser
@@ -79,5 +88,5 @@ if errorlevel 1 (
     endlocal & exit /b 1
 )
 
-echo [6] done. Report: Outputs\screener_report.html  Seed-eval: Outputs\seed_eval.md
+echo [6] done. Report: Outputs\screener_report.html  Summary: Outputs\run_summary.md  Seed-eval: Outputs\seed_eval.md
 endlocal

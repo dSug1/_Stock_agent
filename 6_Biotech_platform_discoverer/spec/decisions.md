@@ -5,6 +5,18 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D10 (2026-06-29) — Run summary / observability §15 (BUILT)
+
+`observability.py` + `scripts/6_summary.py` emit a per-run Markdown digest →
+`Outputs/run_<id>_summary.md` + a stable `Outputs/run_summary.md`. Read-only (reconstructs the run
+from audit_log + run_meta + scores; no API): **funnel** at each stage (0a/0b/1/2/4/5 counts incl. the
+D9 web-search count + cost), **tier breakdown** (live universe), the ranked **shortlist** (reuses
+`stage5.rank`), **top movers vs the previous score run** (`movers()` diffs each company's two most
+recent composites — biggest up/down), and **seed validation** (precision/recall/F1 + spec-failure +
+graduated, via `seed_eval.evaluate`). Wired into the run `.bat` after seed-eval. The spec §15
+"structured JSON logs per stage" part is already covered by the existing per-stage `log.info(summary)`
++ audit rows; this builds the run-summary half. 159 tests pass.
+
 ## D9 (2026-06-29) — OpenAlex DISMISSED; the Claude call web-researches publications + pedigree (BUILT)
 
 Analyst directive: "Dismiss OpenAlex entirely — not suitable for this pipeline. Assign to the Claude
