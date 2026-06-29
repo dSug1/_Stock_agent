@@ -89,7 +89,8 @@ stage4_scoring:
   # (replacing the dismissed OpenAlex harvest). Triage (Haiku) stays search-free (cheap recall cut).
   web_research:
     enabled: true
-    max_searches_per_company: 5      # bound the server-tool loop so it completes (avoids pause_turn)
+    max_searches_per_company: 3      # bound the server-tool loop so it completes quickly (avoids long
+                                     # pause_turn loops; 3 ≈ publications + founders + one follow-up)
     cost_per_1k_searches_usd: 10     # Anthropic web-search billing (separate from tokens)
     est_searches_per_company: 3      # for the pre-dispatch cost estimate
   use_batch_api: true                # async batch (50% cost) for the Sonnet rubric pass
