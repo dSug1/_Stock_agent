@@ -5,6 +5,43 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D9 (2026-06-29) — OpenAlex DISMISSED; the Claude call web-researches publications + pedigree (BUILT)
+
+Analyst directive: "Dismiss OpenAlex entirely — not suitable for this pipeline. Assign to the Claude
+API call whatever was previously queried to OpenAlex." OpenAlex gave the pipeline two signals —
+**publications** (footprint/impact) and **scientific/founder pedigree** (top authors + prestige-lab
+matches) — but its institution registry covers <5% of small-cap biotech and it rate-limits on a
+depleting $-budget (D8). So OpenAlex is removed and those signals are now produced **by the Stage-4
+Claude call itself, via the web_search server tool**.
+
+**Removed:** `clients/openalex.py` (deleted); `openalex` + `pedigree` from `stage2.sources` (now
+`["ctgov", "patents"]`) and the pedigree harvester; `openalex`/`pedigree` from `stage4._EVIDENCE_SOURCES`
+and `build_bundle` (no more `publications`/`pedigree` bundle fields); OpenAlex concepts from Stage-1
+tagging (now ctgov conditions only).
+
+**Added — web research (per claude-api skill):**
+- `clients.anthropic_client.web_search_tool()` → `{"type": "web_search_20260209", "name": "web_search",
+  "max_uses": N}` (the dynamic-filtering variant; Sonnet 4.6 + Opus 4.8 support it — do NOT also
+  declare code_execution). `score_realtime`/`score_batch` take a `tools=` param; realtime handles the
+  `pause_turn` server-tool loop (re-send up to N); `_extract` now reads the LAST text block (the
+  constrained JSON after the search turns); per-search fees tracked on `client.web_searches`/`spent_usd`.
+- **Tiering:** web_search is given to the **rubric (Sonnet)** + **finalize (Opus)** tiers only; **Haiku
+  triage stays search-free** (cheap recall cut). Config `stage4_scoring.web_research` (enabled,
+  max_searches_per_company=5, cost_per_1k_searches_usd=10, est_searches_per_company=3).
+- **Prompt:** the rubric preface now mandates web search to find the company's peer-reviewed
+  publications + founder/SAB pedigree (never invent a citation/name); rule 6 (pedigree) + rule 10
+  (coverage fairness) rewritten for the research model; the curated `prestige_labs.yaml` (awardees +
+  labs) is injected into the system prompt as a PRESTIGE LIST for high-precision founder matching
+  (`build_rubric_system(taxonomy, prestige)`).
+- **Cost estimate** adds a `web_search` tier (n_survivors+n_contested × est_searches × per-search).
+
+**Why structured output + web search coexist:** `output_config.format` is compatible with server
+tools (claude-api skill confirms); the model runs the search loop, then emits the schema-constrained
+JSON as its final text block. `max_uses` is bounded so the server loop finishes (avoids pause_turn) and
+so it works under the Batch API. 155 tests pass (was 155; net: openalex/pedigree parser tests removed,
+web-search/prompt/estimate tests added). The cost gate is unchanged — web spend only happens on
+`--stage 4 --dispatch` past the `[y/N]` + `max_usd_per_run` ceiling.
+
 ## D8 (2026-06-29) — Data-coverage fairness: a no-OpenAlex company must not be penalized (BUILT)
 
 Analyst concern: are biotechs with no OpenAlex record penalized? They were, at the margin — two

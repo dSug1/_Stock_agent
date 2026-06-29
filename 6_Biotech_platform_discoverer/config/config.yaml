@@ -55,14 +55,14 @@ stage1_filters:
   deletion_allowed_reasons: ["mktcap_out_of_band", "not_live"]   # ENFORCED in DAO
 
 stage2:                              # evidence harvesting (free, high-signal core)
-  sources: ["openalex", "ctgov", "patents", "pedigree"]   # patents inert w/o PATENTSVIEW_API_KEY
-                                     # pedigree = top OpenAlex authors + prestige-awardee matches (§5.6.1)
+  sources: ["ctgov", "patents"]      # OpenAlex DISMISSED (D9): institution coverage <5% of small biotech
+                                     # + depleting $-budget 429s. Publications + scientific pedigree are
+                                     # now researched by the Stage-4 Claude call via web search (D9).
+                                     # patents inert w/o PATENTSVIEW_API_KEY.
   incremental_ttl_days: 7            # skip re-harvesting a company+source seen within this window
-  prestige_labs: "config/prestige_labs.yaml"
-  openalex_rate_per_sec: 8           # OpenAlex polite pool (mailto from .env USER_AGENT email)
+  prestige_labs: "config/prestige_labs.yaml"   # injected into the Stage-4 prompt for pedigree matching
   ctgov_rate_per_sec: 4
   patents_rate_per_sec: 4
-  # openalex_mailto: you@example.com  # optional explicit polite-pool email
 
 stage3_embedding:
   prefer_local: true                 # reuse env capability if suitable
@@ -82,6 +82,14 @@ stage4_scoring:
   triage_model:   "claude-haiku-4-5"
   score_model:    "claude-sonnet-4-6"
   finalize_model: "claude-opus-4-8"
+  # WEB RESEARCH (D9): the rubric (Sonnet) + finalize (Opus) tiers get the web_search server tool so
+  # Claude researches the company's peer-reviewed publications + scientific/founder pedigree itself
+  # (replacing the dismissed OpenAlex harvest). Triage (Haiku) stays search-free (cheap recall cut).
+  web_research:
+    enabled: true
+    max_searches_per_company: 5      # bound the server-tool loop so it completes (avoids pause_turn)
+    cost_per_1k_searches_usd: 10     # Anthropic web-search billing (separate from tokens)
+    est_searches_per_company: 3      # for the pre-dispatch cost estimate
   use_batch_api: true                # async batch (50% cost) for the Sonnet rubric pass
   finalize_if_composite_between: [0.55, 0.75]  # contested band -> Opus adversarial re-score
   score_live_excluded: true          # score ALL live companies incl stage1_excluded (recall-safe);

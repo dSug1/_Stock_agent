@@ -26,7 +26,7 @@ from .store import Store, now_iso
 
 log = logging.getLogger(__name__)
 
-_EVIDENCE_SOURCES = ("openalex", "ctgov", "patents", "pedigree")
+_EVIDENCE_SOURCES = ("ctgov", "patents")   # OpenAlex/pedigree dismissed (D9) — Claude web-researches them
 
 
 # ── candidate set + bundles ─────────────────────────────────────────────────
@@ -117,6 +117,16 @@ def estimate_cost(n: int, config: dict) -> dict:
         "finalize_opus": {"companies": n_contested,
                           "usd": round(cost(fin_m, n_contested, out_rub, False), 2)},
     }
+    # web research (D9): the rubric + finalize tiers each run a few web searches per company, billed
+    # separately from tokens. Triage is search-free.
+    wr = s4.get("web_research", {}) or {}
+    web_usd = 0.0
+    if wr.get("enabled", True):
+        per_search = float(wr.get("cost_per_1k_searches_usd", 10)) / 1000.0
+        est_searches = float(wr.get("est_searches_per_company", 3))
+        n_web = n_survivors + n_contested
+        web_usd = round(n_web * est_searches * per_search, 2)
+        tiers["web_search"] = {"companies": n_web, "usd": web_usd}
     total = round(sum(t["usd"] for t in tiers.values()), 2)
     return {"candidates": n, "tiers": tiers, "est_total_usd": total,
             "max_usd_per_run": (config.get("cost_controls", {}) or {}).get("max_usd_per_run")}
@@ -152,12 +162,24 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     if use_batch is None:
         use_batch = bool(s4.get("use_batch_api", True))
     taxonomy = cfg.load_taxonomy(s4.get("taxonomy", "config/taxonomy.yaml"))
-    rubric_system = rubric.build_rubric_system(taxonomy)
+    from . import prestige as _prestige
+    prestige_data = _prestige.load_prestige(
+        (config.get("stage2", {}) or {}).get("prestige_labs", "config/prestige_labs.yaml"))
+    rubric_system = rubric.build_rubric_system(taxonomy, prestige_data)
+
+    # web research (D9): the rubric/finalize tiers get web_search so Claude researches publications +
+    # pedigree itself (replacing OpenAlex). Triage stays search-free.
+    wr = s4.get("web_research", {}) or {}
+    web_tool = None
+    if wr.get("enabled", True):
+        from .clients.anthropic_client import web_search_tool
+        web_tool = [web_search_tool(int(wr.get("max_searches_per_company", 5)))]
 
     if client is None:
         from .clients.anthropic_client import AnthropicClient
         client = AnthropicClient(
-            max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50))
+            max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50),
+            web_search_cost_per_search=float(wr.get("cost_per_1k_searches_usd", 10)) / 1000.0)
 
     # Tier 1 — Haiku triage over every candidate (recall-safe)
     survivors: dict[str, dict] = {}
@@ -176,12 +198,13 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     # Tier 2 — Sonnet full rubric over survivors (Batch API, or real-time if use_batch=False)
     if use_batch:
         rubric_out = client.score_batch(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
-                                        survivors, 1500, validate=rubric.validate_rubric)
+                                        survivors, 1500, validate=rubric.validate_rubric,
+                                        tools=web_tool)
     else:
         rubric_out = {}
         for cid, b in survivors.items():
             rj = client.score_realtime(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA, b,
-                                       1500, validate=rubric.validate_rubric)
+                                       1500, validate=rubric.validate_rubric, tools=web_tool)
             if rj:
                 rubric_out[cid] = rj
 
@@ -199,7 +222,7 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
             rj = client.score_realtime(s4["finalize_model"],
                                        rubric_system + rubric.ADVERSARIAL_SUFFIX,
                                        rubric.RUBRIC_SCHEMA, survivors[cid], 1500,
-                                       validate=rubric.validate_rubric)
+                                       validate=rubric.validate_rubric, tools=web_tool)
             if rj:
                 comp = composite.compute_composite(rj, weights, penalties)
                 conf = composite.compute_confidence(rj, evidence_sources=len(_evidence(store, cid)),
@@ -221,7 +244,8 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
                "scored": len(scored), "opus_finalized": finalized,
                "selected_tiers": sorted(tiers) if tiers is not None else None,
                "cost_usd": round(getattr(client, "spent_usd", 0.0), 2),
-               "api_calls": getattr(client, "calls", 0)}
+               "api_calls": getattr(client, "calls", 0),
+               "web_searches": getattr(client, "web_searches", 0)}
     store.audit(stage="stage4", action="scored", reason="scoring_done", run_id=rid, detail=summary)
     log.info("stage4: %s", summary)
     return summary

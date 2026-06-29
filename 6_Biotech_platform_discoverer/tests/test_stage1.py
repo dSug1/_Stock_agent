@@ -97,17 +97,13 @@ def test_reversibility_retag_readmits_when_evidence_arrives(store):
     assert summary["readmitted"] == 1
 
 
-def test_stage1_tags_from_harvested_evidence(store):
-    # description names no mechanism, but an OpenAlex concept whose term is in the vocab does
-    # (note: concepts must use a taxonomy synonym term, e.g. 'ubiquitin' — spelled-out names like
-    # 'histone deacetylase' won't match the abbreviation 'hdac'; a known limitation)
-    from platform_discoverer.models import Evidence
-    store.upsert_company(_co("c5", "A precision oncology company", name="Degrader-like"))
-    store.upsert_evidence(Evidence(company_id="c5", source="openalex",
-                                   payload={"top_concepts": ["Ubiquitin", "Proteolysis"]}))
-    stage1.run(store, TAGGER, CONFIG, run_id="r")
-    c = store.get_company("c5")
-    assert "ubiquitination_degradation" in c.ta_tags and c.stage1_excluded is False
+def test_stage1_company_text_includes_ctgov_conditions():
+    # the remaining harvested-evidence tagging signal after the D9 OpenAlex dismissal: ClinicalTrials
+    # conditions are folded into the text Stage 1 tags over (OpenAlex concepts are gone).
+    from platform_discoverer.models import Company
+    c = Company(company_id="c5", name="X", business_description="oncology")
+    text = stage1.company_text(c, {"ctgov": {"top_conditions": ["Ovarian Cancer", "Solid Tumor"]}})
+    assert "Ovarian Cancer" in text and "Solid Tumor" in text
 
 
 def test_require_ta_tag_false_does_not_exclude(store):

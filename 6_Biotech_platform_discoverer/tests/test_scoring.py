@@ -39,11 +39,10 @@ def _good_rubric(**over):
 def test_build_bundle_assembles_evidence():
     c = Company(company_id="c1", name="Acrivon Therapeutics", primary_ticker="ACRV",
                 business_description="phosphoproteomics platform", ta_tags=["menin_kmt2a"])
-    ev = {"openalex": {"works_count": 40, "h_index": 18, "top_concepts": ["Phosphoproteomics"]},
-          "ctgov": {"trial_count": 3, "phases": ["PHASE2"], "biomarker_or_cdx_language": True}}
+    ev = {"ctgov": {"trial_count": 3, "phases": ["PHASE2"], "biomarker_or_cdx_language": True}}
     b = rubric.build_bundle(c, ev)
     assert b["ticker"] == "ACRV" and b["stage1_mechanism_tags"] == ["menin_kmt2a"]
-    assert b["publications"]["works_count"] == 40
+    assert "publications" not in b and "pedigree" not in b   # D9: web-researched, not pre-harvested
     assert b["clinical"]["biomarker_or_companion_dx_language"] is True
 
 
@@ -53,10 +52,16 @@ def test_rubric_system_prompt_includes_vocab_and_pedigree_guidance():
     assert "PEDIGREE" in s and "FDA" in s            # weighs founder pedigree + FDA breakthroughs
 
 
-def test_rubric_system_prompt_has_data_coverage_fairness_rule():
+def test_rubric_system_prompt_has_web_research_and_fairness():
     s = rubric.build_rubric_system(TAXONOMY)
-    assert "DATA-COVERAGE FAIRNESS" in s and "coverage gap" in s
-    assert "data_coverage_note" in s                 # rule (10) references the bundle field
+    assert "DATA-COVERAGE FAIRNESS" in s
+    assert "web_search" in s and "pedigree" in s     # D9: research publications + pedigree via web
+
+
+def test_rubric_system_prompt_injects_prestige_list():
+    s = rubric.build_rubric_system(TAXONOMY, {"awardees": [
+        {"name": "Carolyn Bertozzi", "recognition": "Nobel 2022"}]})
+    assert "PRESTIGE LIST" in s and "Carolyn Bertozzi" in s
 
 
 def test_build_bundle_data_coverage_note_when_signals_absent():
@@ -69,27 +74,28 @@ def test_build_bundle_data_coverage_note_when_signals_absent():
     assert "ABSENT DATA" in note
 
 
-def test_build_bundle_no_coverage_note_when_all_present():
+def test_build_bundle_no_coverage_note_when_patents_present():
     c = Company(company_id="c1", name="Full Bio", primary_ticker="FULL")
-    b = rubric.build_bundle(c, {
-        "openalex": {"works_count": 10},
-        "pedigree": {"top_authors": [{"name": "X"}]},
-        "patents": {"patent_count": 3},
-        "ctgov": {"trial_count": 2}})
-    assert "data_coverage_note" not in b
+    b = rubric.build_bundle(c, {"patents": {"patent_count": 3}, "ctgov": {"trial_count": 2}})
+    assert "data_coverage_note" not in b   # patents present → no gap note (D9)
 
 
-def test_build_bundle_includes_pedigree_patents_and_fda():
+def test_build_bundle_includes_patents_and_fda():
     c = Company(company_id="c1", name="Acrivon Therapeutics", primary_ticker="ACRV",
                 business_description="granted FDA Breakthrough Device designation")
-    ev = {"pedigree": {"top_authors": [{"name": "Carolyn Bertozzi", "h_index": 150}],
-                       "prestige_recognitions": [{"name": "Carolyn Bertozzi",
-                                                  "recognition": "Nobel 2022"}]},
-          "patents": {"patent_count": 12, "method_platform_titles": 8, "composition_titles": 2}}
+    ev = {"patents": {"patent_count": 12, "method_platform_titles": 8, "composition_titles": 2}}
     b = rubric.build_bundle(c, ev)
-    assert b["pedigree"]["prestige_recognitions"][0]["recognition"] == "Nobel 2022"
     assert b["patent_estate"]["method_platform_titles"] == 8
     assert "Breakthrough Device" in b["fda_designations"]      # scanned from the description
+    assert "pedigree" not in b                                 # D9: pedigree is web-researched
+
+
+def test_build_bundle_coverage_note_when_patents_absent():
+    c = Company(company_id="c1", name="Tiny Bio", primary_ticker="TINY",
+                business_description="platform")
+    b = rubric.build_bundle(c, {"ctgov": {"trial_count": 1}})   # no patents
+    assert "patent_estate NOT fetched" in b["data_coverage_note"]
+    assert "web_search" in b["data_coverage_note"]
 
 
 # ── validation ───────────────────────────────────────────────────────────────
@@ -157,6 +163,17 @@ def test_estimate_cost_scales_and_bounds():
     assert est["est_total_usd"] < stage4.estimate_cost(2000, CONFIG)["est_total_usd"]
 
 
+def test_estimate_includes_web_search_when_enabled():
+    est = stage4.estimate_cost(100, CONFIG)               # config has web_research.enabled: true
+    assert "web_search" in est["tiers"] and est["tiers"]["web_search"]["usd"] > 0
+
+
+def test_web_search_tool_shape():
+    from platform_discoverer.clients.anthropic_client import web_search_tool
+    t = web_search_tool(5)
+    assert t["type"] == "web_search_20260209" and t["name"] == "web_search" and t["max_uses"] == 5
+
+
 # ── Stage 4 orchestration with a fake client ────────────────────────────────
 
 class FakeClient:
@@ -167,14 +184,15 @@ class FakeClient:
         self.calls = 0
 
     def score_realtime(self, model, system, schema, bundle, max_tokens, *, validate=None,
-                       max_retries=3):
+                       max_retries=3, tools=None, max_pause_turns=4):
         self.calls += 1
         if schema is rubric.TRIAGE_SCHEMA:
             keep = (bundle.get("ticker") or "").startswith("A")
             return {"keep": keep, "prior": 0.6 if keep else 0.1, "reason": "fake"}
         return _good_rubric(ticker=bundle.get("ticker"))      # finalize re-score
 
-    def score_batch(self, model, system, schema, bundles, max_tokens, *, validate=None, **kw):
+    def score_batch(self, model, system, schema, bundles, max_tokens, *, validate=None, tools=None,
+                    **kw):
         self.calls += 1
         # one in-band (contested) and one clearly high, by ticker
         out = {}

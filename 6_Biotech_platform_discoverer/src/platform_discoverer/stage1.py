@@ -28,14 +28,11 @@ log = logging.getLogger(__name__)
 
 
 def company_text(company, evidence: dict | None = None) -> str:
-    """The text Stage 1 tags over: company fields + (when harvested) OpenAlex concepts + trial
-    conditions. OpenAlex research concepts are the mechanism-relevant signal (e.g. 'Phosphoproteomics',
-    'Histone deacetylase'); trial conditions are diseases but occasionally carry mechanism cues.
-    ``evidence`` maps source -> payload dict (from ``store.get_evidence``)."""
+    """The text Stage 1 tags over: company fields + (when harvested) trial conditions. Trial
+    conditions are diseases but occasionally carry mechanism cues. (OpenAlex concepts were dropped
+    with the D9 OpenAlex dismissal.) ``evidence`` maps source -> payload dict."""
     parts = [company.name, company.business_description, company.sector, company.industry]
     if evidence:
-        oa = evidence.get("openalex") or {}
-        parts.extend(oa.get("top_concepts") or [])
         ct = evidence.get("ctgov") or {}
         parts.extend(ct.get("top_conditions") or [])
     return " ".join(p for p in parts if p)
@@ -43,7 +40,7 @@ def company_text(company, evidence: dict | None = None) -> str:
 
 def _evidence_for(store: Store, company_id: str) -> dict:
     out: dict = {}
-    for src in ("openalex", "ctgov"):
+    for src in ("ctgov",):
         ev = store.get_evidence(company_id, src)
         if ev and ev.get("payload"):
             out[src] = ev["payload"]

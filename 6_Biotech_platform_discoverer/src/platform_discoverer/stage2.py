@@ -5,10 +5,12 @@ IP sources and persist it to the ``evidence`` table (one row per company+source,
 incremental re-runs). Raw-ish normalized summaries are stored once; downstream stages (embed/score)
 recompute against them without re-harvesting (reversibility §1.4).
 
-Sources wired here (the free, high-signal core): **OpenAlex** (publications/concepts/impact),
-**ClinicalTrials.gov** (trials/phases/biomarker-Dx language), **PatentsView** (method/platform
-patents — key-gated, inert without a key). EDGAR full-text and IR-poster scraping are spec sources
-deferred to a follow-up (they need filing-text fetch + per-company IR-URL discovery).
+Sources wired here (the free, high-signal core): **ClinicalTrials.gov** (trials/phases/biomarker-Dx
+language) and **PatentsView** (method/platform patents — key-gated, inert without a key). OpenAlex
+(publications + author pedigree) was DISMISSED (decisions.md D9): its institution registry covers <5%
+of small-cap biotech and it rate-limits on a depleting $-budget — publications + scientific pedigree
+are now researched by the Stage-4 Claude call via the web_search server tool instead. EDGAR full-text
+and IR-poster scraping remain deferred spec sources.
 
 Incremental: a company+source harvested within ``incremental_ttl_days`` is skipped (polite + cheap).
 Companies marked ``stage1_excluded`` are skipped unless ``stage1_filters.include_excluded`` — the
@@ -24,8 +26,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from . import prestige
-from .clients import _net, clinicaltrials, openalex, patentsview
+from .clients import _net, clinicaltrials, patentsview
 from .models import Evidence
 from .store import Store, now_iso
 
@@ -53,42 +54,17 @@ def _is_fresh(fetched_at: Optional[str], ttl_days: int) -> bool:
 def build_harvesters(config: dict) -> dict[str, Harvester]:
     """Map source name -> harvester(company)->(summary, cursor)|None, per config + env keys."""
     s2 = config.get("stage2", {}) or {}
-    enabled = s2.get("sources", ["openalex", "ctgov", "patents", "pedigree"])
-    mailto = s2.get("openalex_mailto") or _openalex_mailto_from_ua()
-    oa_lim = _net.RateLimiter(float(s2.get("openalex_rate_per_sec", 8)))
+    enabled = s2.get("sources", ["ctgov", "patents"])
     ct_lim = _net.RateLimiter(float(s2.get("ctgov_rate_per_sec", 4)))
     pv_lim = _net.RateLimiter(float(s2.get("patents_rate_per_sec", 4)))
     pv_key = os.getenv("PATENTSVIEW_API_KEY", "").strip() or None
-    prestige_idx = prestige.build_index(prestige.load_prestige(
-        s2.get("prestige_labs", "config/prestige_labs.yaml")))
 
     harvesters: dict[str, Harvester] = {}
-    if "openalex" in enabled:
-        harvesters["openalex"] = lambda c: openalex.fetch(c.name, limiter=oa_lim, mailto=mailto)
     if "ctgov" in enabled:
         harvesters["ctgov"] = lambda c: clinicaltrials.fetch(c.name, limiter=ct_lim)
     if "patents" in enabled:
         harvesters["patents"] = lambda c: patentsview.fetch(c.name, limiter=pv_lim, api_key=pv_key)
-    if "pedigree" in enabled:
-        harvesters["pedigree"] = lambda c: _harvest_pedigree(c.name, oa_lim, mailto, prestige_idx)
     return harvesters
-
-
-def _harvest_pedigree(name, limiter, mailto, prestige_idx) -> Optional[tuple[dict, str]]:
-    """Founder/scientific pedigree: the company's top OpenAlex authors + prestige-awardee matches."""
-    authors = openalex.fetch_top_authors(name, limiter=limiter, mailto=mailto) or []
-    matches = prestige.match([a["name"] for a in authors], prestige_idx)
-    if not authors and not matches:
-        return None
-    summary = {"top_authors": authors[:8], "prestige_recognitions": matches,
-               "max_h_index": max((a.get("h_index") or 0 for a in authors), default=0)}
-    return summary, str(summary["max_h_index"])
-
-
-def _openalex_mailto_from_ua() -> Optional[str]:
-    import re
-    m = re.search(r"[\w.+-]+@[\w.-]+", _net.user_agent())
-    return m.group(0) if m else None
 
 
 def run(store: Store, config: dict, *, run_id: str | None = None, incremental: bool = True,

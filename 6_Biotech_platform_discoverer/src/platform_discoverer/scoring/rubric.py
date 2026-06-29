@@ -27,10 +27,8 @@ def build_bundle(company, evidence: dict[str, Any]) -> dict:
     identity + cap + description + Stage-1 tags + harvested publication/clinical/patent summaries.
     """
     from ..clients.clinicaltrials import scan_designations
-    oa = evidence.get("openalex") or {}
     ct = evidence.get("ctgov") or {}
     pv = evidence.get("patents") or {}
-    ped = evidence.get("pedigree") or {}
     bundle: dict[str, Any] = {
         "company": company.name,
         "ticker": company.primary_ticker,
@@ -39,17 +37,9 @@ def build_bundle(company, evidence: dict[str, Any]) -> dict:
         "mktcap_usd_fd": company.mktcap_usd_fd,
         "business_description": company.business_description,
         "stage1_mechanism_tags": company.ta_tags,         # coarse keyword candidates (D refines these)
+        # NOTE (D9): publications + scientific/founder pedigree are NOT pre-harvested — the scorer
+        # researches them live via web_search. Do not expect a publications/pedigree field here.
     }
-    if oa:
-        bundle["publications"] = {
-            "works_count": oa.get("works_count"), "h_index": oa.get("h_index"),
-            "cited_by_count": oa.get("cited_by_count"), "top_concepts": oa.get("top_concepts"),
-        }
-    if ped:
-        bundle["pedigree"] = {                            # founder / scientific pedigree (§5.6.1)
-            "top_authors": ped.get("top_authors"),
-            "prestige_recognitions": ped.get("prestige_recognitions"),
-        }
     if pv:
         bundle["patent_estate"] = {
             "patent_count": pv.get("patent_count"),
@@ -68,18 +58,16 @@ def build_bundle(company, evidence: dict[str, Any]) -> dict:
     if designations:
         bundle["fda_designations"] = designations
 
-    # DATA-COVERAGE FAIRNESS (D8): name the signals that simply weren't available so the model treats
-    # them as ABSENT DATA, not negative evidence. OpenAlex indexes <5% of small/early-stage biotech as
-    # institutions, so a missing publications/pedigree signal is overwhelmingly a coverage gap — it
-    # must NOT drag the proprietary-data (A) axis. See rubric rule (10).
-    gaps = [label for present, label in
-            ((oa, "publications"), (ped, "pedigree"), (pv, "patent_estate")) if not present]
-    if gaps:
+    # DATA-COVERAGE FAIRNESS (D8): if the patent estate wasn't fetched (no PatentsView key / no
+    # assignee match), say so — ABSENT DATA, not negative evidence. Publications + pedigree are not
+    # listed here: the scorer researches those itself via web_search (D9), so their absence from the
+    # bundle is expected, not a gap.
+    if not pv:
         bundle["data_coverage_note"] = (
-            "NOT AVAILABLE from the data sources (ABSENT DATA, not negative evidence — small/early "
-            "biotech routinely have no OpenAlex institution record or indexed patents): "
-            + ", ".join(gaps) + ". Do not lower any axis for these; score from the evidence that IS "
-            "present (description, mechanism tags, clinical, FDA designations, and any present signals)."
+            "patent_estate NOT fetched (no PatentsView key or no assignee match) — ABSENT DATA, not "
+            "negative evidence; do not lower any axis for it. RESEARCH publications + scientific/founder "
+            "pedigree via web_search per the rubric; score from description, mechanism tags, clinical, "
+            "FDA designations, and your web findings."
         )
     return bundle
 
@@ -92,8 +80,14 @@ high-dimensional DATA-GENERATION engine + a COMPUTATIONAL INFERENCE layer (optio
 + EXTERNAL or wet-lab VALIDATION + anchoring to an in-scope biological MECHANISM + a TRANSLATIONAL
 bridge (companion Dx or biomarker-defined clinical assets).
 
-Score ONLY from the supplied evidence (publications, patents, trial registrations, descriptions).
-Treat investor-relations adjectives as near-worthless absent peer-reviewed / patent / wet-lab backing.
+Score from the supplied evidence bundle (description, mechanism tags, clinical trials, patent estate,
+FDA designations) AND from your own WEB RESEARCH. You have a web_search tool: USE IT to find the
+company's peer-reviewed publications (volume, venues, citation impact, whether the data engine is
+described in the literature) and its FOUNDER / SCIENTIFIC PEDIGREE (founders, SAB, key authors — their
+labs, h-index tier, and any major recognitions). Run a few targeted searches (e.g. "<company> founders
+scientific advisory board", "<company> Nature OR Science publication platform", "<company> CEO PhD lab")
+before scoring; ground every claim in a real source and NEVER invent a citation or a name. Treat
+investor-relations adjectives as near-worthless absent peer-reviewed / patent / wet-lab backing.
 
 Rules:
 (1) The AI / foundation-model axis (B) is high-value but NOT required — strong proprietary data +
@@ -106,12 +100,13 @@ Rules:
     vocabulary, say so. B and C cannot score high without external evidence.
 (5) Carry inferred values as inferences, not facts; never invent citations — if evidence is absent,
     score low and say why. Scores are 0-5 integers (composite/confidence are 0-1).
-(6) FOUNDER / SCIENTIFIC PEDIGREE is a HIGH-PRECISION signal: prestige-lab lineage, high-h-index
-    authors, and major recognitions (Nobel / NAS / Lasker / Breakthrough Prize / foundation-model-in-
-    biology authors) materially raise confidence that the proprietary-data engine (A) is real and
-    deep. Weigh the `pedigree` field accordingly and name any prestige recognition in the memo. A
-    thin author list WHEN a `pedigree` field IS present is mildly informative (modest A-confidence
-    haircut); but pedigree ENTIRELY ABSENT is a coverage gap, NOT a signal — see rule (10).
+(6) FOUNDER / SCIENTIFIC PEDIGREE is a HIGH-PRECISION signal you must RESEARCH via web_search:
+    prestige-lab lineage, high-h-index authors, and major recognitions (Nobel / NAS / Lasker /
+    Breakthrough Prize / foundation-model-in-biology authors) materially raise confidence that the
+    proprietary-data engine (A) is real and deep. Search for the founders/SAB, match them against the
+    PRESTIGE LIST below, and name any prestige recognition in the memo with its source. If web search
+    genuinely surfaces NO notable pedigree, that is mild evidence (modest A-confidence haircut), not a
+    zero — see rule (10); never fabricate a founder or a lab affiliation.
 (7) AWARDS & FDA BREAKTHROUGHS corroborate translation/validation: FDA designations (Breakthrough
     Therapy/Device, RMAT, Fast Track, Orphan, PRIME) and external recognitions lift E (and sometimes
     C). Treat them as CORROBORATION, not proof — they don't substitute for the underlying proprietary
@@ -124,15 +119,14 @@ Rules:
     exists). A low E (no clinical assets yet) for a clearly early company should lower the score only
     modestly, not dominate it; the absence of late-stage trials is NOT evidence against a real data
     engine. Reserve low A/C scores for companies that lack the data/validation, not for youth.
-(10) DATA-COVERAGE FAIRNESS (takes precedence over rule 5 for missing OpenAlex/patent signals):
-    OpenAlex indexes fewer than ~5% of small/early-stage biotech as institutions, so an absent
-    `publications`/`pedigree` (or `patent_estate`) is OVERWHELMINGLY a coverage gap, NOT evidence
-    against the platform. When `data_coverage_note` lists a missing signal, DO NOT lower A (or any
-    axis) for that absence — score from the evidence that IS present (description, mechanism tags,
-    clinical, FDA). Rule 5's "score low if evidence is absent" means the COMPANY'S OWN evidence is
-    genuinely weak, never that a single source (OpenAlex/patents) failed to index it. A small company
-    with a credible described data engine + in-scope mechanism should NOT be docked merely for having
-    no OpenAlex footprint.
+(10) DATA-COVERAGE FAIRNESS (takes precedence over rule 5): a SIGNAL YOU COULD NOT FIND is not
+    evidence against the platform. If web search surfaces few/no publications for a small/early
+    company, or `data_coverage_note` says the patent estate wasn't fetched, do NOT dock A (or any
+    axis) for the gap — small biotech routinely has a thin public footprint. Score from what you DID
+    establish (described data engine, mechanism, clinical, FDA, any web findings). Rule 5's "score low
+    if evidence is absent" means the COMPANY'S OWN substance is genuinely weak (vapor, no real data
+    engine), never that the public record is sparse. A credible described data engine + in-scope
+    mechanism should NOT be docked merely for a small web/patent footprint.
 
 Calibration anchor (Acrivon Therapeutics — desired behaviour): A=5 (proprietary ~120k-phosphosite
 drug-response dataset is the moat), B=3 capped-not-maxed (ESM-2 ensemble is disclosed/replicable —
@@ -144,11 +138,30 @@ D_mechanism.mechanism_ids must be drawn from this controlled vocabulary (id — 
 """
 
 
-def build_rubric_system(taxonomy: dict) -> str:
-    """The full scoring system prompt + the controlled mechanism vocabulary (cached across companies)."""
+def _prestige_block(prestige: dict | None) -> str:
+    """Render the curated prestige awardees/labs as a reference list for web-pedigree matching (D9)."""
+    if not prestige:
+        return ""
+    names = []
+    for a in (prestige.get("awardees") or []):
+        if a.get("name"):
+            names.append(f"  {a['name']}" + (f" — {a.get('recognition')}" if a.get("recognition") else ""))
+    for lab in (prestige.get("labs") or []):
+        if lab.get("pi"):
+            names.append(f"  {lab['pi']} — {lab.get('lab', '')} ({lab.get('institution', '')})".rstrip())
+    if not names:
+        return ""
+    return ("\n\nPRESTIGE LIST (match founders/SAB found via web search against these high-precision "
+            "names; a match materially lifts A-confidence — name it + its source in the memo):\n"
+            + "\n".join(names))
+
+
+def build_rubric_system(taxonomy: dict, prestige: dict | None = None) -> str:
+    """The full scoring system prompt + the controlled mechanism vocabulary + the prestige list
+    (cached across companies). ``prestige`` is the parsed ``prestige_labs.yaml`` (awardees + labs)."""
     lines = [f"  {m['id']} — {m['branch']} — {m.get('label', '')}"
              for m in (taxonomy.get("mechanisms") or [])]
-    return (_RUBRIC_PREFACE + "\n".join(lines) +
+    return (_RUBRIC_PREFACE + "\n".join(lines) + _prestige_block(prestige) +
             "\n\nReturn ONLY the JSON object specified by the schema, no preamble.")
 
 
