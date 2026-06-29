@@ -93,6 +93,7 @@ class Score:
     E: Optional[float] = None
     composite: Optional[float] = None
     confidence: Optional[float] = None
+    config_hash: Optional[str] = None    # scoring-config hash at score time (§12 incremental re-runs)
 
 
 @dataclass(frozen=True)

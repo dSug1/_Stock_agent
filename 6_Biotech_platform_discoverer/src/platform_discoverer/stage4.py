@@ -31,11 +31,16 @@ _EVIDENCE_SOURCES = ("ctgov", "patents")   # OpenAlex/pedigree dismissed (D9) �
 
 # ── candidate set + bundles ─────────────────────────────────────────────────
 
-def _scored_within(store: Store, company_id: str, ttl_days: int) -> bool:
-    """True if the company has a Claude score newer than ``ttl_days`` (rescore-TTL guard)."""
-    last = store.last_scored_at(company_id)
+def _scored_within(store: Store, company_id: str, ttl_days: int,
+                   config_hash: Optional[str] = None) -> bool:
+    """True if the company has a fresh score that is still VALID — i.e. newer than ``ttl_days`` AND
+    scored under the current scoring config. A config change (§12) invalidates the TTL skip so the
+    company is re-scored; ``config_hash=None`` keeps the old TTL-only behaviour."""
+    last, last_hash = store.last_score_meta(company_id)
     if not last or ttl_days <= 0:
         return False
+    if config_hash is not None and last_hash != config_hash:
+        return False                                   # scoring config changed → not "fresh" anymore
     try:
         ts = datetime.fromisoformat(last)
     except ValueError:
@@ -60,10 +65,11 @@ def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False
         tset = set(tiers)
         cos = [c for c in cos if tiering.compute_tier(c, config) in tset]
     if not force:
-        # rescore-TTL: a ticker scored within the last year is not re-analysed (saves cost) unless
-        # --force-rescore. This is the "no need to repeat within 1 year unless we reset" guard.
+        # rescore-TTL: a ticker scored within the last year UNDER THE CURRENT SCORING CONFIG is not
+        # re-analysed (saves cost) unless --force-rescore. A scoring-config change (§12) re-opens it.
         ttl = int(s4.get("rescore_ttl_days", 365))
-        cos = [c for c in cos if not _scored_within(store, c.company_id, ttl)]
+        chash = cfg.config_hash(config)
+        cos = [c for c in cos if not _scored_within(store, c.company_id, ttl, chash)]
     return cos
 
 
@@ -231,14 +237,16 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
                                "model": s4["finalize_model"]}
                 finalized += 1
 
-    # Persist
+    # Persist (stamp each score with the scoring-config hash for §12 config-change re-runs)
     rid = run_id or now_iso()
+    chash = cfg.config_hash(config)
     for cid, s in scored.items():
         ax = composite.axis_scores(s["rubric"])
         store.record_score(Score(company_id=cid, run_id=rid, model=s["model"], json=s["rubric"],
                                  A=ax["A_proprietary_data"], B=ax["B_compute_engine"],
                                  C=ax["C_validation"], D=ax["D_mechanism"], E=ax["E_translation"],
-                                 composite=s["composite"], confidence=s["confidence"]), run_id=rid)
+                                 composite=s["composite"], confidence=s["confidence"]),
+                           run_id=rid, config_hash=chash)
 
     summary = {"mode": "dispatch", "candidates": len(bundles), "triage_killed": killed,
                "scored": len(scored), "opus_finalized": finalized,

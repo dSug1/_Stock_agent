@@ -27,7 +27,7 @@ def _co(company_id="c1", name="Acrivon Therapeutics", **kw) -> Company:
 # ── Schema / migrations ─────────────────────────────────────────────────────
 
 def test_schema_version_set(store):
-    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_all_seven_tables_exist(store):
@@ -41,7 +41,7 @@ def test_migrations_idempotent(tmp_path):
     path = tmp_path / "store.db"
     Store.open(path).close()
     s2 = Store.open(path)            # reopening must not re-run or error
-    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert s2.conn.execute("PRAGMA user_version").fetchone()[0] == 4
     s2.close()
 
 

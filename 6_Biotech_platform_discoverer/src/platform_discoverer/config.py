@@ -6,6 +6,8 @@ All tunables live in YAML so re-runs with different thresholds need no code chan
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,19 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
 def load_taxonomy(path: str | Path = DEFAULT_TAXONOMY) -> dict[str, Any]:
     """Load the controlled mechanism vocabulary (§4)."""
     return load_yaml(path)
+
+
+# The config sections that change a Claude SCORE. A change here forces a re-score (§12), bypassing
+# the rescore-TTL; changes to unrelated sections (e.g. Stage-0 nets) do not.
+SCORING_CONFIG_KEYS = ("stage4_scoring", "composite_weights", "penalties")
+
+
+def config_hash(config: dict[str, Any] | None) -> str:
+    """Stable 16-hex hash of the SCORING-relevant config (§12 incremental re-runs). Deterministic:
+    sorted-key JSON so key order / whitespace never shift the hash."""
+    subset = {k: (config or {}).get(k) for k in SCORING_CONFIG_KEYS}
+    blob = json.dumps(subset, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def deletion_allowed_reasons(config: dict[str, Any] | None) -> frozenset[str]:

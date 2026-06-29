@@ -5,6 +5,20 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D11 (2026-06-29) — Incremental re-runs: a scoring-config change forces a re-score §12 (BUILT)
+
+§12 wants a config change to "force re-evaluation of affected stages." Built the scoring half:
+`config.config_hash(config)` = stable 16-hex hash of the SCORING-relevant sections only
+(`stage4_scoring` + `composite_weights` + `penalties`); schema **v4** adds `scores.config_hash`;
+`record_score` stamps it; `store.last_score_meta` returns (run_id, config_hash). `stage4._scored_within`
+now treats a score as fresh (TTL-skippable) ONLY if it's within `rescore_ttl_days` **AND** scored under
+the current hash — a scoring-config change (e.g. retuned weights/penalties or model) re-opens every
+ticker for re-scoring even inside the TTL; unrelated config edits (Stage-0 nets, regions) don't. Pre-v4
+scores have `config_hash=NULL` → treated as changed → re-scored once on the next run (correct: the D9
+web-research switch changed scoring, so those stale scores SHOULD re-run). 161 tests pass. The
+evidence-level half of §12 (recompute only companies with changed evidence) remains the existing
+Stage-2 incremental-TTL; the run_meta config_hash field is available for a future stage-wide gate.
+
 ## D10 (2026-06-29) — Run summary / observability §15 (BUILT)
 
 `observability.py` + `scripts/6_summary.py` emit a per-run Markdown digest →

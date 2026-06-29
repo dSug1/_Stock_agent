@@ -25,7 +25,7 @@ from .models import AuditEntry, Company, Evidence, Score
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class IllegalDeletionError(Exception):
@@ -149,7 +149,13 @@ def _migration_3(conn: sqlite3.Connection) -> None:
     conn.executescript("ALTER TABLE companies ADD COLUMN ipo_date TEXT;")
 
 
-_MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3}
+def _migration_4(conn: sqlite3.Connection) -> None:
+    # §12 incremental re-runs: stamp each score with the scoring-config hash so a config change forces
+    # a re-score (bypassing the rescore-TTL). NULL on pre-v4 rows → treated as "config changed".
+    conn.executescript("ALTER TABLE scores ADD COLUMN config_hash TEXT;")
+
+
+_MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4}
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
@@ -371,6 +377,13 @@ class Store:
             "SELECT MAX(run_id) FROM scores WHERE company_id=?", (company_id,)).fetchone()
         return row[0] if row and row[0] else None
 
+    def last_score_meta(self, company_id: str) -> tuple[Optional[str], Optional[str]]:
+        """(latest run_id, its config_hash) for a company — the §12 config-change check input."""
+        row = self.conn.execute(
+            "SELECT run_id, config_hash FROM scores WHERE company_id=? ORDER BY run_id DESC LIMIT 1",
+            (company_id,)).fetchone()
+        return (row["run_id"], row["config_hash"]) if row else (None, None)
+
     def count_evidence(self, source: Optional[str] = None) -> int:
         if source:
             return self.conn.execute(
@@ -378,15 +391,18 @@ class Store:
         return self.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
 
     # -- scores --
-    def record_score(self, score: Score, *, run_id: Optional[str] = None) -> None:
+    def record_score(self, score: Score, *, run_id: Optional[str] = None,
+                     config_hash: Optional[str] = None) -> None:
         self.conn.execute(
-            "INSERT INTO scores(company_id, run_id, model, json, A, B, C, D, E, composite, confidence) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+            "INSERT INTO scores(company_id, run_id, model, json, A, B, C, D, E, composite, confidence, "
+            "config_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(company_id, run_id) DO UPDATE SET model=excluded.model, json=excluded.json, "
             "A=excluded.A, B=excluded.B, C=excluded.C, D=excluded.D, E=excluded.E, "
-            "composite=excluded.composite, confidence=excluded.confidence",
+            "composite=excluded.composite, confidence=excluded.confidence, "
+            "config_hash=excluded.config_hash",
             (score.company_id, score.run_id, score.model, _json_or_none(score.json),
-             score.A, score.B, score.C, score.D, score.E, score.composite, score.confidence),
+             score.A, score.B, score.C, score.D, score.E, score.composite, score.confidence,
+             config_hash),
         )
         self.conn.commit()
         self.audit(stage="stage4", action="scored", company_id=score.company_id,
@@ -474,10 +490,12 @@ def _row_to_company(row: sqlite3.Row) -> Company:
 
 
 def _row_to_score(row: sqlite3.Row) -> Score:
+    keys = row.keys()
     return Score(
         company_id=row["company_id"], run_id=row["run_id"], model=row["model"],
         json=_loads(row["json"], {}), A=row["A"], B=row["B"], C=row["C"], D=row["D"], E=row["E"],
         composite=row["composite"], confidence=row["confidence"],
+        config_hash=row["config_hash"] if "config_hash" in keys else None,
     )
 
 

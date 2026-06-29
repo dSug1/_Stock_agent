@@ -231,12 +231,34 @@ def test_rescore_ttl_skips_recently_scored(store):
     from platform_discoverer.store import now_iso
     _seed_scoring(store)                                  # a1/a2/x1
     store.record_score(Score(company_id="a1", run_id=now_iso(), model="claude-sonnet-4-6",
-                             composite=0.8), run_id=now_iso())
-    # a1 scored just now -> excluded from due candidates; a2/x1 still due
+                             composite=0.8), run_id=now_iso(), config_hash=cfg.config_hash(CONFIG))
+    # a1 scored just now under the current config -> excluded from due candidates; a2/x1 still due
     due = {c.company_id for c in stage4._candidates(store, CONFIG)}
     assert "a1" not in due and {"a2", "x1"} <= due
     # --force-rescore re-includes a1 (the reset)
     assert "a1" in {c.company_id for c in stage4._candidates(store, CONFIG, force=True)}
+
+
+def test_config_hash_scopes_to_scoring_sections():
+    import copy
+    h0 = cfg.config_hash(CONFIG)
+    non_scoring = copy.deepcopy(CONFIG); non_scoring.setdefault("run", {})["regions"] = ["XX"]
+    assert cfg.config_hash(non_scoring) == h0             # unrelated change → same hash
+    scoring = copy.deepcopy(CONFIG); scoring["composite_weights"]["A_proprietary_data"] = 0.99
+    assert cfg.config_hash(scoring) != h0                 # scoring change → different hash
+
+
+def test_config_change_forces_rescore_within_ttl(store):
+    import copy
+    from platform_discoverer.models import Score
+    from platform_discoverer.store import now_iso
+    _seed_scoring(store)
+    store.record_score(Score(company_id="a1", run_id=now_iso(), model="m", composite=0.8),
+                       run_id=now_iso(), config_hash=cfg.config_hash(CONFIG))
+    assert "a1" not in {c.company_id for c in stage4._candidates(store, CONFIG)}   # fresh + same cfg
+    changed = copy.deepcopy(CONFIG)
+    changed["penalties"]["marketing_verdict_factor"] = 0.4                          # scoring change
+    assert "a1" in {c.company_id for c in stage4._candidates(store, changed)}       # §12 re-opens it
 
 
 def test_rescore_ttl_expired_is_due(store):
