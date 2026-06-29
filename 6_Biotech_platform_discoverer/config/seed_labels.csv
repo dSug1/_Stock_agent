@@ -6,8 +6,11 @@ BOLD,positive,Boundless Bio,ecDNA oncology platform positive
 RXRX,borderline,Recursion Pharmaceuticals,AI-discovery; large phenomics data but validation/CDx thin
 SDGR,borderline,Schrodinger,physics-sim platform; architecture moat not proprietary-data moat
 RLAY,borderline,Relay Therapeutics,motion-based drug discovery; borderline data-vs-architecture
-CRL,negative,Charles River Laboratories,pure CRO — services not a platform
-MEDP,negative,Medpace Holdings,pure CRO — services not a platform
-ICLR,negative,ICON plc,pure CRO — services not a platform
-BRKR,negative,Bruker,tools/instruments vendor — not a drug platform
-A,negative,Agilent Technologies,tools/instruments vendor — not a drug platform
+CRL,negative,Charles River Laboratories,pure CRO — services not a platform (note: >$3B, cut at Stage 0)
+MEDP,negative,Medpace Holdings,pure CRO — services not a platform (note: >$3B, cut at Stage 0)
+ICLR,negative,ICON plc,pure CRO — services not a platform (note: >$3B, cut at Stage 0)
+BRKR,negative,Bruker,tools/instruments vendor — not a drug platform (note: >$3B, cut at Stage 0)
+A,negative,Agilent Technologies,tools/instruments vendor — not a drug platform (note: >$3B, cut at Stage 0)
+TKNO,negative,Alpha Teknova,IN-BAND tools/reagents vendor (consumables) — builder-proposed negative; reaches the scorer
+MRVI,negative,Maravai LifeSciences,IN-BAND nucleic-acid reagents/tools vendor — builder-proposed negative; reaches the scorer
+NEOG,negative,Neogen,IN-BAND food/animal safety testing products — builder-proposed negative; reaches the scorer

@@ -50,7 +50,17 @@ Wired into the run `.bat` after Stage 5 (free). 148 tests pass (was 137).
 FAILURE: positives **TNGX ($5.1B)** and **IDYA ($3.5B)** (+ borderline **RLAY $4.0B**) were deleted at
 Stage 0b as `mktcap_out_of_band` — they've re-rated ABOVE the `$50M–3B` ceiling. Precision/recall came
 out 1.0/1.0 but over only 1 scored positive (ACRV) + 0 scored negatives (all 5 negatives correctly
-deleted out-of-band) — not yet statistically meaningful. **Open analyst decision (handoff PENDING 0b):**
+deleted out-of-band) — not yet statistically meaningful.
+
+**CALIBRATION PASS 2 (2026-06-29) — now a genuine pass.** Two fixes made the validation meaningful:
+(1) **triage-kill = predicted-negative** — `seed_eval` now reads the Stage-4 audit `cut`/`triage_kill`
+rows, so a Haiku kill counts as the pipeline's negative verdict (killed positive = FN, killed negative
+= TN), not an ignored "unscored". (2) **in-band negatives added** (`TKNO`/`MRVI`/`NEOG` — small/mid-cap
+tools/reagents vendors that survive Stage 0 and reach the scorer; the original CRO/tools negatives are
+all >$3B and cut before scoring). Plus the seeds were **re-harvested** (OpenAlex 429 cleared — see the
+ipo gotcha) so BOLD got a real bundle. Result: **P/R/F1 = 1.00/1.00/1.00 over TP=2 (ACRV 0.904, BOLD
+0.800) · TN=3 (TKNO/MRVI/NEOG all triage-killed) · FP=FN=0**. The screen recovers known positives and
+rejects known negatives. Borderline: RXRX 0.744 (pred. +), SDGR 0.568 (just under 0.6). 151 tests. **Open analyst decision (handoff PENDING 0b):**
 raise `market_cap.max_usd` so graduated positives stay in, vs. accept the band targets the early window
 and these are out-of-scope graduates. The band is analyst-authored (§0.1) — left unchanged pending that
 call. This is exactly the calibration loop §13 exists for.

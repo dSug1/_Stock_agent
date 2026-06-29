@@ -108,6 +108,15 @@ def _has_evidence(store: Store, company_id: str) -> bool:
         "SELECT 1 FROM evidence WHERE company_id=? LIMIT 1", (company_id,)).fetchone() is not None
 
 
+def _triage_killed(store: Store, company_id: str) -> bool:
+    """True if Stage-4 Haiku triage actively rejected this company (an audit ``cut`` / ``triage_kill``
+    row). The triage is recall-safe ("when unsure, KEEP"), so a kill IS the pipeline's negative
+    decision — counted as a predicted-negative in the confusion matrix (vs merely 'unscored')."""
+    return store.conn.execute(
+        "SELECT 1 FROM audit_log WHERE company_id=? AND action='cut' AND reason='triage_kill' "
+        "LIMIT 1", (company_id,)).fetchone() is not None
+
+
 def _seed_status(store: Store, seed: SeedLabel, config: dict, scores: dict,
                  by_ticker: dict) -> dict:
     """Resolve one seed's position in the funnel."""
@@ -126,6 +135,12 @@ def _seed_status(store: Store, seed: SeedLabel, config: dict, scores: dict,
                 "composite": None, "tier": None}
     sc = scores.get(c.company_id)
     composite = sc.composite if sc else None
+    if sc is not None:
+        status = "scored"
+    elif _triage_killed(store, c.company_id):
+        status = "triage_killed"          # pipeline actively rejected → counts as predicted-negative
+    else:
+        status = "unscored"               # not evaluated yet → excluded from the confusion matrix
     return {
         **base, "in_store": True, "company_id": c.company_id,
         "tier": tiering.compute_tier(c, config),
@@ -133,7 +148,7 @@ def _seed_status(store: Store, seed: SeedLabel, config: dict, scores: dict,
         "has_evidence": _has_evidence(store, c.company_id),
         "scored": sc is not None, "composite": composite,
         "confidence": (sc.confidence if sc else None),
-        "status": "scored" if sc else "unscored",
+        "status": status,
     }
 
 
@@ -164,11 +179,16 @@ def evaluate(store: Store, config: dict, labels: Optional[list[SeedLabel]] = Non
     def predicted_positive(x):
         return x["composite"] is not None and x["composite"] >= threshold
 
-    # confusion matrix over SCORED positive/negative seeds
+    def evaluated(x):
+        # the pipeline rendered a verdict: a composite (scored) OR an active triage rejection
+        return x["status"] in ("scored", "triage_killed")
+
+    # confusion matrix over EVALUATED positive/negative seeds. A triage-kill = predicted-negative,
+    # so a killed positive is a recall miss (FN) and a killed negative is a correct rejection (TN).
     tp = sum(1 for x in pos if predicted_positive(x))
-    fn = sum(1 for x in pos if x["scored"] and not predicted_positive(x))
+    fn = sum(1 for x in pos if evaluated(x) and not predicted_positive(x))
     fp = sum(1 for x in neg if predicted_positive(x))
-    tn = sum(1 for x in neg if x["scored"] and not predicted_positive(x))
+    tn = sum(1 for x in neg if evaluated(x) and not predicted_positive(x))
     precision = tp / (tp + fp) if (tp + fp) else None
     recall = tp / (tp + fn) if (tp + fn) else None
     f1 = (2 * precision * recall / (precision + recall)
@@ -194,6 +214,7 @@ def evaluate(store: Store, config: dict, labels: Optional[list[SeedLabel]] = Non
             "tagged": sum(1 for x in group if x.get("tagged")),
             "with_evidence": sum(1 for x in group if x.get("has_evidence")),
             "scored": sum(1 for x in group if x.get("scored")),
+            "triage_killed": sum(1 for x in group if x["status"] == "triage_killed"),
             "predicted_positive": sum(1 for x in group if predicted_positive(x)),
         }
 
@@ -244,12 +265,14 @@ def build_report_md(result: dict, *, run_id: str) -> str:
     p.append(f"- Positives lost before scoring: {m['positives_lost_pre_scoring']}\n")
 
     p.append("## Per-stage survival\n")
-    p.append("| Group | n | in store | deleted | tagged | w/ evidence | scored | pred. positive |")
-    p.append("|:--|--:|--:|--:|--:|--:|--:|--:|")
+    p.append("| Group | n | in store | deleted | tagged | w/ evidence | scored | triage-killed "
+             "| pred. positive |")
+    p.append("|:--|--:|--:|--:|--:|--:|--:|--:|--:|")
     for g in ("positive", "negative", "borderline"):
         s = result["survival"][g]
         p.append(f"| {g} | {s['n']} | {s['in_store']} | {s['deleted']} | {s['tagged']} | "
-                 f"{s['with_evidence']} | {s['scored']} | {s['predicted_positive']} |")
+                 f"{s['with_evidence']} | {s['scored']} | {s.get('triage_killed', 0)} | "
+                 f"{s['predicted_positive']} |")
     p.append("")
 
     p.append("## Per-seed detail\n")

@@ -125,6 +125,21 @@ def test_survival_counts(store):
     assert surv["borderline"]["n"] == 1
 
 
+def test_triage_killed_counts_as_predicted_negative(store):
+    # a triage-kill is the pipeline's negative verdict: killed positive → FN, killed negative → TN
+    _co(store, "pk", "PK")
+    store.audit(stage="stage4", action="cut", company_id="pk", reason="triage_kill")
+    _co(store, "nk", "NK")
+    store.audit(stage="stage4", action="cut", company_id="nk", reason="triage_kill")
+    res = seed_eval.evaluate(store, CONFIG,
+                             [seed_eval.SeedLabel("PK", "positive"),
+                              seed_eval.SeedLabel("NK", "negative")], threshold=0.6)
+    m = res["metrics"]
+    assert (m["tp"], m["fp"], m["fn"], m["tn"]) == (0, 0, 1, 1)
+    assert {x["ticker"]: x["status"] for x in res["per_seed"]} == \
+        {"PK": "triage_killed", "NK": "triage_killed"}
+
+
 def test_threshold_changes_predictions(store):
     _seed_world(store)
     # at 0.85, PWIN(0.9) still TP but NHI(0.8) no longer predicted positive → FP drops to 0
