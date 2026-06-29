@@ -1,6 +1,6 @@
 # Acrivon-Pattern Screener — Seed Validation (§13)
 
-*Run `2026-06-29T03:49:22+00:00` · generated 2026-06-29 · decision threshold composite ≥ 0.6.*
+*Run `2026-06-29T04:15:40+00:00` · generated 2026-06-29 · decision threshold composite ≥ 0.6.*
 
 > ℹ️ **Graduated (accepted, D7):** positive(s) re-rated ABOVE the ceiling and cut by design: **TNGX, IDYA** — out-of-scope graduates, not a failure.
 
@@ -16,7 +16,7 @@
 |:--|--:|--:|--:|--:|--:|--:|--:|
 | positive | 4 | 2 | 2 | 1 | 2 | 1 | 1 |
 | negative | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| borderline | 3 | 2 | 1 | 1 | 1 | 1 | 1 |
+| borderline | 3 | 2 | 1 | 1 | 1 | 2 | 2 |
 
 ## Per-seed detail
 
@@ -26,11 +26,11 @@
 | **BOLD** | positive | unscored | 1 | — |  | Boundless Bio |
 | **IDYA** | positive | deleted | — | — | stage0b · mktcap_out_of_band (graduated $3,537M) | IDEAYA Biosciences |
 | **TNGX** | positive | deleted | — | — | stage0b · mktcap_out_of_band (graduated $5,124M) | Tango Therapeutics |
-| **RLAY** | borderline | deleted | — | — | stage0b · mktcap_out_of_band (graduated $4,045M) | Relay Therapeutics |
-| **RXRX** | borderline | scored | 2 | 0.656 |  | Recursion Pharmaceuticals |
-| **SDGR** | borderline | unscored | 2 | — |  | Schrodinger |
-| **A** | negative | deleted | — | — | stage0b · mktcap_out_of_band (graduated $38,414M) | Agilent Technologies |
-| **BRKR** | negative | deleted | — | — | stage0b · mktcap_out_of_band (graduated $9,272M) | Bruker |
-| **CRL** | negative | deleted | — | — | stage0b · mktcap_out_of_band (graduated $10,392M) | Charles River Laboratories |
-| **ICLR** | negative | deleted | — | — | stage0b · mktcap_out_of_band (graduated $13,012M) | ICON plc |
-| **MEDP** | negative | deleted | — | — | stage0b · mktcap_out_of_band (graduated $15,053M) | Medpace Holdings |
+| **RLAY** | borderline | deleted | — | — | stage0b · mktcap_out_of_band (too-large $4,045M) | Relay Therapeutics |
+| **RXRX** | borderline | scored | 2 | 0.744 |  | Recursion Pharmaceuticals |
+| **SDGR** | borderline | scored | 2 | 0.672 |  | Schrodinger |
+| **A** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $38,414M) | Agilent Technologies |
+| **BRKR** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $9,272M) | Bruker |
+| **CRL** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $10,392M) | Charles River Laboratories |
+| **ICLR** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $13,012M) | ICON plc |
+| **MEDP** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $15,053M) | Medpace Holdings |

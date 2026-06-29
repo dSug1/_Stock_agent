@@ -1,6 +1,6 @@
 # Acrivon-Pattern Listed-Biotech Screener — Shortlist
 
-*Run `2026-06-29T02:27:13+00:00` · generated 2026-06-29 · market-cap band $50,000,000–$3,000,000,000 · 6 scored companies (of 589 in store).*
+*Run `2026-06-29T04:11:14+00:00` · generated 2026-06-29 · market-cap band $50,000,000–$3,000,000,000 · 6 scored companies (of 589 in store).*
 
 Composite is the code-computed weighted rubric score (auditable; §10). `rank_score = composite` (lifecycle age-weighting OFF — `stage5.lifecycle.enabled`).
 
@@ -8,33 +8,33 @@ Composite is the code-computed weighted rubric score (auditable; §10). `rank_sc
 
 | # | Ticker | Company | Composite | Rank | Conf | Moat | Substance | Mechanism |
 |--:|:--|:--|--:|--:|--:|:--|:--|:--|
-| 1 | **ACRV** | Acrivon Therapeutics, Inc. | 0.904 | 0.904 | 0.50 | data | substantive | adp_ribosylation_parp_tankyrase |
+| 1 | **ACRV** | Acrivon Therapeutics, Inc. | 0.904 | 0.904 | 0.50 | data | substantive | — |
 | 2 | **GRAL** | GRAIL, Inc. | 0.760 | 0.760 | 0.50 | data | substantive | — |
-| 3 | **ABSI** | Absci Corp | 0.704 | 0.704 | 0.50 | mixed | substantive | tnf_il_axis, treg_modulation |
-| 4 | **RXRX** | RECURSION PHARMACEUTICALS, INC. | 0.656 | 0.656 | 0.35 | mixed | mixed | lsd1_demethylase, menin_kmt2a, adp_ribosylation_parp_tankyrase |
-| 5 | **SDGR** | Schrodinger | 0.462 | 0.462 | 0.15 | architecture | mixed | — |
+| 3 | **RXRX** | RECURSION PHARMACEUTICALS, INC. | 0.744 | 0.744 | 0.35 | data | mixed | lsd1_demethylase, menin_kmt2a, ubiquitination_degradation |
+| 4 | **ABSI** | Absci Corp | 0.704 | 0.704 | 0.50 | mixed | substantive | tnf_il_axis, treg_modulation |
+| 5 | **SDGR** | Schrodinger, Inc. | 0.672 | 0.672 | 0.30 | mixed | substantive | — |
 | 6 | **SANA** | Sana Biotechnology, Inc. | 0.402 | 0.402 | 0.35 | architecture | mixed | b_cell_depletion_degrader, tolerogenic_antigen_specific |
 
 ## Memos
 
 ### 1. Acrivon Therapeutics, Inc. (ACRV) — composite 0.904
 
-*exchange Nasdaq · country US · mkt cap $72M · confidence 0.50*
+*exchange Nasdaq · country US · mkt cap $72M · ~4 yr since IPO · confidence 0.50*
 
 **Axes:** A (proprietary data) 5/5 · B (compute) 3/5 · C (validation) 5/5 · D (mechanism) 4/5 · E (translation) 5/5
 
-**Moat (data):** The irreplaceable asset is the ~120k-phosphosite proprietary dataset and the wet-lab InViKA loop that continuously enriches it. The computational architecture (ESM-2 ensemble) is disclosed and replicable; competitors could run similar models on public data but cannot replicate the phosphoproteomic training corpus without equivalent years of mass-spec experimentation.
+**Moat (data):** The core moat is the proprietary phosphoproteomic drug-response dataset (~120k phosphosites, unique experimental profiling across drug-cell line-patient matrices). The computational architecture (ESM-2 ensemble, generative ML) is high-capability but largely replicable by well-resourced competitors; the dataset is not. OncoSignature companion Dx value derives from data uniqueness, not model novelty.
 
-Acrivon is the calibration anchor for this scoring system and scores at ceiling on data (A=5), validation (C=5), and translation (E=5). The AP3 platform exemplifies the 'Acrivon pattern' by design: a massive internally generated phosphoproteomic dataset (~120k phosphosites) that cannot be replicated from public sources, a wet-lab InViKA validation loop providing continuous fresh ground truth (not just held-out metrics), external benchmarking against CPTAC and FLT4, and a drug-specific OncoSignature companion Dx co-developed with each clinical asset. Computational layer (B=3) is deliberately capped: the ESM-2 ensemble is capable but architecturally commoditizable — the moat is unambiguously in the data. Mechanism score (D=4) reflects genuine biological depth (CHK1/CHK2 and WEE1/PKMYT1 checkpoint kinases in replication-stressed tumors) but the controlled vocabulary does not contain a dedicated 'replication stress / DNA damage checkpoint' entry; adp_ribosylation_parp_tankyrase is the closest in-scope neighbor given synthetic lethality context. Scientific pedigree: founded with roots in phosphoproteomics mass spectrometry; platform concept aligns with academic leaders in systems-level kinase signaling. Key risk: ACR-368 is a CHK1/2 inhibitor class with historical toxicity issues in unselected patients — the entire investment thesis hinges on OncoSignature successfully enriching responders, which is currently being tested prospectively. Low market cap (~$72M) reflects binary clinical risk, not platform quality doubt.
+Acrivon is the CALIBRATION ANCHOR for this scoring system. Core moat: ~120,000-phosphosite proprietary drug-response phosphoproteomic dataset, generated internally via mass spectrometry and the InViKA wet-lab loop — this is not reconstructable from public databases. The AP3 platform uses ESM-2 protein language model ensembles (disclosed, replicable architecture) to infer kinase activity states and generate drug-specific OncoSignature companion diagnostics. Validation is multi-layered and external: InViKA wet-lab loop, CPTAC external benchmarking, and prospective clinical enrichment in ACR-368 Phase 1/2 trials. Lead asset ACR-368 (CHK1/CHK2 inhibitor) carries FDA Fast Track designation, reinforcing translational credibility. Scientific pedigree: founded by proteomics/systems biology researchers with peer-reviewed publication record in phosphoproteomics; approach originated from academic phosphoproteomic drug-response work. Strongest disconfirming evidence: tiny market cap, single-asset clinical risk, open-source ML architecture, and 'generative' label may slightly overstate AI novelty. Nonetheless, data + wet-lab validation + companion Dx combination is genuine and pattern-matching to the Acrivon archetype by definition.
 
-**Disconfirming:** Strongest disconfirming evidence: (1) ESM-2 model architecture is public and replicable — if a competitor generates comparable phosphoproteomic data, the inference layer provides no durable barrier; (2) 'generative' label in business description is arguably marketing — the platform is better characterized as a deep-learning predictive model over proprietary proteomics, not a true generative model in the LLM/diffusion sense; (3) market cap (~$72M) suggests market skepticism about near-term commercial translation despite strong scientific design; (4) CHK1/CHK2 inhibitor class (ACR-368, formerly prexasertib-class) has a well-documented history of toxicity and prior clinical failures in unselected populations — biomarker selection is the key differentiator but clinical validation is still maturing.
+**Disconfirming:** Small market cap (~$72M) and limited revenue suggest commercial validation is nascent. ACR-368 is not yet approved; OncoSignature clinical utility is prospective/enrichment-based rather than confirmed pivotal-trial validated. ESM-2 architecture is open-source, reducing architectural moat. Company is single-asset-risk dependent on ACR-368 Phase 2 readouts. Some 'generative' platform language in IR materials may overstate current generative AI sophistication relative to conventional phosphoproteomic ML pipelines.
 
 *(merged duplicate company-ids: fd1881898c215386)*
 
 
 ### 2. GRAIL, Inc. (GRAL) — composite 0.760
 
-*exchange Nasdaq · country US · mkt cap $2,829M · confidence 0.50*
+*exchange Nasdaq · country US · mkt cap $2,829M · ~2 yr since IPO · confidence 0.50*
 
 **Axes:** A (proprietary data) 5/5 · B (compute) 3/5 · C (validation) 4/5 · D (mechanism) 1/5 · E (translation) 5/5
 
@@ -45,9 +45,24 @@ GRAIL is the canonical large-scale proprietary-data moat in liquid biopsy — th
 **Disconfirming:** Key disconfirming risks: (1) Sensitivity for early-stage (stage I-II) cancers remains limited (~20-40% at high specificity), which is the clinically critical use case for screening; (2) The NHS-Galleri RCT primary endpoint (stage shift) results are not yet published — if the trial fails to show meaningful clinical benefit, the entire screening thesis is challenged; (3) No FDA PMA/510(k) clearance yet — Galleri is LDT-status, not FDA-cleared, limiting broad insurance coverage; (4) Medicare/CMS coverage is not established, creating reimbursement risk; (5) Competitors (Exact Sciences, Illumina's Grail spinout dynamics, Guardant, Personal Genome Diagnostics) are building competing methylation-based MCED tests; (6) The company has been loss-making with high cash burn, and its Illumina entanglement created significant regulatory and corporate governance uncertainty.
 
 
-### 3. Absci Corp (ABSI) — composite 0.704
+### 3. RECURSION PHARMACEUTICALS, INC. (RXRX) — composite 0.744
 
-*exchange Nasdaq · country US · mkt cap $1,845M · confidence 0.50*
+*exchange Nasdaq · country US · mkt cap $1,868M · ~5 yr since IPO · confidence 0.35*
+
+**Axes:** A (proprietary data) 5/5 · B (compute) 4/5 · C (validation) 3/5 · D (mechanism) 3/5 · E (translation) 3/5
+
+**Moat (data):** Recursion's core defensibility lies in its proprietary petabyte-scale cellular phenomics dataset and the associated wet-lab automation infrastructure generating it. The ML architectures (transformers, CNNs, GNNs) are state-of-the-art but replicable; the dataset is not. Competitors cannot easily replicate ~10 years of continuous high-throughput experimentation and the resulting phenotypic maps across thousands of genetic and chemical perturbations.
+
+Recursion is the highest-profile 'industrialized drug discovery' platform company, co-founded by Chris Gibson and Dean Li (former Merck CSO, strong pedigree) and backed by significant institutional capital including a landmark NVIDIA partnership. The core thesis is a DATA moat: a proprietary petabyte-scale cellular phenomics corpus generated by ~2.5M experiments/week through heavily automated lab infrastructure, which no academic or smaller biotech can replicate easily. The LOWE foundation model trained on this corpus adds a genuine AI layer. However, the moat scores 'mixed' on substance because (a) clinical validation of the platform's predictive accuracy remains unproven — no program has generated positive Phase 2/3 efficacy data yet; (b) no companion diagnostic exists despite years of biomarker-adjacent language; and (c) external partnerships have not publicly produced validated leads. The mechanism portfolio is broad and opportunistic (LSD1, CDK, RAS/MAPK, FAP), consistent with a phenotypics-first approach but weakening any single mechanistic moat. Overall: the DATA ENGINE is real and large-scale; the INFERENCE layer is sophisticated and includes a genuine foundation model; VALIDATION is partial (wet-lab confirmed hits, clinical stage programs); TRANSLATION is early-stage. This is a platform company with genuine substance at the data/compute layer but meaningful clinical execution risk and no yet-demonstrated translational proof-of-concept.
+
+**Disconfirming:** (1) Despite significant capital deployed and years of operation, Recursion has not yet demonstrated a clinical success directly attributable to the platform — all clinical programs are Phase 1/2 with no efficacy read-outs validating platform-derived predictions. (2) Several early partnerships (e.g., Bayer) were not renewed or disclosed as unsuccessful, raising questions about external validation of predictive accuracy. (3) The Exscientia acquisition added chemistry capabilities but also integration risk and cost. (4) No companion diagnostic or biomarker strategy is formally disclosed, limiting the 'precision medicine' narrative. (5) The phenomics-to-mechanism translation step remains a known bottleneck — high-content imaging hits do not always map to tractable drug targets, and the company has been criticized for generating large datasets without proportionate translational throughput.
+
+*(merged duplicate company-ids: a4748b360106ad9a)*
+
+
+### 4. Absci Corp (ABSI) — composite 0.704
+
+*exchange Nasdaq · country US · mkt cap $1,845M · ~5 yr since IPO · confidence 0.50*
 
 **Axes:** A (proprietary data) 4/5 · B (compute) 4/5 · C (validation) 4/5 · D (mechanism) 2/5 · E (translation) 3/5
 
@@ -58,37 +73,24 @@ Absci represents a genuine but early-stage 'Acrivon-pattern' company where the m
 **Disconfirming:** Key disconfirming evidence: (1) The Nature 2023 zero-shot antibody design paper, while impressive, showed functional but not necessarily best-in-class binders — generative AI for antibodies is an intensely competitive field (Dyno, Generate Biomedicines, Profluent, EvolutionaryScale all active); (2) ABS-101 and ABS-201 are early Phase 1 — no clinical proof-of-concept yet; (3) No companion diagnostic strategy disclosed, reducing the precision-medicine differentiation; (4) The cell-free expression system, while proprietary in scale, is not a fully unique modality — competitors use yeast display, phage display at comparable scale; (5) Partnerships with Twist, Owkin, Oracle suggest platform is not entirely self-contained and may require external data/compute infrastructure.
 
 
-### 4. RECURSION PHARMACEUTICALS, INC. (RXRX) — composite 0.656
+### 5. Schrodinger, Inc. (SDGR) — composite 0.672
 
-*exchange Nasdaq · country US · mkt cap $1,868M · confidence 0.35*
+*exchange Nasdaq · country US · mkt cap $1,260M · ~6 yr since IPO · confidence 0.30*
 
-**Axes:** A (proprietary data) 4/5 · B (compute) 4/5 · C (validation) 3/5 · D (mechanism) 3/5 · E (translation) 2/5
+**Axes:** A (proprietary data) 4/5 · B (compute) 3/5 · C (validation) 4/5 · D (mechanism) 2/5 · E (translation) 3/5
 
-**Moat (mixed):** The primary moat is the proprietary phenomics dataset (>50M images from controlled perturbation experiments in an automated wet lab) — this is data-driven and difficult to replicate quickly. However, Recursion has invested heavily in foundation model architecture (BioHive-1, LOWE, phenomics FM), making this a mixed moat. The data edge is stronger than the architectural edge since Cell Painting is a public assay, but the scale and systematic coverage of perturbations is proprietary.
+**Moat (mixed):** The moat is partly in the proprietary physics-based simulation infrastructure and OPLS force-field datasets (data/methodology), which are not easily replicated, and partly in the FEP+ computational architecture, which is the industry benchmark for binding free energy calculations. Neither alone is sufficient — the combination of 30+ years of force-field parameterization data plus validated FEP+ workflow is the true differentiator. Architecture is well-disclosed in publications but operationally deep.
 
-Recursion represents one of the most capital-intensive phenomics-AI platforms in biotech, with genuine scale (>50M proprietary images, BioHive-1 supercomputer, automated wet lab) and multiple foundation models (phenomics FM, LOWE chemical FM via Valence). The data engine scores high (A=4) because the systematic perturbation coverage and automation infrastructure are real and costly to replicate, even though Cell Painting itself is public. The compute engine (B=4) is credible given disclosed foundation model architecture and BioHive-1, though architectural moat is limited since transformers/graph NNs are commoditizing. Validation (C=3) is the key weakness: prospective wet-lab loop publications akin to Acrivon's InViKA are absent; validation largely rests on IND progression and partner co-validation. No companion Dx (E=2) further limits the translational precision score. The platform is phenotype-first and mechanism-agnostic, which is scientifically coherent but makes mechanism anchoring (D=3) secondary. Chris Gibson (CEO/co-founder) has built a recognized AI-bio company and attracted Nvidia investment and top-tier pharma partnerships, providing pedigree signal, but no Nobel/NAS-level scientific founder is at the core. The dominant disconfirming risk is that the platform's clinical output (several Phase 1/2 assets, no Phase 3 efficacy readout) has not yet demonstrated that AI-driven phenomics translates to superior clinical success rates versus conventional drug discovery.
+Schrödinger (SDGR) is one of the most technically credible computational drug discovery platforms publicly traded. Founded in 1990, the company has 30+ years of physics-based simulation development anchored by the OPLS force-field (parameterized from extensive experimental and QM data) and the FEP+ engine, which remains an industry benchmark for binding free energy calculations. Scientific pedigree is strong: founders include academic luminaries in computational chemistry, and the company counts Richard Friesner (Columbia, NAS member) as a key scientific architect — a high-precision signal that the data engine is real and deep. The platform is genuinely proprietary in its depth: OPLS4 trained on >100k experimental data points, decades of simulation runs across 1700+ pharma collaborator projects, and an internally generated Drug Discovery pipeline that provides wet-lab ground truth. Validation is substantive: FEP+ has prospective clinical-stage validation (SGR-1505 in Phase 2; SGR-2921 in Phase 1) and extensive peer-reviewed benchmarks in JCTC/JCIM/JACS. The primary disconfirming evidence is competitive: open-source force-fields (OpenFF) and academic FEP implementations are improving; the architectural moat is partially published away; and ML surrogate models rely partly on public databases. The absence of an approved drug and no companion diagnostic strategy weakens the E score. The platform is therapeutic-area-agnostic (no specific mechanism from the controlled vocabulary dominates), which is both a breadth strength and a focus weakness. Overall pattern: strong physics-data + computation moat, substantive external validation, moderate translation progress. Not the Acrivon pattern (no companion Dx, not biomarker-stratified) but a legitimate deep-tech platform.
 
-**Disconfirming:** 1) Cell Painting is an open, community-standard assay — the modality itself is not proprietary; competitors (Broad, Vividion, Phenomic AI) use similar approaches. 2) Published peer-reviewed validation of AI-to-hit predictions via prospective wet-lab loops is sparse relative to the marketing claims of 'industrialized drug discovery.' 3) Pipeline attrition: most assets are still Phase 1/2 with no clinical proof-of-concept readout tying AI origin to efficacy. 4) Major partnerships (Sanofi $150M, Bayer, Roche) provide business validation but have not yet produced disclosed clinical successes traceable to the platform. 5) No companion Dx strategy disclosed, weakening the translational precision medicine narrative.
+**Disconfirming:** Key risks: (1) FEP+ methodology is extensively published and academically replicable in principle — open-source alternatives (OpenFF, OpenFE) and cloud-based competitors (OpenEye/Cadence, Schrödinger clones) are narrowing the gap. (2) The ML surrogate models are trained partly on public data (ChEMBL, PDB) diluting the proprietary edge. (3) Drug Discovery segment has not yet produced an approved drug, so translational validation is incomplete. (4) No companion diagnostic or biomarker-defined patient selection strategy disclosed. (5) Market cap decline suggests investor skepticism about the timeline to drug approvals sustaining the software business.
 
-*(merged duplicate company-ids: a4748b360106ad9a)*
-
-
-### 5. Schrodinger (SDGR) — composite 0.462
-
-*exchange NASDAQ · country US · mkt cap $1,260M · confidence 0.15*
-
-**Axes:** A (proprietary data) 3/5 · B (compute) 3/5 · C (validation) 4/5 · D (mechanism) 2/5 · E (translation) 3/5
-
-**Moat (architecture):** Schrödinger's moat resides primarily in its proprietary physics-based simulation architecture (FEP+, force fields, integrated workflow) and the expertise/validation accumulated over 30+ years of platform development, rather than in a proprietary experimental data-generation engine. The computational methods are scientifically differentiated but the underlying molecular data is largely public. Competitors (OpenEye/Cadence, Atomwise, Relay) are narrowing the gap with ML-native approaches.
-
-Schrödinger (est. 1990) is a pioneering computational chemistry platform company led by co-founder Ramy Farid (Ph.D. Columbia) and guided by Nobel laureate David Baker-adjacent scientific networks; the company's scientific pedigree in physics-based simulation is among the strongest in the industry. The platform's FEP+ free-energy perturbation engine represents genuine scientific depth validated across D3R Grand Challenges and prospective pharma collaborations. HOWEVER, the Acrivon pattern fit is partial: the moat is architectural/methodological rather than rooted in a proprietary experimental data-generation loop. There is no high-dimensional closed-loop wet-lab engine producing unique training signal analogous to Acrivon's phosphoproteomics mass-spec dataset. The ML augmentation layers (generative design, ADMET ML) use standard architectures on largely public data. Translational assets are real (SGR-1505 Phase 1/2, Fast Track Designation) but lack companion Dx biomarker strategy. The strongest disconfirming evidence is that the physics simulation stack, while sophisticated, is reproducible in academic/open-source settings and the data feeding it is not proprietary. Platform value is real but derives from integration depth, UI/workflow, and 30-year parameterization effort — a meaningful but gradually eroding architectural moat.
-
-**Disconfirming:** (1) Core training/simulation data (PDB structures, known ligand activity) is public — no closed-loop proprietary wet-lab data engine. (2) ML layers use standard architectures trainable on public data; no disclosed foundation model with unique biological data moat. (3) FEP+ is scientifically rigorous but well-described in literature, enabling academic and commercial replication (OpenMM, GROMACS, etc.). (4) Drug discovery pipeline is early-stage and small relative to the software business; platform validation via internal pipeline is indirect. (5) Revenue concentration and software renewal risk from large pharma partners who could internalize or switch platforms.
+*(merged duplicate company-ids: c7611de8ed06e459)*
 
 
 ### 6. Sana Biotechnology, Inc. (SANA) — composite 0.402
 
-*exchange Nasdaq · country US · mkt cap $952M · confidence 0.35*
+*exchange Nasdaq · country US · mkt cap $952M · ~5 yr since IPO · confidence 0.35*
 
 **Axes:** A (proprietary data) 3/5 · B (compute) 1/5 · C (validation) 3/5 · D (mechanism) 3/5 · E (translation) 3/5
 

@@ -261,8 +261,11 @@ def build_report_md(result: dict, *, run_id: str) -> str:
         if x.get("stage"):
             sr = f"{x['stage']} · {sr}"
         disp = x.get("disposition")
-        if disp in ("graduated", "below_floor") and x.get("deleted_cap"):
-            sr += f" ({disp} ${x['deleted_cap']/1e6:,.0f}M)"
+        if x.get("deleted_cap") and disp in ("graduated", "below_floor"):
+            # "graduated" is the positive framing; for a negative, above-ceiling = correct rejection
+            word = ("graduated" if (disp == "graduated" and x["label"] == "positive")
+                    else "too-large" if disp == "graduated" else "below-floor")
+            sr += f" ({word} ${x['deleted_cap']/1e6:,.0f}M)"
         tier = x.get("tier")
         p.append(f"| **{x['ticker']}** | {x['label']} | {x['status']} | "
                  f"{tier if tier is not None else '—'} | {_fmt(x.get('composite'))} | {sr} | "
