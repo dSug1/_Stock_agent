@@ -61,7 +61,10 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
 
 9. **Swap yfinance for a licensed provider** (repo-wide ToS rule). yfinance is LOCAL-prototype-only;
    replace with FMP / EODHD (cap, liveness, IPO date, price history) before hosting. `clients/market`
-   is the single seam.
+   is the single seam. **NOW ALSO BLOCKS EU COVERAGE:** the Wikidata net enumerates ~66 EU/Nordic names
+   (D21) but yfinance does not resolve foreign-exchange tickers, so they all sit in **Tier 0 /
+   unknown-cap** (can't be band-filtered, tiered, or properly scored). A provider with EU market data
+   (cap + IPO date for `.CO`/`.ST`/Euronext/Xetra tickers) is what makes EU names first-class.
 10. **Scheduler / weekly cadence.** The screen is designed as a weekly monitor. The run `.bat` exists
     but there's no scheduled automation; add a Windows Task / cron (Stage 0 enrich → harvest → score
     selected tiers → rank → summary → render). Top-movers (D10) makes weekly diffs useful.
