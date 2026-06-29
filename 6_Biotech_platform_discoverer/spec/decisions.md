@@ -5,6 +5,22 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D12 (2026-06-29) — SEC earliest-filing-date fallback for ipo_date (BUILT)
+
+The Tier-0 (untiered) bucket exists when a company has no `ipo_date`; yfinance leaves gaps. Built a
+fail-open SEC fallback (`clients/sec_submissions.py`): resolve ticker→CIK from the SEC cik↔ticker file
+(reusing `sec_sic.parse_cik_exchange`, inverted), fetch `data.sec.gov/submissions/CIK….json`, take the
+**oldest `filings.recent.filingDate`** as the ipo_date. Wired into `listings.yfinance_enricher` — it
+fills ipo_date **only when yfinance gave none AND the company has none** (never overrides), gated by
+`stage0b.sec_ipo_fallback` (default true), with the cik↔ticker file fetched once per run. US filers
+only (non-US tickers have no CIK → None).
+
+**Caveat (documented):** the earliest filing is a *proxy* — for a recent IPO it's usually the S-1,
+which predates the actual first-trade date by months (e.g. ACRV → 2021-02-12 vs the Nov-2022 IPO). So
+the SEC fallback can read a hair OLDER than the true IPO; acceptable for a recall-safe gap-filler
+(yfinance `firstTradeDate` is preferred whenever present). Pure parsers unit-tested; live fetch
+verified (ACRV/GRAL/ATYR/TKNO). 165 tests pass.
+
 ## D11 (2026-06-29) — Incremental re-runs: a scoring-config change forces a re-score §12 (BUILT)
 
 §12 wants a config change to "force re-evaluation of affected stages." Built the scoring half:

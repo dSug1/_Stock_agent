@@ -46,6 +46,8 @@ stage0a_nets:                        # union; a company passes if ANY net hits
 stage0b:
   max_enrich: 0                      # cap yfinance enrichment calls (0 = unlimited). Companies past
                                      # the cap keep unknown cap -> flagged, never dropped (recall-safe).
+  sec_ipo_fallback: true             # D12: when yfinance has no IPO date, fill ipo_date from the SEC
+                                     # earliest-filing-date (US filers; recall-safe; fail-open).
 
 stage1_filters:
   require_ta_tag: true               # but borderline -> review_queue, not delete

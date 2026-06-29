@@ -45,10 +45,10 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
    `mktcap_usd_fd` carries the **basic** yfinance cap (no PFW). For micro-caps PFW materially changes
    the band decision and the tier. Build: FD/PFW share counts cross-checked against filings (10-Q
    cover + warrant tables) → recompute cap. Affects Stage-0b deletes + tiering.
-7. **`ipo_date` SEC first-filing fallback + appreciation lever** (D2 phase 2). ~4 companies are
-   Tier 0 (untiered) for missing `ipo_date`; yfinance gaps will recur. Build a SEC-submissions
-   first-filing-date fallback (ticker→CIK via `company_tickers.json`, oldest filing). Then the D2
-   "market-cap appreciation since IPO" lever (needs price history) for the lifecycle multiplier.
+7. ~~`ipo_date` SEC first-filing fallback~~ **DONE (D12)** — `clients/sec_submissions.py` fills a
+   missing ipo_date from the SEC earliest-filing date (US filers, fail-open, `stage0b.sec_ipo_fallback`).
+   Still open: the D2 **"market-cap appreciation since IPO" lever** (needs price history) for the
+   lifecycle multiplier; and note the SEC date is an S-1-era *proxy* (slightly older than true IPO).
 8. **PatentsView API key.** The patent estate is inert without `PATENTSVIEW_API_KEY` — set it to
    activate method/platform-vs-composition patent scoring (already wired, just key-gated).
 

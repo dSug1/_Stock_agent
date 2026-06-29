@@ -133,10 +133,20 @@ def yfinance_enricher(config: Optional[dict] = None) -> Callable[[Company], Opti
     and flags ``mktcap_unknown`` rather than dropping it. Cap is BASIC (no pre-funded warrants — M2b
     deferral); the native cap is FX-converted to USD. Shares ``clients.market`` with the directory.
     """
-    from .clients import market
+    from .clients import _net, market, sec_submissions
     from .fx import FXConverter
 
     fx = FXConverter.from_config(config)
+    sec_fallback = ((config or {}).get("stage0b", {}) or {}).get("sec_ipo_fallback", True)
+    sec_state: dict = {"map": None, "lim": None}   # lazily built once, on first SEC need
+
+    def _sec_ipo(ticker: str) -> Optional[str]:
+        """SEC earliest-filing-date fallback for a MISSING ipo_date (D12). Fail-open."""
+        if sec_state["map"] is None:
+            sec_state["lim"] = _net.RateLimiter(8.0)
+            sec_state["map"] = sec_submissions.build_ticker_cik_map(limiter=sec_state["lim"])
+        return sec_submissions.first_filing_date(ticker, ticker_cik_map=sec_state["map"],
+                                                 limiter=sec_state["lim"])
 
     def enrich(company: Company) -> Optional[dict]:
         if not company.primary_ticker:
@@ -151,6 +161,14 @@ def yfinance_enricher(config: Optional[dict] = None) -> Callable[[Company], Opti
         for key in ("business_description", "sector", "industry", "ipo_date"):
             if info.get(key):
                 result[key] = info[key]
+        # ipo_date fallback: if yfinance gave none and the company has none yet, try SEC (US filers).
+        if sec_fallback and not result.get("ipo_date") and not company.ipo_date:
+            try:
+                sec_ipo = _sec_ipo(company.primary_ticker)
+            except Exception:                          # noqa: BLE001 — fail-open, never block enrich
+                sec_ipo = None
+            if sec_ipo:
+                result["ipo_date"] = sec_ipo
         return result
 
     return enrich
