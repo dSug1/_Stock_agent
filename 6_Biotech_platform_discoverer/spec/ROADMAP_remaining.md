@@ -2,32 +2,38 @@
 
 *Companion to `SPEC_acrivon_pattern_screener.md` + `decisions.md`. Current as of 2026-06-29.*
 
-The pipeline is **functionally complete end-to-end** — universe → hard cuts → mechanism tagging →
-evidence harvest → tier-gated Claude scoring (with web research) → rank/dedup/export → interactive
-report → seed validation → run summary. Built milestones: **M1–M8** + **D9** (OpenAlex→web-research),
-**D10** (observability), **D11** (config-change incremental), **D12** (SEC ipo-date fallback), **D13–D16**
-(Claude-dispatch optimizations: async/batch-resume + crash-safe persist + basic web_search variant +
-12500 output cap), **D17** (EDGAR 10-K Item 1 source), **D18** (structured per-stage JSON logs), **D19**
-(evidence-level incremental). 177 offline tests pass.
+The pipeline is **functionally complete end-to-end and run at scale** — universe → hard cuts →
+mechanism tagging → evidence harvest → tier-gated Claude scoring (with web research) →
+rank/dedup/export → interactive report → seed validation → run summary. Built milestones: **M1–M8** +
+**D9** (OpenAlex→web-research), **D10** (observability), **D11** (config-change incremental), **D12**
+(SEC ipo-date fallback), **D13–D16** (Claude-dispatch optimizations: async/batch-resume + crash-safe
+persist + basic web_search variant + 12500 output cap), **D17** (EDGAR 10-K Item 1 source), **D18**
+(structured per-stage JSON logs), **D19** (evidence-level incremental), **D20** (triage-killed rows in
+report), **D21–D23** (EU/Nordic enumeration + web-checked caps/IPO dates → tiered), **D24** (name-based
+dedup), **D25–D26** (Japan/Korea enumeration + web-checked caps/dates → tiered). **183 offline tests
+pass.**
 
-What remains is **calibration, data-quality enrichment, and productionization** — not core plumbing.
-Ordered by priority.
+**Coverage today:** US (SEC) + EU/Nordic + Japan/Korea, **614 live companies**, **94 scored** across
+Tiers 1 & 2 (US + international), 91-row shortlist. The remaining work is **calibration, data-quality
+enrichment, and productionization** — not core plumbing. Ordered by priority.
 
 ---
 
-## A. TRUST — the screen isn't validated at scale yet (HIGHEST)
+## A. TRUST — validate at scale (HIGHEST)
 
-The whole pipeline is only as trustworthy as its seed-eval (§13), and that is still thin.
+The whole pipeline is only as trustworthy as its seed-eval (§13), and that is still thin on labels.
 
-1. **Run full-universe (or full Tier-1) Claude scoring.** Only ~14 tickers have ever been scored. The
-   real deliverable — a ranked shortlist over the live 589 — doesn't exist yet. Tier-1 alone is ~256
-   companies. Action: `--stage 4 --tiers 1 --dispatch` (batch), watch `max_usd_per_run`. *Blocked only
-   by the cost gate + a human [y/N]; this is an operational run, not a build.*
-2. **Validate the D9 web-research switch.** Publications + pedigree moved from OpenAlex to the Claude
-   web_search call; the current store's scores mostly pre-date it. Re-score the seeds under web
-   research and confirm via `6_eval.py` that it lifts the no-OpenAlex names (esp. ACRV) without
-   regressions. *(A seed dispatch is running now — first real exercise of the path.)*
-3. **Extend `config/seed_labels.csv`.** Current eval is meaningful but tiny (TP=2 / TN=3). Add more
+1. ~~**Run full Tier-1 / Tier-2 Claude scoring.**~~ **DONE (2026-06-29).** Tiers 1 & 2 — the young,
+   priority buckets — scored end-to-end across the full US + EU/Nordic + JP/KR universe: **Tier-1**
+   255 candidates → 40 scored ($7.97); **Tier-2** 249 → 50 scored ($9.61). **94 companies scored
+   total**, 91-row shortlist (top ACRV 0.968). New high-scorers incl. Immatics 0.904, Monte Rosa
+   0.888, Adaptive 0.872, **PeptiDream (Japan) 0.840** — the international wiring delivered a top-tier
+   hit. Still open: **Tiers 3 & 4** (older companies, lower priority) to finish the universe.
+2. ~~**Validate the D9 web-research switch.**~~ **DONE.** Web-research scoring exercised over ~150
+   real rubric calls; memos cite live findings, ACRV/GRAIL hold at ceiling, seed-eval P/R/F1 = 1.0
+   across every run. Basic web_search variant + 12500 output cap (D16) confirmed at scale.
+3. **Extend `config/seed_labels.csv`.** Current eval is the gating weakness — meaningful but tiny
+   (TP=2 / TN=3). Add more
    **in-band** known positives (so they reach the scorer, not graduate out) and more **in-band**
    negatives (small-cap tools/CRO/"AI-pharma shells" that survive Stage 0) so precision/recall become
    statistically meaningful. This is curation, not code.
