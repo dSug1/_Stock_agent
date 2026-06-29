@@ -1,6 +1,6 @@
 # Acrivon-Pattern Screener — Seed Validation (§13)
 
-*Run `2026-06-29T16:04:01+00:00` · generated 2026-06-29 · decision threshold composite ≥ 0.6.*
+*Run `2026-06-29T16:25:17+00:00` · generated 2026-06-29 · decision threshold composite ≥ 0.6.*
 
 > ℹ️ **Graduated (accepted, D7):** positive(s) re-rated ABOVE the ceiling and cut by design: **TNGX** — out-of-scope graduates, not a failure.
 
@@ -27,8 +27,8 @@
 | **IDYA** | positive | unscored | 0 | — |  | IDEAYA Biosciences |
 | **TNGX** | positive | deleted | — | — | stage0b · mktcap_out_of_band (graduated $5,120M) | Tango Therapeutics |
 | **RLAY** | borderline | deleted | — | — | stage0b · mktcap_out_of_band (too-large $4,040M) | Relay Therapeutics |
-| **RXRX** | borderline | scored | 2 | 0.744 |  | Recursion Pharmaceuticals |
-| **SDGR** | borderline | scored | 2 | 0.568 |  | Schrodinger |
+| **RXRX** | borderline | scored | 2 | 0.776 |  | Recursion Pharmaceuticals |
+| **SDGR** | borderline | scored | 2 | 0.438 |  | Schrodinger |
 | **A** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $38,414M) | Agilent Technologies |
 | **BRKR** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $9,272M) | Bruker |
 | **CRL** | negative | deleted | — | — | stage0b · mktcap_out_of_band (too-large $10,392M) | Charles River Laboratories |
