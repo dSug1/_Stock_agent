@@ -1,67 +1,67 @@
-ticker,mktcap_usd,is_live,classification,note
-BAVA.CO,2410000000,1,web_verified,WebSearch 2026-06-29
-BAVA,2410000000,1,web_verified,WebSearch 2026-06-29
-ZEAL.CO,3300000000,1,web_verified,WebSearch 2026-06-29
-ZEAL,3300000000,1,web_verified,WebSearch 2026-06-29
-CAMX.ST,2900000000,1,web_verified,WebSearch 2026-06-29
-CAMX,2900000000,1,web_verified,WebSearch 2026-06-29
-ORXOF,70000000,1,web_verified,WebSearch 2026-06-29
-GEN,15000000000,1,web_verified,WebSearch 2026-06-29
-LUN,6500000000,1,web_verified,WebSearch 2026-06-29
-ALK B,7800000000,1,web_verified,WebSearch 2026-06-29
-GLPG.BR,1870000000,1,web_verified,WebSearch 2026-06-29
-GLPG,1870000000,1,web_verified,WebSearch 2026-06-29
-MLLCF,143000000,1,web_verified,WebSearch 2026-06-29
-EVTCY,1100000000,1,web_verified,WebSearch 2026-06-29
-CMPS,1400000000,1,web_verified,WebSearch 2026-06-29
-SE0021181559,2300000,1,web_verified,WebSearch 2026-06-29
-DBVT,950000000,1,web_verified,WebSearch 2026-06-29
-ALM.MC,2790000000,1,web_verified,WebSearch 2026-06-29
-ALM,2790000000,1,web_verified,WebSearch 2026-06-29
-APH,440000000,1,web_verified,WebSearch 2026-06-29
-TCBP,400000,1,web_verified,WebSearch 2026-06-29
-GRFS,5590000000,1,web_verified,WebSearch 2026-06-29
-UCBJF,54000000000,1,web_verified,WebSearch 2026-06-29
-IPSEY,14700000000,1,web_verified,WebSearch 2026-06-29
-PRGO,1520000000,1,web_verified,WebSearch 2026-06-29
-OGN,3530000000,1,web_verified,WebSearch 2026-06-29
-ALKS,7300000000,1,web_verified,WebSearch 2026-06-29
-JAZZ,14500000000,1,web_verified,WebSearch 2026-06-29
-BNTX,22000000000,1,web_verified,WebSearch 2026-06-29
-QGEN,8000000000,1,web_verified,WebSearch 2026-06-29
-SDZ,36500000000,1,web_verified,WebSearch 2026-06-29
-NZYM B,27900000000,1,web_verified,WebSearch 2026-06-29
-NOVO,250000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-SAN,120000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-NOVN,220000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-BAYN,30000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-AZN,250000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-GSK,80000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-JNJ,400000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-MRK,85000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-FME,17000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-FRE,27000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-SMMNY,60000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-SRT3,20000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-STMN,18000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-ALC,45000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-BIO,9000000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-HIK,5500000000,1,mega_cap_approx,>$3B band-cut; not individually web-verified
-BITI,,0,not_live,acquired by Acorda 2016
-MOR,,0,not_live,defunct (Montedison)
-MYL,,0,not_live,merged into Viatris 2020
-RNA,,0,not_live,acquired by BioMarin 2014
-ACT,,0,not_live,became Allergan/Teva generics
-AGN,,0,not_live,acquired by AbbVie 2020
-ENDP,,0,not_live,bankruptcy; Endo Intl plc delisted (now Mallinckrodt unit)
-HZNP,,0,not_live,acquired by Amgen 2023
-MNK,,0,not_live,Ch.11 restructuring
-HOE,,0,not_live,merged into Aventis/Sanofi 1999
-MPSYF,,0,not_live,"acquired by Novartis, delisted Aug 2024 (web-confirmed)"
-MEDA,,0,not_live,acquired by Mylan 2016
-RECI-B,,0,not_live,taken private 2021
-DDDD,,0,not_live,4D Pharma administration/delisted 2022
-GWPH,,0,not_live,acquired by Jazz 2021
-SHPG,,0,not_live,acquired by Takeda 2019
-VEC,,0,not_live,acquired by Philip Morris 2021
-ORTX,,0,not_live,"acquired by Kyowa Kirin, delisted Jan 2024 (web-confirmed)"
+ticker,mktcap_usd,ipo_date,is_live,classification,note
+ALK B,7800000000,,1,web_verified,WebSearch 2026-06-29
+ALKS,7300000000,,1,web_verified,WebSearch 2026-06-29
+ALM,2790000000,2007-06-20,1,web_verified,WebSearch 2026-06-29
+ALM.MC,2790000000,2007-06-20,1,web_verified,WebSearch 2026-06-29
+APH,440000000,2003-12-17,1,web_verified,WebSearch 2026-06-29
+BAVA,2410000000,2000-01-03,1,web_verified,WebSearch 2026-06-29
+BAVA.CO,2410000000,2000-01-03,1,web_verified,WebSearch 2026-06-29
+BNTX,22000000000,,1,web_verified,WebSearch 2026-06-29
+CAMX,2900000000,2015-12-03,1,web_verified,WebSearch 2026-06-29
+CAMX.ST,2900000000,2015-12-03,1,web_verified,WebSearch 2026-06-29
+CMPS,1400000000,2020-09-18,1,web_verified,WebSearch 2026-06-29
+DBVT,950000000,2012-03-29,1,web_verified,WebSearch 2026-06-29
+EVTCY,1100000000,1999-11-10,1,web_verified,WebSearch 2026-06-29
+GEN,15000000000,,1,web_verified,WebSearch 2026-06-29
+GLPG,1870000000,2005-05-06,1,web_verified,WebSearch 2026-06-29
+GLPG.BR,1870000000,2005-05-06,1,web_verified,WebSearch 2026-06-29
+GRFS,5590000000,,1,web_verified,WebSearch 2026-06-29
+HIK,4140000000,,1,web_verified,WebSearch 2026-06-29
+IPSEY,14700000000,,1,web_verified,WebSearch 2026-06-29
+JAZZ,14500000000,,1,web_verified,WebSearch 2026-06-29
+LUN,6500000000,,1,web_verified,WebSearch 2026-06-29
+MLLCF,143000000,2014-11-05,1,web_verified,WebSearch 2026-06-29
+NZYM B,27900000000,,1,web_verified,WebSearch 2026-06-29
+OGN,3530000000,,1,web_verified,WebSearch 2026-06-29
+ORXOF,70000000,2005-11-09,1,web_verified,WebSearch 2026-06-29
+PRGO,1520000000,1991-12-20,1,web_verified,WebSearch 2026-06-29
+QGEN,8000000000,,1,web_verified,WebSearch 2026-06-29
+SDZ,36500000000,,1,web_verified,WebSearch 2026-06-29
+SE0021181559,2300000,,1,web_verified,WebSearch 2026-06-29
+TCBP,400000,,1,web_verified,WebSearch 2026-06-29
+UCBJF,54000000000,,1,web_verified,WebSearch 2026-06-29
+ZEAL,3300000000,2010-11-23,1,web_verified,WebSearch 2026-06-29
+ZEAL.CO,3300000000,2010-11-23,1,web_verified,WebSearch 2026-06-29
+ALC,45000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+AZN,250000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+BAYN,30000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+BIO,9000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+FME,17000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+FRE,27000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+GSK,80000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+JNJ,400000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+MRK,85000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+NOVN,220000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+NOVO,250000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+SAN,120000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+SMMNY,60000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+SRT3,20000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+STMN,18000000000,,1,mega_cap_approx,>3B band-cut; not individually web-verified
+ACT,,,0,not_live,became Allergan/Teva generics
+AGN,,,0,not_live,acquired by AbbVie 2020
+BITI,,,0,not_live,acquired by Acorda 2016
+DDDD,,,0,not_live,4D Pharma administration/delisted 2022
+ENDP,,,0,not_live,bankruptcy; Endo Intl plc delisted (now Mallinckrodt unit)
+GWPH,,,0,not_live,acquired by Jazz 2021
+HOE,,,0,not_live,merged into Aventis/Sanofi 1999
+HZNP,,,0,not_live,acquired by Amgen 2023
+MEDA,,,0,not_live,acquired by Mylan 2016
+MNK,,,0,not_live,Ch.11 restructuring
+MOR,,,0,not_live,defunct (Montedison)
+MPSYF,,,0,not_live,"acquired by Novartis, delisted Aug 2024 (web-confirmed)"
+MYL,,,0,not_live,merged into Viatris 2020
+ORTX,,,0,not_live,"acquired by Kyowa Kirin, delisted Jan 2024 (web-confirmed)"
+RECI-B,,,0,not_live,taken private 2021
+RNA,,,0,not_live,acquired by BioMarin 2014
+SHPG,,,0,not_live,acquired by Takeda 2019
+VEC,,,0,not_live,acquired by Philip Morris 2021

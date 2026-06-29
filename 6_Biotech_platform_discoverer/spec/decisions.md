@@ -5,6 +5,24 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D23 (2026-06-29) — EU/Nordic IPO dates + Hikma cap web-checked → in-band EU names now tiered (DONE)
+
+Follow-up to D22. (1) **Hikma** cap web-verified at **$4.14B** (was a $5.5B mega-approx) — still above
+the $3B ceiling, so correctly out-of-band/excluded (not forced into the in-band set; the analyst band
+is a hard constraint). (2) **IPO dates web-checked** for the 7 in-band EU names that lacked them
+(Perrigo 1991-12-20, Compass 2020-09-18, Evotec 1999-11-10, DBV 2012-03-29 Euronext, Alliance Pharma
+2003-12, Molecular Partners 2014-11-05, Orexo 2005-11-09) and **copied from the sibling EU listing** for
+5 dual-listed names (Zealand/Camurus/Almirall/Bavarian Nordic/Galapagos). Note: PRGO/CMPS/DBV each had a
+duplicate US-country row (already dated by yfinance) plus an undated EU-country row — set by company_id.
+
+**Result:** all 11 in-band EU/Nordic biotechs are now **tiered** (cap + age both known), so they're
+selectable by the Stage-4 tier gate: Molecular Partners **T1** (small & young — priority); Camurus /
+Almirall / DBV / Compass **T2**; Bavarian Nordic / Galapagos / Perrigo / Evotec / Alliance Pharma **T3**;
+Orexo **T4**. Caps + IPO dates persisted to `data/eu_market_caps_web_2026-06-29.csv`. Outstanding
+data-quality nit: the duplicate US/EU company rows for ADR names (PRGO/CMPS/DBV/…) should be deduped.
+
+---
+
 ## D22 (2026-06-29) — EU/Nordic market caps populated by manual web check (DONE)
 
 **Why.** D21 enumerated ~66 EU/Nordic names but yfinance can't resolve foreign tickers → all sat in
