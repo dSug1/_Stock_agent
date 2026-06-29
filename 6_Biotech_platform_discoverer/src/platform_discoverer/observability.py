@@ -16,6 +16,25 @@ from . import seed_eval, stage5, tiering
 from .store import Store, now_iso, today_iso
 
 
+def append_stage_log(out_dir: str | Path, run_id: str, stage: str, summary: dict,
+                     elapsed_s: float) -> Path:
+    """Append one structured per-stage JSON line to ``Outputs/logs/stage_events.jsonl`` (spec §14, C11).
+
+    Each stage runs as its own process invocation (own run_id), so a single cumulative event log — not a
+    per-run file — is the queryable shape: one line per stage run with counts in/out, cost, and
+    wall-time. Fail-open: logging must never break a pipeline stage."""
+    rec = {"ts": now_iso(), "run_id": run_id, "stage": stage,
+           "elapsed_s": round(float(elapsed_s), 3), "summary": summary}
+    try:
+        logs = Path(out_dir) / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        with (logs / "stage_events.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, default=str) + "\n")
+        return logs / "stage_events.jsonl"
+    except Exception:                                   # never let observability break a run
+        return Path(out_dir) / "logs" / "stage_events.jsonl"
+
+
 def _latest(store: Store, stage: str, reason: str) -> dict:
     row = store.conn.execute(
         "SELECT detail_json FROM audit_log WHERE stage=? AND reason=? ORDER BY ts DESC LIMIT 1",

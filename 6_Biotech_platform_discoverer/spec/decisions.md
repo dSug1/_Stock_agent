@@ -5,6 +5,53 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D19 (2026-06-29) — Evidence-level incremental re-scoring §12 (E15) (BUILT)
+
+**Problem.** D11 re-opens a ticker for scoring on a *config* change; the Stage-2 TTL refreshes *harvest*.
+But nothing re-scored a ticker when its **evidence** changed (a fresh 10-K, new trials, updated patents)
+within the rescore-TTL — the weekly monitor would keep a stale score.
+
+**Built (no schema migration).** `stage4._evidence_fingerprint(store, cid)` = sha1 of sorted
+`source:payload_hash` pairs over `_EVIDENCE_SOURCES`. `_company_score_key()` FOLDS the scoring-config
+hash with that fingerprint and stores the combined key in the existing `scores.config_hash` column.
+`_candidates` skips a ticker only when its stored key still matches the recomputed one — so a config
+change OR new evidence re-opens it. Gated by `stage4_scoring.evidence_incremental` (default true; false
+= legacy config-hash + TTL only). Persist sites (rubric/finalize/resume) all store the combined key.
+Note: pre-D19 scores carry a plain config_hash, so each previously-scored ticker re-scores once.
+
+**Tests.** `test_evidence_change_forces_rescore_within_ttl` + updated the two TTL/config tests to seed
+the combined key. 177 tests pass.
+
+---
+
+## D18 (2026-06-29) — Structured per-stage JSON logs §14 (C11) (BUILT)
+
+`observability.append_stage_log(out_dir, run_id, stage, summary, elapsed_s)` appends one JSON line per
+stage run to `Outputs/logs/stage_events.jsonl` (counts in/out, cost, wall-time). Because each stage is
+its own process invocation (own run_id), a single cumulative event log — not a per-run file — is the
+queryable shape for the weekly cadence. Wired into `scripts/6_screen.py` via a `_emit()` timing wrapper
+around every stage (0a/0b/1/2/4/5). Fail-open. 1 new test.
+
+---
+
+## D17 (2026-06-29) — EDGAR full-text Stage-2 source: 10-K Item 1 "Business" (B5) (BUILT)
+
+**Why.** yfinance's `longBusinessSummary` is a one-paragraph blurb; the 10-K **Item 1 ("Business")** is
+the company's own multi-page platform/technology narrative — the richest free signal for the A/B
+data-engine judgment.
+
+**Built.** `clients/edgar_fulltext.py`: latest annual report (10-K/20-F/40-F) via the SEC submissions
+API → fetch primary doc → `_strip_html` → `_extract_item1` (longest-match heuristic, ≥400 chars, capped
+16k). Persisted as Stage-2 source `edgar`; `build_bundle` feeds a 2.8k-char excerpt as `sec_10k_business`.
+Added `edgar` to `stage2.sources` + `_EVIDENCE_SOURCES` (so it reaches the bundle AND the D19
+fingerprint). Fail-open, SEC User-Agent, 64MB capped reads, US filers only (non-US → no edgar row,
+reported as ABSENT DATA, never a penalty). Extraction is heuristic (can include a cross-reference
+prefix); the bulk is genuine 10-K text. 6 pure-parser tests + live ACRV fetch verified (2026 10-K, 16k
+chars). NOTE: the 13 already-scored companies pre-date this source; re-harvest + re-score to benefit
+(D19 will auto-re-open them once edgar evidence lands).
+
+---
+
 ## D16 (2026-06-29) — Speed up Stage-4 Claude calls: basic web_search variant + larger output cap (BUILT)
 
 **Problem.** Stage-4 scoring was far slower than `3_Biopharmcatalyst_parser`'s dispatch (user: "the

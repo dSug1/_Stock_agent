@@ -14,6 +14,7 @@ estimated up front (no API) and the actual dispatch is gated + bounded by ``max_
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -27,7 +28,9 @@ from .store import Store, now_iso
 
 log = logging.getLogger(__name__)
 
-_EVIDENCE_SOURCES = ("ctgov", "patents")   # OpenAlex/pedigree dismissed (D9) — Claude web-researches them
+# Evidence sources folded into the bundle + the §12 evidence fingerprint. OpenAlex/pedigree dismissed
+# (D9) — Claude web-researches those. edgar = 10-K Item 1 Business narrative (D17/B5).
+_EVIDENCE_SOURCES = ("ctgov", "patents", "edgar")
 
 
 # ── candidate set + bundles ─────────────────────────────────────────────────
@@ -51,6 +54,30 @@ def _scored_within(store: Store, company_id: str, ttl_days: int,
     return datetime.now(timezone.utc) - ts < timedelta(days=ttl_days)
 
 
+def _evidence_fingerprint(store: Store, company_id: str) -> str:
+    """Stable hash of a company's current evidence (sorted source:payload_hash pairs). Changes whenever
+    a harvest lands new/changed evidence (a fresh 10-K, new trials, updated patents) — the §12
+    evidence-level incremental signal (E15)."""
+    parts = []
+    for src in _EVIDENCE_SOURCES:
+        ev = store.get_evidence(company_id, src)
+        if ev and ev.get("payload_hash"):
+            parts.append(f"{src}:{ev['payload_hash']}")
+    return hashlib.sha1("|".join(sorted(parts)).encode()).hexdigest()[:16]
+
+
+def _company_score_key(store: Store, config: dict, company_id: str) -> str:
+    """The per-company freshness key stored in scores.config_hash: the scoring-config hash (§12 config
+    change) FOLDED WITH the evidence fingerprint (E15). Either changing re-opens the company for scoring.
+    Disable the evidence half with ``stage4_scoring.evidence_incremental: false`` (config-hash only)."""
+    chash = cfg.config_hash(config)
+    s4 = config.get("stage4_scoring", {}) or {}
+    if not s4.get("evidence_incremental", True):
+        return chash
+    fp = _evidence_fingerprint(store, company_id)
+    return hashlib.sha1(f"{chash}:{fp}".encode()).hexdigest()[:16]
+
+
 def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False,
                 tiers=None) -> list:
     s4 = config.get("stage4_scoring", {}) or {}
@@ -66,11 +93,13 @@ def _candidates(store: Store, config: dict, tickers=None, *, force: bool = False
         tset = set(tiers)
         cos = [c for c in cos if tiering.compute_tier(c, config) in tset]
     if not force:
-        # rescore-TTL: a ticker scored within the last year UNDER THE CURRENT SCORING CONFIG is not
-        # re-analysed (saves cost) unless --force-rescore. A scoring-config change (§12) re-opens it.
+        # rescore-TTL: a ticker scored within the last year UNDER THE CURRENT SCORING CONFIG **and the
+        # same evidence** is not re-analysed (saves cost) unless --force-rescore. A scoring-config
+        # change (§12) OR new evidence (E15) re-opens it.
         ttl = int(s4.get("rescore_ttl_days", 365))
-        chash = cfg.config_hash(config)
-        cos = [c for c in cos if not _scored_within(store, c.company_id, ttl, chash)]
+        cos = [c for c in cos
+               if not _scored_within(store, c.company_id, ttl,
+                                     _company_score_key(store, config, c.company_id))]
     return cos
 
 
@@ -239,7 +268,8 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     def _persist_rubric(cid, rj):
         scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
                                      penalties=penalties, evidence_n=len(_evidence(store, cid)),
-                                     finalized=False, run_id=rid, config_hash=chash)
+                                     finalized=False, run_id=rid,
+                                     config_hash=_company_score_key(store, config, cid))
 
     if use_batch:
         def _save_batch_id(bid):
@@ -264,7 +294,8 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     def _persist_final(cid, rj):
         scored[cid] = _persist_score(store, cid, rj, s4["finalize_model"], weights=weights,
                                      penalties=penalties, evidence_n=len(_evidence(store, cid)),
-                                     finalized=True, run_id=rid, config_hash=chash)
+                                     finalized=True, run_id=rid,
+                                     config_hash=_company_score_key(store, config, cid))
         final_count["n"] += 1
 
     contested = {cid: survivors[cid] for cid, s in scored.items() if lo <= s["composite"] <= hi}
@@ -308,7 +339,7 @@ def resume_stage4(store: Store, config: dict, *, run_id: str, client=None) -> di
     for cid, rj in rubric_out.items():
         _persist_score(store, cid, rj, model, weights=weights, penalties=penalties,
                        evidence_n=len(_evidence(store, cid)), finalized=False,
-                       run_id=run_id, config_hash=chash)
+                       run_id=run_id, config_hash=_company_score_key(store, config, cid))
         n += 1
     summary = {"mode": "resume", "run_id": run_id, "batch_id": batch_id, "scored": n,
                "cost_usd": round(getattr(client, "spent_usd", 0.0), 2)}

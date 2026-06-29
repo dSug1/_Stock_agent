@@ -253,8 +253,9 @@ def test_rescore_ttl_skips_recently_scored(store):
     from platform_discoverer.store import now_iso
     _seed_scoring(store)                                  # a1/a2/x1
     store.record_score(Score(company_id="a1", run_id=now_iso(), model="claude-sonnet-4-6",
-                             composite=0.8), run_id=now_iso(), config_hash=cfg.config_hash(CONFIG))
-    # a1 scored just now under the current config -> excluded from due candidates; a2/x1 still due
+                             composite=0.8), run_id=now_iso(),
+                       config_hash=stage4._company_score_key(store, CONFIG, "a1"))
+    # a1 scored just now under the current config + same evidence -> excluded; a2/x1 still due
     due = {c.company_id for c in stage4._candidates(store, CONFIG)}
     assert "a1" not in due and {"a2", "x1"} <= due
     # --force-rescore re-includes a1 (the reset)
@@ -276,11 +277,31 @@ def test_config_change_forces_rescore_within_ttl(store):
     from platform_discoverer.store import now_iso
     _seed_scoring(store)
     store.record_score(Score(company_id="a1", run_id=now_iso(), model="m", composite=0.8),
-                       run_id=now_iso(), config_hash=cfg.config_hash(CONFIG))
+                       run_id=now_iso(), config_hash=stage4._company_score_key(store, CONFIG, "a1"))
     assert "a1" not in {c.company_id for c in stage4._candidates(store, CONFIG)}   # fresh + same cfg
     changed = copy.deepcopy(CONFIG)
     changed["penalties"]["marketing_verdict_factor"] = 0.4                          # scoring change
     assert "a1" in {c.company_id for c in stage4._candidates(store, changed)}       # §12 re-opens it
+
+
+def test_evidence_change_forces_rescore_within_ttl(store):
+    """E15 (§12): new evidence (a fresh 10-K / trials) re-opens a ticker even within the rescore-TTL."""
+    from platform_discoverer.models import Evidence, Score
+    from platform_discoverer.store import now_iso
+    _seed_scoring(store)
+    store.record_score(Score(company_id="a1", run_id=now_iso(), model="m", composite=0.8),
+                       run_id=now_iso(), config_hash=stage4._company_score_key(store, CONFIG, "a1"))
+    assert "a1" not in {c.company_id for c in stage4._candidates(store, CONFIG)}   # fresh, same evidence
+    # a fresh 10-K lands -> the evidence fingerprint changes -> a1 is due again
+    store.upsert_evidence(Evidence(company_id="a1", source="edgar",
+                                   payload={"item1_business": "X" * 600}, payload_hash="new10k"))
+    assert "a1" in {c.company_id for c in stage4._candidates(store, CONFIG)}
+    # ...unless evidence-incremental is disabled (config-hash + TTL only)
+    import copy
+    off = copy.deepcopy(CONFIG); off["stage4_scoring"]["evidence_incremental"] = False
+    store.record_score(Score(company_id="a1", run_id=now_iso(), model="m", composite=0.8),
+                       run_id=now_iso(), config_hash=stage4._company_score_key(store, off, "a1"))
+    assert "a1" not in {c.company_id for c in stage4._candidates(store, off)}
 
 
 def test_rescore_ttl_expired_is_due(store):

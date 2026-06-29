@@ -5,7 +5,10 @@
 The pipeline is **functionally complete end-to-end** — universe → hard cuts → mechanism tagging →
 evidence harvest → tier-gated Claude scoring (with web research) → rank/dedup/export → interactive
 report → seed validation → run summary. Built milestones: **M1–M8** + **D9** (OpenAlex→web-research),
-**D10** (observability), **D11** (config-change incremental). 161 offline tests pass.
+**D10** (observability), **D11** (config-change incremental), **D12** (SEC ipo-date fallback), **D13–D16**
+(Claude-dispatch optimizations: async/batch-resume + crash-safe persist + basic web_search variant +
+12500 output cap), **D17** (EDGAR 10-K Item 1 source), **D18** (structured per-stage JSON logs), **D19**
+(evidence-level incremental). 177 offline tests pass.
 
 What remains is **calibration, data-quality enrichment, and productionization** — not core plumbing.
 Ordered by priority.
@@ -36,11 +39,11 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
 
 ## B. DATA-QUALITY ENRICHERS (raise signal per company)
 
-5. **EDGAR full-text + IR-poster Stage-2 sources** (spec §6, deferred). The 10-K "Business" (Item 1)
-   and S-1 text are far richer than yfinance's `longBusinessSummary`, and AACR/ASCO/ASH IR posters are
-   high-signal and API-invisible. Adds a real description signal for the data-engine judgment. Build:
-   a fail-open EDGAR client (submissions API → latest 10-K accession → fetch → extract Item 1; respect
-   `USER_AGENT`) + an IR-page scraper (robots-respecting). Wire as new `stage2.sources`.
+5. **EDGAR full-text** ~~+ IR-poster~~ Stage-2 sources (spec §6). **EDGAR DONE (D17/B5)** —
+   `clients/edgar_fulltext.py` fetches the latest 10-K/20-F, extracts Item 1 "Business", feeds a 2.8k
+   excerpt to the scorer as `sec_10k_business` (US filers, fail-open, capped). Still open: the
+   **IR-poster scraper** (AACR/ASCO/ASH posters, robots-respecting) and using S-1 text for pre-10-K
+   names; and a better Item-1 anchor (the current longest-match heuristic can include a cross-ref prefix).
 6. **Fully-diluted market cap incl. pre-funded warrants** (spec §5.2 / §0.1, deferred TODO). Today
    `mktcap_usd_fd` carries the **basic** yfinance cap (no PFW). For micro-caps PFW materially changes
    the band decision and the tier. Build: FD/PFW share counts cross-checked against filings (10-Q
@@ -62,9 +65,9 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
 10. **Scheduler / weekly cadence.** The screen is designed as a weekly monitor. The run `.bat` exists
     but there's no scheduled automation; add a Windows Task / cron (Stage 0 enrich → harvest → score
     selected tiers → rank → summary → render). Top-movers (D10) makes weekly diffs useful.
-11. **Structured JSON logs per stage** (spec §14/§15). Today each stage `log.info`s a summary dict +
-    writes audit rows; a structured per-stage JSON log line (counts in/out, cost, wall-time) would
-    round out observability. Minor.
+11. ~~**Structured JSON logs per stage**~~ **DONE (D18/C11)** — `observability.append_stage_log` writes
+    one JSON line per stage run (counts in/out, cost, wall-time) to `Outputs/logs/stage_events.jsonl`,
+    wired into `6_screen.py` for every stage.
 
 ---
 
@@ -83,9 +86,10 @@ The whole pipeline is only as trustworthy as its seed-eval (§13), and that is s
 
 14. ~~Per-milestone explainers for D9–D11.~~ **DONE** — `spec/post_M5_explained.md` covers everything
     built after M5 (M6–M8 summarized + D9/D10/D11 in full).
-15. **§12 evidence-level incremental.** D11 covers config-change re-scoring; the "recompute only
-    companies whose *evidence* changed since the prior run" gate for Stages 4/5 is still just the
-    Stage-2 freshness TTL. `run_meta.config_hash` is recorded and available to build a stage-wide gate.
+15. ~~**§12 evidence-level incremental.**~~ **DONE (D19/E15)** — `stage4._company_score_key` folds the
+    scoring-config hash with an evidence fingerprint (sorted `source:payload_hash`) into
+    `scores.config_hash`; `_candidates` re-opens a ticker when its config OR evidence changed, within the
+    TTL. Gated by `stage4_scoring.evidence_incremental` (default true). No schema migration.
 
 ---
 

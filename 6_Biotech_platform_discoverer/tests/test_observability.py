@@ -74,3 +74,19 @@ def test_write_run_summary_emits_stamped_and_stable(store, tmp_path):
                                               run_id="2026-06-29T12:00:00+00:00")
     assert stamped.exists() and (tmp_path / "run_summary.md").exists()
     assert ":" not in stamped.name                       # colons stripped from the stamped filename
+
+
+def test_append_stage_log_writes_jsonl(tmp_path):
+    """C11: append_stage_log emits one structured JSON line per stage to logs/stage_events.jsonl."""
+    import json
+    p1 = observability.append_stage_log(tmp_path, "2026-06-29T10:00:00", "stage4",
+                                        {"scored": 4, "cost_usd": 0.73, "web_searches": 12}, 41.2)
+    observability.append_stage_log(tmp_path, "2026-06-29T10:05:00", "stage5",
+                                   {"shortlist_rows": 10}, 0.06)
+    assert p1 == tmp_path / "logs" / "stage_events.jsonl"
+    lines = p1.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2                                   # appended, not overwritten
+    r0 = json.loads(lines[0])
+    assert r0["stage"] == "stage4" and r0["elapsed_s"] == 41.2
+    assert r0["summary"]["scored"] == 4 and r0["run_id"] == "2026-06-29T10:00:00"
+    assert json.loads(lines[1])["stage"] == "stage5"

@@ -125,6 +125,9 @@ stage4_scoring:
                                      # Haiku triage does the cheap cut. false = score tagged-only.
   rescore_ttl_days: 365              # a ticker scored within this window is NOT re-analysed (saves
                                      # cost); --force-rescore overrides (the "reset").
+  evidence_incremental: true         # E15 (§12): also re-open a ticker for scoring when its EVIDENCE
+                                     # changed (new 10-K / trials / patents), not just on a config change
+                                     # or TTL expiry. false = config-hash + TTL only (legacy behaviour).
   # cost-estimate knobs (calibrated to the 2026-06-28 real run: 13 cos real-time ≈ $1.32):
   est_input_tokens_per_company: 900   # richer bundle: + pedigree/patents/FDA designations
   est_output_tokens_rubric: 600      # memos run long (~600 tok observed)

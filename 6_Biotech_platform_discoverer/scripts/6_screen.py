@@ -15,9 +15,10 @@ lacking a cap are KEPT and flagged ``mktcap_unknown`` (never dropped).
 import argparse
 import logging
 import sys
+import time
 
 from platform_discoverer import config as cfg
-from platform_discoverer import stage0a, stage0b, stage1, stage2, stage4, stage5, tiering
+from platform_discoverer import observability, stage0a, stage0b, stage1, stage2, stage4, stage5, tiering
 from platform_discoverer.directory import ListingDirectoryProvider
 from platform_discoverer.listings import SeedCSVProvider, yfinance_enricher
 from platform_discoverer.store import Store, now_iso
@@ -85,6 +86,13 @@ def main(argv=None) -> int:
     run_id = now_iso()
     tickers = [t.strip() for t in args.tickers.split(",")] if args.tickers else None
 
+    # C11: structured per-stage JSON log line (counts in/out, cost, wall-time) → Outputs/logs/.
+    _t0 = [time.perf_counter()]
+
+    def _emit(stage: str, summary: dict) -> None:
+        observability.append_stage_log("Outputs", run_id, stage, summary, time.perf_counter() - _t0[0])
+        _t0[0] = time.perf_counter()
+
     with Store.open(args.db, config=config) as store:
         if args.stage in ("0", "0a"):
             regions = config["run"]["regions"]
@@ -92,24 +100,29 @@ def main(argv=None) -> int:
                        for r in prov.fetch(regions)]
             summary = stage0a.run(store, records, config, run_id=run_id)
             print(f"stage0a: {summary}")
+            _emit("stage0a", summary)
         if args.stage in ("0", "0b"):
             enricher = yfinance_enricher(config) if args.enrich_yf else None
             max_enrich = int((config.get("stage0b", {}) or {}).get("max_enrich", 0))
             summary = stage0b.run(store, config, run_id=run_id, enricher=enricher,
                                   max_enrich=max_enrich)
             print(f"stage0b: {summary}")
+            _emit("stage0b", summary)
         if args.stage == "1":
             tagger = TaxonomyTagger(cfg.load_taxonomy(args.taxonomy))
             summary = stage1.run(store, tagger, config, run_id=run_id)
             print(f"stage1: {summary}")
+            _emit("stage1", summary)
         if args.stage == "2":
             summary = stage2.run(store, config, run_id=run_id, limit=args.limit,
                                  include_excluded=args.include_excluded or None,
                                  incremental=not args.no_incremental, tickers=tickers)
             print(f"stage2: {summary}")
+            _emit("stage2", summary)
         if args.stage == "4" and args.resume:
             summary = stage4.resume_stage4(store, config, run_id=args.resume)
             print(f"stage4 resume: {summary}")
+            _emit("stage4_resume", summary)
         elif args.stage == "4":
             # IPO-date × market-cap TIER GATE — applied UPSTREAM of the Claude call (spec §5.6).
             # Resolve which tiers to score: explicit --tiers, else interactive prompt, else (with
@@ -146,12 +159,14 @@ def main(argv=None) -> int:
                                         tickers=tickers, use_batch=not args.no_batch,
                                         force=args.force_rescore, tiers=sel_tiers)
                     print(f"stage4: {summary}")
+                    _emit("stage4", summary)
                 else:
                     print("aborted — no API calls made.")
         if args.stage == "5":
             summary = stage5.run(store, config, run_id=run_id, out_path=args.out)
             print(f"stage5: {summary}")
             print(f"shortlist: {summary['shortlist_path']}")
+            _emit("stage5", summary)
         print(f"companies in store: {store.count_companies()}")
         rq = store.review_queue_dump()
         if rq:
