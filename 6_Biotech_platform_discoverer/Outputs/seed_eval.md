@@ -1,6 +1,6 @@
 # Acrivon-Pattern Screener — Seed Validation (§13)
 
-*Run `2026-06-29T14:37:31+00:00` · generated 2026-06-29 · decision threshold composite ≥ 0.6.*
+*Run `2026-06-29T16:04:01+00:00` · generated 2026-06-29 · decision threshold composite ≥ 0.6.*
 
 > ℹ️ **Graduated (accepted, D7):** positive(s) re-rated ABOVE the ceiling and cut by design: **TNGX** — out-of-scope graduates, not a failure.
 
