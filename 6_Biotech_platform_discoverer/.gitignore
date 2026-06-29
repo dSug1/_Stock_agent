@@ -1,0 +1,4 @@
+# Transient per-run artifacts (timestamp-keyed; would accumulate). The STABLE deliverables
+# (shortlist.md, screener_report*.{html,js}, seed_eval.md, run_summary.md) stay tracked.
+Outputs/run_*_summary.md
+Outputs/logs/
