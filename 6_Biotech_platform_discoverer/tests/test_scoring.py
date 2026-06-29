@@ -176,12 +176,23 @@ def test_web_search_tool_shape():
 
 # ── Stage 4 orchestration with a fake client ────────────────────────────────
 
+def _fake_rubric_for(bundle):
+    """ACON → contested (A3/C3 ≈ 0.65); anything else → high (≈0.9)."""
+    if (bundle.get("ticker") or "") == "ACON":
+        return _good_rubric(ticker="ACON",
+                            A_proprietary_data={"score": 3, "modality": "", "scale_evidence": "", "citation": ""},
+                            C_validation={"score": 3, "validation_type": "", "citation": ""})
+    return _good_rubric(ticker=bundle.get("ticker"))
+
+
 class FakeClient:
-    """Mimics AnthropicClient: triage keeps tickers starting with 'A'; rubric scores by ticker."""
+    """Mimics AnthropicClient: triage keeps tickers starting with 'A'; rubric scores by ticker.
+    Implements the async fan-out (score_realtime_many) + batch (score_batch w/ on_submit) interfaces."""
 
     def __init__(self):
         self.spent_usd = 1.23
         self.calls = 0
+        self.web_searches = 0
 
     def score_realtime(self, model, system, schema, bundle, max_tokens, *, validate=None,
                        max_retries=3, tools=None, max_pause_turns=4):
@@ -189,21 +200,23 @@ class FakeClient:
         if schema is rubric.TRIAGE_SCHEMA:
             keep = (bundle.get("ticker") or "").startswith("A")
             return {"keep": keep, "prior": 0.6 if keep else 0.1, "reason": "fake"}
-        return _good_rubric(ticker=bundle.get("ticker"))      # finalize re-score
+        return _fake_rubric_for(bundle)
+
+    def score_realtime_many(self, model, system, schema, items, max_tokens, *, validate=None,
+                            tools=None, concurrency=6, max_pause_turns=4, max_retries=2):
+        return {cid: self.score_realtime(model, system, schema, b, max_tokens, validate=validate)
+                for cid, b in items.items()}
 
     def score_batch(self, model, system, schema, bundles, max_tokens, *, validate=None, tools=None,
-                    **kw):
+                    on_submit=None, **kw):
         self.calls += 1
-        # one in-band (contested) and one clearly high, by ticker
-        out = {}
-        for cid, b in bundles.items():
-            if (b.get("ticker") or "") == "ACON":             # contested -> low scores
-                out[cid] = _good_rubric(ticker="ACON",
-                                        A_proprietary_data={"score": 3, "modality": "", "scale_evidence": "", "citation": ""},
-                                        C_validation={"score": 3, "validation_type": "", "citation": ""})
-            else:
-                out[cid] = _good_rubric(ticker=b.get("ticker"))
-        return out
+        if on_submit is not None:
+            on_submit("batch_fake_id")
+        return {cid: _fake_rubric_for(b) for cid, b in bundles.items()}
+
+    def collect_batch(self, batch_id, model, *, validate=None, **kw):
+        # resume path: return a fixed rubric for whatever the test seeded as survivors
+        return {}
 
 
 @pytest.fixture
@@ -278,19 +291,14 @@ def test_stage4_persists_incrementally_survives_crash(store):
         def __init__(self):
             self.spent_usd = 0.0; self.calls = 0; self.web_searches = 0
 
-        def score_realtime(self, model, system, schema, bundle, max_tokens, *, validate=None,
-                           max_retries=3, tools=None, max_pause_turns=4):
-            self.calls += 1
+        def score_realtime_many(self, model, system, schema, items, max_tokens, *, validate=None,
+                                tools=None, concurrency=6, max_pause_turns=4, max_retries=2):
             if schema is rubric.TRIAGE_SCHEMA:
-                keep = (bundle.get("ticker") or "").startswith("A")
-                return {"keep": keep, "prior": 0.5, "reason": "x"}
+                return {cid: {"keep": (b.get("ticker") or "").startswith("A"), "prior": 0.5,
+                              "reason": "x"} for cid, b in items.items()}
             if model == CONFIG["stage4_scoring"]["finalize_model"]:
-                raise RuntimeError("simulated crash during finalize")   # mid-run failure
-            if (bundle.get("ticker") or "") == "ACON":                   # contested → triggers finalize
-                return _good_rubric(ticker="ACON",
-                                    A_proprietary_data={"score": 3, "modality": "", "scale_evidence": "", "citation": ""},
-                                    C_validation={"score": 3, "validation_type": "", "citation": ""})
-            return _good_rubric(ticker=bundle.get("ticker"))
+                raise RuntimeError("simulated crash during finalize")    # mid-run failure
+            return {cid: _fake_rubric_for(b) for cid, b in items.items()}
 
         def score_batch(self, *a, **k):
             return {}
@@ -300,6 +308,39 @@ def test_stage4_persists_incrementally_survives_crash(store):
     rows = {r["company_id"] for r in
             store.conn.execute("SELECT company_id FROM scores WHERE run_id='rc'").fetchall()}
     assert {"a1", "a2"} <= rows     # both rubric scores persisted BEFORE the finalize crash
+
+
+def test_stage4_batch_persists_batch_id_for_resume(store):
+    _seed_scoring(store)
+    stage4.run(store, CONFIG, dispatch=True, client=FakeClient(), run_id="rb")   # batch path (default)
+    row = store.conn.execute("SELECT metrics_json FROM run_meta WHERE run_id='rb'").fetchone()
+    assert row is not None and "batch_fake_id" in row["metrics_json"]   # D13: id persisted on submit
+
+
+def test_resume_stage4_collects_persisted_batch(store):
+    _seed_scoring(store)
+    store.record_run_meta("rr", metrics={"stage4_batch_id": "b1",
+                                         "score_model": "claude-sonnet-4-6"})
+
+    class ResumeClient:
+        def __init__(self):
+            self.spent_usd = 0.0; self.web_searches = 0; self.calls = 0
+
+        def collect_batch(self, batch_id, model, *, validate=None, **kw):
+            assert batch_id == "b1"
+            return {"a1": _good_rubric(ticker="ACRV")}
+
+    out = stage4.resume_stage4(store, CONFIG, run_id="rr", client=ResumeClient())
+    assert out["scored"] == 1 and out["batch_id"] == "b1"
+    assert store.conn.execute(
+        "SELECT 1 FROM scores WHERE company_id='a1' AND run_id='rr'").fetchone() is not None
+
+
+def test_web_search_tool_allowed_domains():
+    from platform_discoverer.clients.anthropic_client import web_search_tool
+    t = web_search_tool(3, allowed_domains=["nature.com", "sec.gov"])
+    assert t["allowed_domains"] == ["nature.com", "sec.gov"] and t["max_uses"] == 3
+    assert "allowed_domains" not in web_search_tool(3)   # omitted when unrestricted
 
 
 def test_stage4_dispatch_tiers_and_persists(store):

@@ -11,6 +11,7 @@ convention). The key is read from ``ANTHROPIC_API_KEY`` (loaded from repo-root `
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -40,10 +41,15 @@ class BudgetExceeded(RuntimeError):
     """Raised when a call would push spend past ``max_usd`` (spec §14 hard stop)."""
 
 
-def web_search_tool(max_uses: int = 5) -> dict:
+def web_search_tool(max_uses: int = 5, allowed_domains: Optional[list] = None) -> dict:
     """The web_search server tool (dynamic-filtering variant; Sonnet 4.6 / Opus 4.8). Bounding
-    ``max_uses`` keeps the server-side tool loop short so it finishes within one call (no pause_turn)."""
-    return {"type": "web_search_20260209", "name": "web_search", "max_uses": int(max_uses)}
+    ``max_uses`` keeps the server-side tool loop short so it finishes within one call (no pause_turn).
+    ``allowed_domains`` (optional) restricts searches to a curated whitelist (focus + cost), mirroring
+    3_Biopharmcatalyst_parser's dispatch."""
+    tool: dict = {"type": "web_search_20260209", "name": "web_search", "max_uses": int(max_uses)}
+    if allowed_domains:
+        tool["allowed_domains"] = list(allowed_domains)
+    return tool
 
 
 class AnthropicClient:
@@ -140,21 +146,65 @@ class AnthropicClient:
                 log.debug("rubric validation failed, retrying: %s", exc)
         return None
 
-    # -- batch scoring (the Sonnet pass) --
-    def score_batch(self, model: str, system: str, schema: dict, bundles: dict[str, dict],
-                    max_tokens: int, *, validate=None, poll_seconds: int = 30,
-                    max_wait_seconds: int = 24 * 3600, tools: Optional[list] = None) -> dict[str, dict]:
-        """Score many bundles via the Message Batches API (50% cost). Returns {company_id: data}.
-
-        With ``tools`` (web_search) the server runs the tool loop per request; ``max_uses`` keeps it
-        bounded so each request finishes within the batch (a request that still paused is dropped,
-        fail-open). Web-search fees are tracked per result."""
-        if not bundles:
+    # -- async bounded-concurrency real-time fan-out (D13; reapplied from 3_Biopharmcatalyst) --
+    def score_realtime_many(self, model: str, system: str, schema: dict, items: dict[str, dict],
+                            max_tokens: int, *, validate=None, tools: Optional[list] = None,
+                            concurrency: int = 6, max_pause_turns: int = 4,
+                            max_retries: int = 2) -> dict[str, dict]:
+        """Score many bundles in PARALLEL via AsyncAnthropic with a bounded semaphore — far faster
+        wall-clock than a sequential `score_realtime` loop (the cause of the ~1hr web-search run).
+        Returns {id: data} (failed/None items dropped). Same pause_turn + cost/search tracking as the
+        sync path; asyncio is single-threaded so the `_track` increments are safe."""
+        if not items:
             return {}
+        self._guard()
+        from anthropic import AsyncAnthropic
+
+        async def _one(aclient, sem, cid, bundle):
+            async with sem:
+                for _ in range(max_retries):
+                    try:
+                        params = self._params(model, system, schema, bundle, max_tokens, tools)
+                        msg = await aclient.messages.create(**params)
+                        self._track(msg.usage, model, batch=False)
+                        self._track_searches(msg)
+                        pauses = 0
+                        while getattr(msg, "stop_reason", None) == "pause_turn" and pauses < max_pause_turns:
+                            params["messages"] = params["messages"] + [
+                                {"role": "assistant", "content": msg.content}]
+                            msg = await aclient.messages.create(**params)
+                            self._track(msg.usage, model, batch=False)
+                            self._track_searches(msg)
+                            pauses += 1
+                    except Exception as exc:  # noqa: BLE001 — fail-open one item
+                        log.warning("score_realtime_many error (%s): %s", model, exc)
+                        return cid, None
+                    try:
+                        data = self._extract(msg)
+                        return cid, (validate(data) if validate else data)
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("validation failed, retrying: %s", exc)
+                return cid, None
+
+        async def _run():
+            aclient = AsyncAnthropic()
+            sem = asyncio.Semaphore(max(1, int(concurrency)))
+            pairs = await asyncio.gather(*[_one(aclient, sem, cid, b) for cid, b in items.items()])
+            return {cid: r for cid, r in pairs if r is not None}
+
+        return asyncio.run(_run())
+
+    # -- batch scoring (the Sonnet pass) — split submit/collect for crash-recovery (D13) --
+    def submit_batch(self, model: str, system: str, schema: dict, bundles: dict[str, dict],
+                     max_tokens: int, *, tools: Optional[list] = None) -> Optional[str]:
+        """Submit a Message Batch and return its ``batch_id`` IMMEDIATELY (no poll). Persist the id
+        before polling so a crash mid-poll can re-attach (`collect_batch`) instead of orphaning the
+        batch (Anthropic keeps results ~29 days). Returns None for an empty set."""
+        if not bundles:
+            return None
         self._guard()
         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
         from anthropic.types.messages.batch_create_params import Request
-
         client = self._client()
         requests = [Request(custom_id=cid,
                             params=MessageCreateParamsNonStreaming(
@@ -162,17 +212,23 @@ class AnthropicClient:
                     for cid, b in bundles.items()]
         batch = client.messages.batches.create(requests=requests)
         log.info("batch %s submitted (%d requests)", batch.id, len(requests))
+        return batch.id
 
+    def collect_batch(self, batch_id: str, model: str, *, validate=None, poll_seconds: int = 30,
+                      max_wait_seconds: int = 24 * 3600) -> dict[str, dict]:
+        """Poll a submitted batch to completion, then decode + track usage/searches. Idempotent —
+        safe to re-call on the same ``batch_id`` (the `--resume` recovery path)."""
+        client = self._client()
         waited = 0
         while waited < max_wait_seconds:
-            b = client.messages.batches.retrieve(batch.id)
+            b = client.messages.batches.retrieve(batch_id)
             if b.processing_status == "ended":
                 break
             time.sleep(poll_seconds)
             waited += poll_seconds
 
         out: dict[str, dict] = {}
-        for result in client.messages.batches.results(batch.id):
+        for result in client.messages.batches.results(batch_id):
             if result.result.type != "succeeded":
                 log.warning("batch item %s: %s", result.custom_id, result.result.type)
                 continue
@@ -184,3 +240,21 @@ class AnthropicClient:
             except Exception as exc:  # noqa: BLE001
                 log.warning("batch item %s invalid: %s", result.custom_id, exc)
         return out
+
+    def score_batch(self, model: str, system: str, schema: dict, bundles: dict[str, dict],
+                    max_tokens: int, *, validate=None, poll_seconds: int = 30,
+                    max_wait_seconds: int = 24 * 3600, tools: Optional[list] = None,
+                    on_submit=None) -> dict[str, dict]:
+        """Submit + poll a Message Batch (50% cost). ``on_submit(batch_id)`` fires the instant the
+        batch is created — the caller persists the id before the long poll (crash-recovery, D13).
+        With ``tools`` (web_search) the server runs the bounded tool loop per request."""
+        batch_id = self.submit_batch(model, system, schema, bundles, max_tokens, tools=tools)
+        if batch_id is None:
+            return {}
+        if on_submit is not None:
+            try:
+                on_submit(batch_id)
+            except Exception as exc:  # noqa: BLE001 — never let the callback kill the batch
+                log.warning("on_submit callback raised %s; continuing to poll", exc)
+        return self.collect_batch(batch_id, model, validate=validate, poll_seconds=poll_seconds,
+                                  max_wait_seconds=max_wait_seconds)

@@ -13,6 +13,7 @@ estimated up front (no API) and the actual dispatch is gated + bounded by ``max_
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -190,12 +191,14 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     rubric_system = rubric.build_rubric_system(taxonomy, prestige_data)
 
     # web research (D9): the rubric/finalize tiers get web_search so Claude researches publications +
-    # pedigree itself (replacing OpenAlex). Triage stays search-free.
+    # pedigree itself (replacing OpenAlex). Triage stays search-free. allowed_domains focuses it (D13).
     wr = s4.get("web_research", {}) or {}
+    conc = int(s4.get("concurrency", 6))
     web_tool = None
     if wr.get("enabled", True):
         from .clients.anthropic_client import web_search_tool
-        web_tool = [web_search_tool(int(wr.get("max_searches_per_company", 5)))]
+        web_tool = [web_search_tool(int(wr.get("max_searches_per_company", 5)),
+                                    allowed_domains=wr.get("allowed_domains") or None)]
 
     if client is None:
         from .clients.anthropic_client import AnthropicClient
@@ -208,14 +211,16 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
     rid = run_id or now_iso()
     chash = cfg.config_hash(config)
 
-    # Tier 1 — Haiku triage over every candidate (recall-safe)
+    # Tier 1 — Haiku triage over every candidate (recall-safe), parallel via async fan-out (D13).
+    triage = client.score_realtime_many(s4["triage_model"], rubric.TRIAGE_SYSTEM,
+                                        rubric.TRIAGE_SCHEMA, bundles, 256,
+                                        validate=rubric.validate_triage, concurrency=conc)
     survivors: dict[str, dict] = {}
     killed = 0
-    for cid, bundle in bundles.items():
-        t = client.score_realtime(s4["triage_model"], rubric.TRIAGE_SYSTEM, rubric.TRIAGE_SCHEMA,
-                                  bundle, 256, validate=rubric.validate_triage)
+    for cid in bundles:
+        t = triage.get(cid)
         if t and t.get("keep"):
-            survivors[cid] = bundle
+            survivors[cid] = bundles[cid]
         else:
             killed += 1
             if t:
@@ -223,41 +228,40 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
                             run_id=rid, detail={"prior": t.get("prior"), "why": t.get("reason")})
 
     # Tier 2 — Sonnet full rubric over survivors. Each score is PERSISTED the instant it's produced
-    # (crash-safe — a later hang/error never discards earlier survivors' web-search work).
+    # (crash-safe — a later hang/error never discards earlier survivors' web-search work). Batch path
+    # persists the batch_id on submit so a crashed poll can be resumed (D13).
     scored: dict[str, dict] = {}
     if use_batch:
+        def _save_batch_id(bid):
+            store.record_run_meta(rid, started=rid, config_hash=chash,
+                                  metrics={"stage4_batch_id": bid, "phase": "batch_submitted",
+                                           "score_model": s4["score_model"]})
+            log.info("stage4: persisted batch_id %s to run_meta(%s) — resume with --resume %s",
+                     bid, rid, rid)
         rubric_out = client.score_batch(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA,
                                         survivors, 1500, validate=rubric.validate_rubric,
-                                        tools=web_tool)
-        for cid, rj in rubric_out.items():
-            scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
-                                         penalties=penalties, evidence_n=len(_evidence(store, cid)),
-                                         finalized=False, run_id=rid, config_hash=chash)
+                                        tools=web_tool, on_submit=_save_batch_id)
     else:
-        for cid, b in survivors.items():
-            rj = client.score_realtime(s4["score_model"], rubric_system, rubric.RUBRIC_SCHEMA, b,
-                                       1500, validate=rubric.validate_rubric, tools=web_tool)
-            if rj:
-                scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
-                                             penalties=penalties,
-                                             evidence_n=len(_evidence(store, cid)),
-                                             finalized=False, run_id=rid, config_hash=chash)
+        rubric_out = client.score_realtime_many(s4["score_model"], rubric_system,
+                                                rubric.RUBRIC_SCHEMA, survivors, 1500,
+                                                validate=rubric.validate_rubric, tools=web_tool,
+                                                concurrency=conc)
+    for cid, rj in rubric_out.items():
+        scored[cid] = _persist_score(store, cid, rj, s4["score_model"], weights=weights,
+                                     penalties=penalties, evidence_n=len(_evidence(store, cid)),
+                                     finalized=False, run_id=rid, config_hash=chash)
 
-    # Tier 3 — Opus finalize on the contested band (adversarial). The re-score upserts the same
-    # (company_id, run_id) row, so it's also durable immediately.
-    finalized = 0
-    for cid, s in list(scored.items()):
-        if lo <= s["composite"] <= hi:
-            rj = client.score_realtime(s4["finalize_model"],
-                                       rubric_system + rubric.ADVERSARIAL_SUFFIX,
-                                       rubric.RUBRIC_SCHEMA, survivors[cid], 1500,
-                                       validate=rubric.validate_rubric, tools=web_tool)
-            if rj:
-                scored[cid] = _persist_score(store, cid, rj, s4["finalize_model"], weights=weights,
-                                             penalties=penalties,
-                                             evidence_n=len(_evidence(store, cid)),
-                                             finalized=True, run_id=rid, config_hash=chash)
-                finalized += 1
+    # Tier 3 — Opus finalize on the contested band (adversarial), parallel (D13). Each re-score
+    # upserts the same (company_id, run_id) row, so it's also durable immediately.
+    contested = {cid: survivors[cid] for cid, s in scored.items() if lo <= s["composite"] <= hi}
+    final_out = client.score_realtime_many(
+        s4["finalize_model"], rubric_system + rubric.ADVERSARIAL_SUFFIX, rubric.RUBRIC_SCHEMA,
+        contested, 1500, validate=rubric.validate_rubric, tools=web_tool, concurrency=conc)
+    for cid, rj in final_out.items():
+        scored[cid] = _persist_score(store, cid, rj, s4["finalize_model"], weights=weights,
+                                     penalties=penalties, evidence_n=len(_evidence(store, cid)),
+                                     finalized=True, run_id=rid, config_hash=chash)
+    finalized = len(final_out)
 
     summary = {"mode": "dispatch", "candidates": len(bundles), "triage_killed": killed,
                "scored": len(scored), "opus_finalized": finalized,
@@ -267,4 +271,39 @@ def run(store: Store, config: dict, *, dispatch: bool = False, client=None,
                "web_searches": getattr(client, "web_searches", 0)}
     store.audit(stage="stage4", action="scored", reason="scoring_done", run_id=rid, detail=summary)
     log.info("stage4: %s", summary)
+    return summary
+
+
+def resume_stage4(store: Store, config: dict, *, run_id: str, client=None) -> dict:
+    """Re-attach a crashed batch run (D13): read the persisted ``stage4_batch_id`` from run_meta,
+    poll/collect it (idempotent), and persist the rubric scores. Recovers a run whose poll was
+    interrupted without re-submitting (Anthropic keeps batch results ~29 days)."""
+    row = store.conn.execute(
+        "SELECT metrics_json, config_hash FROM run_meta WHERE run_id=?", (run_id,)).fetchone()
+    meta = json.loads(row["metrics_json"]) if row and row["metrics_json"] else {}
+    batch_id = meta.get("stage4_batch_id")
+    if not batch_id:
+        return {"mode": "resume", "run_id": run_id, "error": "no stage4_batch_id in run_meta"}
+    s4 = config["stage4_scoring"]
+    weights = config["composite_weights"]
+    penalties = config.get("penalties", {}) or {}
+    model = meta.get("score_model", s4["score_model"])
+    chash = (row["config_hash"] if row else None) or cfg.config_hash(config)
+    if client is None:
+        from .clients.anthropic_client import AnthropicClient
+        client = AnthropicClient(
+            max_usd=(config.get("cost_controls", {}) or {}).get("max_usd_per_run", 50))
+    rubric_out = client.collect_batch(batch_id, model, validate=rubric.validate_rubric)
+    n = 0
+    for cid, rj in rubric_out.items():
+        _persist_score(store, cid, rj, model, weights=weights, penalties=penalties,
+                       evidence_n=len(_evidence(store, cid)), finalized=False,
+                       run_id=run_id, config_hash=chash)
+        n += 1
+    summary = {"mode": "resume", "run_id": run_id, "batch_id": batch_id, "scored": n,
+               "cost_usd": round(getattr(client, "spent_usd", 0.0), 2)}
+    store.record_run_meta(run_id, finished=now_iso(), config_hash=chash,
+                          metrics={**meta, "phase": "resumed", "resumed_scored": n})
+    store.audit(stage="stage4", action="scored", reason="resume_done", run_id=run_id, detail=summary)
+    log.info("stage4 resume: %s", summary)
     return summary

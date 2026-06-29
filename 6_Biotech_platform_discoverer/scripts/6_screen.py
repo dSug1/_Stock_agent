@@ -60,6 +60,9 @@ def main(argv=None) -> int:
                    help="Stage 4: which market-cap×age tiers to score, e.g. '1,2' or 'all' "
                         "(1=small&young, 2=large&young, 3=large&old, 4=small&old, 0=untiered). "
                         "Omit for an interactive prompt; with --yes and no --tiers, defaults to all.")
+    p.add_argument("--resume", default=None, metavar="RUN_ID",
+                   help="Stage 4 crash-recovery: re-attach the batch submitted under this run_id "
+                        "(from run_meta) and collect/persist its results without re-dispatching.")
     p.add_argument("--limit", type=int, default=None,
                    help="cap companies processed (Stage 2 harvest) — useful for a bounded first run")
     p.add_argument("--include-excluded", action="store_true",
@@ -104,7 +107,10 @@ def main(argv=None) -> int:
                                  include_excluded=args.include_excluded or None,
                                  incremental=not args.no_incremental, tickers=tickers)
             print(f"stage2: {summary}")
-        if args.stage == "4":
+        if args.stage == "4" and args.resume:
+            summary = stage4.resume_stage4(store, config, run_id=args.resume)
+            print(f"stage4 resume: {summary}")
+        elif args.stage == "4":
             # IPO-date × market-cap TIER GATE — applied UPSTREAM of the Claude call (spec §5.6).
             # Resolve which tiers to score: explicit --tiers, else interactive prompt, else (with
             # --yes) all tiers.

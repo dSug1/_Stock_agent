@@ -93,6 +93,10 @@ stage4_scoring:
                                      # pause_turn loops; 3 ≈ publications + founders + one follow-up)
     cost_per_1k_searches_usd: 10     # Anthropic web-search billing (separate from tokens)
     est_searches_per_company: 3      # for the pre-dispatch cost estimate
+    allowed_domains: []              # optional whitelist to focus searches (e.g. nature.com,
+                                     # pubmed.ncbi.nlm.nih.gov, sec.gov); [] = unrestricted (D13)
+  concurrency: 6                     # parallel real-time calls (triage + finalize) via AsyncAnthropic
+                                     # (D13) — bounded fan-out, far faster than a sequential loop
   use_batch_api: true                # async batch (50% cost) for the Sonnet rubric pass
   finalize_if_composite_between: [0.55, 0.75]  # contested band -> Opus adversarial re-score
   score_live_excluded: true          # score ALL live companies incl stage1_excluded (recall-safe);

@@ -5,6 +5,31 @@ specs describe the target, decisions record what was built). Newest first.
 
 ---
 
+## D13 (2026-06-29) — Claude-API optimizations reapplied from 3_Biopharmcatalyst_parser (BUILT)
+
+After a real-time web-search run hung ~1hr (sequential per-company web_search) and a stop lost all
+in-memory work, audited `3_Biopharmcatalyst_parser`'s dispatch (`module_7/dispatch.py` + `cache.py`)
+and reapplied its proven optimizations to component 6:
+
+1. **Crash-safe incremental persist** (already shipped `0c317c3`): each score written the instant it's
+   produced, not bulk-at-end. See memory `feedback_persist_during_long_api_batches`.
+2. **Batch submit/poll split + `on_submit(batch_id)` + `--resume`**: `anthropic_client.submit_batch`
+   returns the id immediately; `score_batch(on_submit=…)` persists it to `run_meta.metrics_json`
+   (`stage4_batch_id`) BEFORE the long poll; `collect_batch(batch_id)` is idempotent; new
+   `stage4.resume_stage4(run_id)` + `6_screen.py --resume RUN_ID` re-attach a crashed poll without
+   re-dispatching (Anthropic keeps batch results ~29 days). No schema change (uses run_meta).
+3. **Async bounded-concurrency real-time** (`score_realtime_many` via `AsyncAnthropic` + semaphore,
+   `stage4_scoring.concurrency=6`): triage (all candidates) + Opus finalize (contested band) +
+   the `--no-batch` rubric path now run in PARALLEL — the fix for the sequential ~1hr stall. Same
+   pause_turn + cost/search tracking as the sync path.
+4. **`allowed_domains` on web_search** (`web_research.allowed_domains`, default `[]`=unrestricted): a
+   curated whitelist to focus searches + cut cost, mirroring 3_'s domains YAML.
+5. **Skip-unchanged cache** — 3_'s identity+prompt-version cache (`cache.py`) is already the equivalent
+   of component 6's rescore-TTL (D3) + config-hash (D11); not re-implemented.
+
+Note: the in-flight batch was launched pre-D13 so its batch_id wasn't persisted (no resume for that one
+run); all future runs are covered. 169 tests pass.
+
 ## D12 (2026-06-29) — SEC earliest-filing-date fallback for ipo_date (BUILT)
 
 The Tier-0 (untiered) bucket exists when a company has no `ipo_date`; yfinance leaves gaps. Built a
