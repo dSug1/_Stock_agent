@@ -65,7 +65,10 @@ def test_daily_dry_run_end_to_end(tmp_path):
     _volatile("GOOD1", s)
     _volatile("GOOD2", s)
 
-    funnel = daily.run(s, CFG, "day1", FakeScorer(), dispatch=False, fetch=False, log=lambda m: None)
+    # route Outputs/ to tmp so the test never clobbers the real signals.md (post-mortem / D-6)
+    cfg = {**CFG, "outputs": {"dir": str(tmp_path / "Outputs")}}
+    funnel = daily.run(s, cfg, "day1", FakeScorer(), dispatch=False, fetch=False, log=lambda m: None)
+    assert str(tmp_path) in funnel["signals_md"]          # wrote to tmp, not the real Outputs/
     assert "score" not in funnel                         # dry: no scoring
     assert funnel["gate"]["passed"] == 2
 

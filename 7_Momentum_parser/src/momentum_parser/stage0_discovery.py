@@ -15,11 +15,18 @@ from .store import Store
 
 
 def _estimate(cfg: dict) -> float:
+    """Realtime, web_search-heavy call: web_search content is re-billed as input across pause_turn
+    continuations, so effective input (~96k) dwarfs the base prompt. Uses a discovery-specific token
+    model + calibration (1.0) — the 0.10 SCORING fudge does NOT apply here (no Batch, no cache reuse).
+    Tuned to a real invoice (~$0.39 @ sonnet/6 searches, D-5)."""
     cl = cfg.get("claude", {})
     model = cl.get("discovery_model") or cl.get("rubric_model")
-    calib = float(cl.get("cost", {}).get("cost_calibration_factor", 0.10))
+    dc = cl.get("cost", {}).get("discovery", {})
+    in_tok = float(dc.get("in_tok", 96000))
+    out_tok = float(dc.get("out_tok", 2500))
+    calib = float(dc.get("calibration_factor", 1.0))
     searches = int(cl.get("discovery_searches", 8))
-    return round((_tok_usd(model, 9000, 2500) + searches * WEB_SEARCH_USD) * calib, 4)
+    return round((_tok_usd(model, in_tok, out_tok) + searches * WEB_SEARCH_USD) * calib, 4)
 
 
 def run(store: Store, cfg: dict, run_id: str, scorer, dispatch: bool = False, log=print) -> dict:

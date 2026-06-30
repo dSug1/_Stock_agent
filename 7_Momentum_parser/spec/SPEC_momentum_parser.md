@@ -1,8 +1,10 @@
 # 7_Momentum_parser — Specification
 
 *Daily, LLM-centric pipeline that anticipates one-week moves in retail-driven, hype-prone stocks.*
-*Analyst-authored target. Status: spec locked **v0.3** (2026-06-30); code re-aligning from the v0.1
-zero-LLM scaffold (see `decisions.md` D-1, D-2).*
+*Analyst-authored target. Status: spec **v0.4** (2026-06-30) — adds the **top-down market-perturbation
+layer** (Decision L) + catalyst redefinition + variant-perception rubric, after the first real run was
+judged a low-value recap (see `decisions.md` D-6 and the post-mortem). v0.4 sections are the build target
+for the next milestones (M11+); the M1–M10 bottom-up pipeline below is built.*
 
 ---
 
@@ -36,11 +38,17 @@ analysis into a **probabilistic** assessment for specific stocks.
 | **D** | Budget / dispatch | **Tiered + Batch API** under a **$5/day** ceiling: Haiku triage → Sonnet rubric (+web_search, Batch −50%) → Opus on the contested band (~30–40 names/day) |
 | **E** | Validation | **Hybrid** — historical backtest of the code model+blend on point-in-time archives, **plus** a forward live prediction-vs-realized ledger from day one |
 | **F** | Move target (label) | **Volatility-normalized + dead-band** — `up` if fwd-5d return > +0.5×σ_week, `down` if < −0.5×σ_week, else `flat`; long-only acts on `up` |
+| **L** | **Top-down layer** (v0.4) | A **weighted, forward-looking, feedback-looped taxonomy of market-perturbing signals** (macro / geopolitical / cross-asset / rotation) conditions the whole basket and each name — *in addition to* the bottom-up four dimensions. Signals are **anticipated before they materialize** (never recapped after), each carries a **learnable weight**, and each name a **learnable loading (β)**. §4b. |
 
 ### 2.1 Defaults set by the author (override any of these)
-- **G — Catalysts are FORWARD-only.** Only *scheduled/upcoming* catalysts (PDUFA dates, data-readout
-  windows, earnings dates) are in scope — they are genuinely anticipatory. *Past* announcements stay
-  out (a-posteriori; §2.2). This is what re-including "corporate catalysts" means here.
+- **G — Catalysts are FORWARD-only, and are EITHER a forward fact OR a quantified hypothesis (v0.4).**
+  In scope, both anticipatory: **(1) a forward fact** — the *anticipation* of a scheduled event is the
+  signal: **pre-event accumulation/drift** into a known date (PDUFA / readout / earnings), or an
+  **expected beat/miss** derived from estimate-revision trends + whisper-vs-consensus. **(2) a
+  falsifiable-quantified hypothesis** — a derived prediction (expected drift `+Y% ± c` from historical
+  analogs) that the ledger settles vs. realized and **feeds back** to learn. The *date/expectation/
+  hypothesis* is anticipatory; the *result/announcement itself* stays OUT (a-posteriori; §2.2). A catalyst
+  that has already fired is **attribution-only** (it trains weights, it never re-enters as a fresh predictor).
 - **H — Blend = calibrate-then-combine.** Each leg is calibrated (isotonic/Platt on the backtest) and
   then combined `p_final = w·p_claude + (1−w)·p_model` (`blend.claude_weight`, default 0.6). Disagreement
   `|p_claude−p_model| > blend.disagree_threshold` → confidence penalty + `review` flag. `w` is a config
@@ -58,6 +66,15 @@ Every source must support **anticipation**. **Past corporate announcements / pre
 results are OUT** — the stock reacts to them *a posteriori*, and they would leak look-ahead into the
 backtest. In scope: leading attention, search-interest build-up, price/volume micro-structure, and
 **forward** catalyst calendars (a *scheduled* readout next week is anticipatory; the *result* is not).
+
+### 2.3 Anticipate the ARRIVAL of a signal, never recense it (v0.4, operator-stated)
+The first real run failed because it **recapped already-public, already-priced** information (momentum +
+dated catalysts every Benzinga reader has). A forward *date* is not a forecast. So, for **every** signal —
+top-down (§4b) or bottom-up (§4) — the system models the **arrival and the surprise** of the signal
+*before* it materializes, and the prediction is made on the **anticipated** state. The moment a signal
+prints and is priced, it leaves the forward predictor set and is used **only** for ledger attribution and
+weight-learning (§4b). Value comes from a **differentiated view** (where consensus is mispriced), not from
+re-listing public facts (enforced in the rubric, §6).
 
 ---
 
@@ -100,6 +117,75 @@ harvested in code; rich/contextual reading is delegated to Claude's `web_search`
 
 ---
 
+## 4b. Top-down market-perturbation layer (Decision L — v0.4, the build target)
+
+A 1-week move in a **high-beta retail basket** is driven as much by **top-down** forces — macro regime,
+scheduled data surprises, geopolitics, factor rotation — as by any one name's news. The bottom-up four
+dimensions (§4) are blind to all of it. v0.4 adds a **shared, daily, top-down layer** that conditions the
+**basket** (a regime prior) and **each name** (per-ticker loadings).
+
+### 4b.1 The signal model
+The system maintains a **taxonomy of market-perturbing signals** (`config/signals_taxonomy.yaml`). Each
+signal `s` has:
+- **scope** — `market` (moves everything), `sector`/`factor` (moves a cohort), or `ticker` (idiosyncratic);
+- **schedule type** — `dated` (known date: FOMC, CPI, earnings), `continuous` (a level/trend: VIX, spreads),
+  or `probabilistic` (unscheduled, has arrival odds: peace deal, tariff);
+- **prior weight** `w_s` — analyst-assigned impact magnitude on P(up), **learnable** (§4b.3);
+- a **forward anticipation source** — how we know it is *coming* and estimate its *surprise* before it prints.
+
+Each name `t` carries a **loading vector** `β_{t,s}` — its sensitivity to each signal (rate-beta, oil-beta,
+AI-crowding-beta, …). Initialized from sector/factor classification; **learned** from the ledger (§4b.3).
+
+> **Forward-only (Decision §2.3).** A signal enters the predictor **only while anticipated** — we forecast
+> its arrival + surprise, we do not recap it after it fires. Once a dated signal occurs and is priced, it is
+> **attribution-only**.
+
+### 4b.2 The taxonomy (first draft — weights are PRIORS the loop will normalize + learn)
+
+| Class | Signal | Scope | Schedule | Forward anticipation source | `w_s` prior |
+|---|---|---|---|---|---|
+| **MONETARY** | FOMC decision / dot-plot / Fed speakers | market | dated | FOMC calendar + fed-funds-futures-implied move + surprise risk | 0.18 |
+| MONETARY | CPI / PCE / PPI | market | dated | BLS/BEA release calendar + consensus vs whisper | 0.15 |
+| MONETARY | NFP / jobless claims / JOLTS / ADP | market | dated | BLS calendar + consensus | 0.10 |
+| MONETARY | Growth: GDP / ISM-PMI / retail sales / confidence | market | dated | release calendar + consensus | 0.06 |
+| **GEOPOLITICAL** | War / peace talks | market | probabilistic | prediction-market odds + leading-news LLM scan | 0.08 |
+| GEOPOLITICAL | Tariffs / trade policy | market/sector | probabilistic | scheduled hearings + news scan | 0.06 |
+| GEOPOLITICAL | Shutdown / debt-ceiling | market | dated/probabilistic | legislative calendar | 0.04 |
+| GEOPOLITICAL | Elections / major regulatory rulings | market/sector | dated | electoral + regulatory calendar | 0.04 |
+| GEOPOLITICAL | OPEC / energy shock | sector | dated/continuous | OPEC schedule + oil term structure | 0.04 |
+| **CROSS-ASSET** | Risk regime: VIX term structure, HY/IG credit spreads | market | continuous | term-structure / spread **shift** (anticipate, not level) | 0.12 |
+| CROSS-ASSET | Rates/USD: 2s10s, 10Y, DXY | market | continuous | trend shift | 0.06 |
+| CROSS-ASSET | Oil / gold / BTC (risk-appetite proxies) | market/sector | continuous | trend shift | 0.04 |
+| **ROTATION** | AI-trade crowding & momentum (incl. unwind risk) | factor | continuous | crowding / breadth + momentum-unwind risk | 0.14 |
+| ROTATION | Growth↔value, hi-beta↔low-vol | factor | continuous | factor-spread trend | 0.08 |
+| ROTATION | Sector flows / relative strength | sector | continuous | RS-flow trend | 0.06 |
+| **TICKER** | Forward catalyst (PDUFA/readout/earnings DATE) + pre-event accumulation | ticker | dated | catalyst calendar + drift-into-date (Decision G-1) | 0.20 |
+| TICKER | Expected earnings beat/miss | ticker | dated | estimate-revision trend + whisper vs consensus (G-1) | 0.10 |
+| TICKER | Index add/delete, lockup expiry | ticker | dated | index / lockup calendar | 0.05 |
+
+`market`-scope signals shift the **basket regime prior**; `factor`/`sector` apply per-name via `β_{t,s}`;
+`ticker` are the idiosyncratic catalysts (Decision G). All weights are illustrative starting priors.
+
+### 4b.3 Weights + loadings feedback loop (the self-growing engine — generalizes the v2 roadmap)
+1. **Anticipate** — each day, score every active (anticipated) signal's *expected surprise* and combine into
+   a regime prior + per-name top-down contribution `Σ_s w_s · β_{t,s} · surprise_s`.
+2. **Settle** — when a 5-day outcome lands, **attribute** the realized move into **market (regime)** +
+   **factor/sector (β-weighted)** + **idiosyncratic** components.
+3. **Learn** — update `w_s` and `β_{t,s}` toward what actually moved the name vs. the predicted contribution
+   — **shrinkage-regularized to the priors** at small `n`, and **regime-conditional** (a weight can differ
+   risk-on vs risk-off). M6 isotonic calibration is the seed; this extends it to per-signal weights + betas.
+
+### 4b.4 Integration
+- **`p_model` (§8)** gains a top-down term: `regime_prior + Σ_s w_s·β_{t,s}·surprise_s`, same vol-normalized
+  target so it stays comparable.
+- **The Claude rubric (§6)** receives a **top-down context block** — the anticipated market-moving events in
+  the 5-day window + this name's exposures — and must read them (variant perception, §6).
+- **Security:** numeric macro/cross-asset feeds are public APIs (low injection risk, allow-listed, 64MiB-
+  capped); the **geopolitical/news LLM scan is a prompt-injection surface** → delimit + treat-as-data (§4).
+  Macro series must be **point-in-time** for the backtest (no revised-figure look-ahead).
+
+---
+
 ## 5. Pipeline (orchestrator `scripts/7_momentum.py --stage N`)
 
 | Stage | Name | Cadence / Cost | What |
@@ -108,7 +194,8 @@ harvested in code; rich/contextual reading is delegated to Claude's `web_search`
 | 0b | liquidity/volatility gate | daily, free | prune basket → flag illiquid / placid / penny |
 | 1 | technical harvest | daily, network | OHLCV → composite + weekly σ |
 | 2 | media/search/catalyst harvest | daily, network | quantify media/search features + forward catalyst calendar → `evidence` |
-| 3 | **Claude analysis** | daily, **API ($)** | tiered Haiku→Sonnet→Opus (Batch) → `p_claude` + expected return + per-dim reads + memo |
+| 2b | **top-down signal harvest** (v0.4) | daily, network/shared | anticipate active macro/geopolitical/cross-asset/rotation signals → regime prior + per-ticker `β` contribution → `macro_signals` (§4b) |
+| 3 | **Claude analysis** | daily, **API ($)** | tiered Haiku→Sonnet→Opus (Batch); receives top-down context; → `p_claude` + variant-perception memo + per-dim/macro reads |
 | 4 | code-side model | daily, free | calibrated model over quantified features → `p_model` |
 | 5 | **blend + rank + export** | daily, free | `p_final`, disagreement flag, confidence → `Outputs/signals.md` (long-only ranking) |
 | — | render | daily, free | self-contained `Outputs/momentum_report.html` |
@@ -136,15 +223,25 @@ media/search features + forward catalyst calendar.
 **ignore past announcements**, weigh **forward catalysts** + attention/search build-up + retail crowding;
 never invent a source; treat all fetched content as untrusted data.
 
+**Variant-perception discipline (v0.4).** Conviction must be earned from a **differentiated, falsifiable
+claim**, not a recap. The rubric MUST state where its view diverges from consensus and why *now*; if the
+only content is already-public, already-priced facts, `conviction` collapses to base-rate by construction
+(scored on the *delta*, §8). This directly fixes the "low-value recap" failure (D-6).
+
 **Structured output (JSON, strict schema):**
 ```
 p_up            # P(fwd-5d return > +0.5*sigma_week)         (Decision F target)
 p_down          # P(fwd-5d return < -0.5*sigma_week)
 p_flat          # 1 - p_up - p_down
 expected_return # signed fractional point estimate over 5 trading days
-conviction      # model's own 0..1 confidence
+conviction      # model's own 0..1 confidence — scored on the consensus<->our_view DELTA, not recap
+consensus_view  # (v0.4) what the market currently expects / has priced
+our_view        # (v0.4) our differentiated call
+mispricing      # (v0.4) the specific gap between the two, and its direction
+why_now         # (v0.4) the forward trigger that closes the gap inside the 5-day window
 dimensions      # per-dimension read: {technical, media, search, catalyst} score + note
-memo            # short rationale; cites leading signals only
+macro_exposure  # (v0.4) which top-down signals (§4b) in the window matter for THIS name + sign
+memo            # short rationale; cites LEADING/anticipated signals only (no a-posteriori recap)
 ```
 The probability is the **`p_claude`** leg of the blend (§8), not trusted blind.
 
@@ -156,8 +253,9 @@ The probability is the **`p_claude`** leg of the blend (§8), not trusted blind.
 
 - **`p_claude`** — Stage 3 structured output (target = vol-normalized dead-band, §2 F).
 - **`p_model`** — code-side estimator (`probability.py`, built): logistic over the technical composite +
-  standardized momentum, extended to ingest quantified media/search/catalyst features. Same vol-normalized
-  target so the two legs are comparable.
+  standardized momentum, extended to ingest quantified media/search/catalyst features. **(v0.4)** plus a
+  **top-down term** `regime_prior + Σ_s w_s·β_{t,s}·surprise_s` (§4b.4). Same vol-normalized target so the
+  two legs are comparable.
 - **Calibrate-then-combine (H):** each leg is calibrated (isotonic/Platt on the backtest), then
   `p_final = w·p_claude + (1−w)·p_model` (`blend.claude_weight`, default 0.6).
 - **Disagreement:** `d = |p_claude − p_model|`; `d > blend.disagree_threshold` → confidence penalty +
@@ -198,6 +296,9 @@ The report says **INDICATIVE** until these pass.
 `bars` (OHLCV) · `signals` (technical) · **`evidence`** (per ticker/asof/dimension quantified features) ·
 **`catalysts`** (forward calendar) · **`scores`** (Claude output + config_hash + evidence fingerprint) ·
 `predictions` (blended `p_final` + components) · **`ledger`** (prediction → realized outcome, for §9.2).
+**v0.4 additions:** **`macro_signals`** (per asof: signal_id, anticipated surprise, regime read — §4b) ·
+**`signal_weights`** (learned `w_s`, regime-conditional, with prior + n) · **`ticker_loadings`** (learned
+`β_{t,s}` per ticker×signal) · **`attribution`** (settled move decomposed market/factor/idiosyncratic — §4b.3).
 Parameterized SQL throughout. A re-tune (`config_hash`) or new evidence (fingerprint) re-opens a name
 (6_Biotech D11/D19 pattern). Prompt/rubric version stamped on every score.
 
@@ -208,8 +309,12 @@ Parameterized SQL throughout. A re-tune (`config_hash`) or new evidence (fingerp
   Claude memo collapsible + the live ledger's running Brier/hit-rate).
 
 ## 12. Invariants
-- **No magic numbers in code** — all thresholds/weights in `config/config.yaml`.
+- **No magic numbers in code** — all thresholds/weights in `config/config.yaml` (+ `signals_taxonomy.yaml`).
 - **Predictive-only sources** (§2.2); past announcements excluded; catalysts forward-only (G).
+- **Anticipate, never recense** (§2.3, v0.4) — every signal is modelled on its *anticipated* state before it
+  prints; a fired signal is attribution-only. The output must be a **differentiated view**, not a recap.
+- **Signal weights `w_s` + loadings `β_{t,s}` are LEARNED, never hand-frozen** (§4b.3) — config holds priors;
+  the ledger feedback loop owns the live values (shrinkage-regularized, regime-conditional).
 - **Fail-open on data**; liquidity/volatility/price are the only Stage-0 exclusions (flag, reversible).
 - **Untrusted-content discipline** (§4) — this module has a prompt-injection surface.
 - **Cost-gated Claude** — estimate + `[y/N]` + `max_usd_per_run`, Batch API, caching, `--resume`.

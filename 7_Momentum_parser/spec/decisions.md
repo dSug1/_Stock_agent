@@ -4,6 +4,61 @@
 
 ---
 
+## D-6 — v0.4 redesign: top-down layer + catalyst redefinition + variant-perception (2026-06-30)
+Operator reviewed the first real run (`run_20260630T160212Z`, 37 names) and **rejected the analysis as
+low-value: descriptive, not predictive.** It recaps momentum indicators + **already-public, already-priced**
+catalysts (a forward *date* like "PDUFA Aug-5" is a calendar lookup, not a forecast). Two gaps named:
+(1) **no substantive top-down meat** — zero macro (rate path, CPI/NFP/FOMC), zero market-level signals
+(peace talks, tariffs, **rotation from AI**), which dominate a 1-week move in a high-beta retail basket;
+(2) catalysts are stock-specific facts, not **calculated guesses that feedback-loop**. Operator additions:
+the top-down layer must (a) define + **assign weights** to a **broader** list of market-/ticker-perturbing
+signals and **feedback-loop those weights**; (b) stay **forward-looking** — *anticipate the arrival* of a
+signal, don't recense it once it materialized. And catalysts may be **a forward fact** too (pre-event
+accumulation/drift, expected earnings beat/miss) **or** a falsifiable-quantified hypothesis — always forward.
+
+**Decisions locked → spec bumped to v0.4:**
+- **New Decision L — top-down market-perturbation layer** (§4b): a weighted, forward-looking, feedback-looped
+  **signal taxonomy** (MONETARY / GEOPOLITICAL / CROSS-ASSET / ROTATION + ticker catalysts) with per-signal
+  learnable weights `w_s` and per-ticker learnable loadings `β_{t,s}`; a regime prior + `Σ w_s·β·surprise`
+  term feeds both `p_model` and the Claude rubric. First-draft taxonomy + prior weights tabled in §4b.2.
+- **§2.3 anticipate-never-recense** principle; **Decision G revised** (catalyst = forward fact OR quantified
+  hypothesis, both anticipatory; fired = attribution-only).
+- **§6 variant-perception rubric** — new structured fields `consensus_view / our_view / mispricing / why_now
+  / macro_exposure`; conviction scored on the **delta**, recap → base rate.
+- **Store v0.4** — `macro_signals / signal_weights / ticker_loadings / attribution` tables.
+
+**Decided NOW (operator):** build order = **top-down taxonomy + regime layer leads** (then catalysts/thesis,
+then bug-fixes). Build starts next session; see `.claude/7_Momentum_parser_v0.4_build_handoff.md` (the TODO).
+
+**Also fixed now (redesign-independent, D-6a — test pollution):** `tests/test_daily.py::
+test_daily_dry_run_end_to_end` ran the real `stage4_export` with `outputs_dir()` hardcoded to `ROOT/Outputs`,
+so **every `pytest` run clobbered the real `Outputs/signals.md`** with `run day1 / GOOD1 / GOOD2`. Fixed:
+`config.outputs_dir` now honors `cfg["outputs"]["dir"]`; the test routes to `tmp_path`. Regenerated the real
+`signals.md` from `run_20260630T160212Z` (37 names). **103 tests pass.** The other post-mortem defects
+(stub-dims-leak-as-negative, GDELT artifacts, dead Opus tier, discovery retail-gate) are folded into the
+v0.4 build (the rubric/model they touch is being rewritten — fixing twice is waste).
+
+## D-5 — Stage-0a (discovery) cost estimate decoupled from the scoring fudge (2026-06-30)
+First real discovery invoice came in at **$0.39**, but the dry-run preview printed **~$0.01** (~31× low).
+Root cause: `_estimate` borrowed the Stage-3 `cost_calibration_factor` (0.10), which is the **Batch-scoring**
+fudge (M6: scoring estimate ran ~10× hot because of Batch −50% + prompt-cache reuse + inflated tokens).
+Discovery is the **opposite profile** — a realtime, web_search-heavy, multi-continuation call where each
+`pause_turn` re-bills the accumulated web_search result content as input, so effective input (~96k tok)
+dwarfs the base prompt (the old 9k guess). Fix: gave discovery its **own** cost model — `claude.cost.discovery`
+(`in_tok: 96000`, `out_tok: 2500`, `calibration_factor: 1.0`); the 0.10 scoring fudge no longer applies here.
+New estimate prints **$0.3855** vs actual $0.39 (<1%). Token model tuned to ONE invoice — re-tune `in_tok`
+as more bills land. No new milestone (cost-calibration fix); **103 tests** still pass.
+
+**D-5b — Stage-3 scoring bill checked, calibration HELD (2026-06-30).** First real scoring invoice **$0.22**
+for run `run_20260630T160212Z` (37 names: 37 Haiku triage → 29 Sonnet/Batch rubric → 0 Opus finalize).
+Estimator printed **$0.16** for n=37 (only ~1.4× low — in-ballpark, unlike discovery's 31×). The two
+structural guesses offset: it under-counted survivors (assumed `triage_pass_frac` 0.5 = 18.5, real **0.78** =
+29) but added phantom finalize (`contested_frac` 0.2, real 0). Backing calibration out of the actual tier
+shape ⇒ implied factor **0.131** vs configured **0.10** — at the upper edge of the documented 0.075–0.13
+band (6_Biotech bills 0.051/0.097). **No change made**: per the cost memory's rule, move the factor only when
+bills are *consistently* outside the band; one boundary sample isn't enough, and $0.22 ≪ the $5/day gate.
+Revisit `cost_calibration_factor` (→ ~0.13, err-high is safe) after 2–3 more scoring bills.
+
 ## D-4 — Daily-run UX + HTML report v0.3 + Windows unicode fix (2026-06-30)
 Operator ran `--daily` (DRY): appeared "stuck then closes" + HTML report stale (no Claude reasoning). Causes
 + fixes: (1) the slow network steps (prices yfinance, GDELT harvest) were **silenced** in `daily.run` → looked

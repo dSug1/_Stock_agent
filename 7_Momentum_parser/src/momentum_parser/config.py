@@ -29,8 +29,11 @@ def data_dir(cfg: dict) -> Path:
 
 
 def outputs_dir(cfg: dict) -> Path:
-    d = ROOT / "Outputs"
-    d.mkdir(exist_ok=True)
+    # Honor an explicit override (tests MUST set this so a dry-run never clobbers the real
+    # user-facing Outputs/ deliverables — see decisions.md D-6 / the post-mortem).
+    override = (cfg or {}).get("outputs", {}).get("dir")
+    d = Path(override) if override else ROOT / "Outputs"
+    d.mkdir(parents=True, exist_ok=True)
     return d
 
 

@@ -109,7 +109,11 @@ claude:
   cost:
     max_usd_per_run: 5.0        # $5/day TOTAL-RUN ceiling (Decision D); estimate-gate before dispatch.
                                 # Different axis from max_output_tokens (per-call cap). Over-estimate aborts.
-    cost_calibration_factor: 0.10   # script estimate ~10x real invoice (memory anthropic_cost_calibration)
+    cost_calibration_factor: 0.10   # SCORING (Batch) fudge: script estimate ~10x real invoice (memory anthropic_cost_calibration)
+    discovery:                      # Stage 0a is a DIFFERENT cost profile: realtime + web_search-heavy + multi-continuation.
+      in_tok: 96000                 # effective input incl. web_search content re-billed across pause_turn continuations
+      out_tok: 2500                 #   -> tuned to a real invoice (~$0.39 @ sonnet/6 searches, D-5); re-tune as bills land
+      calibration_factor: 1.0       # the 0.10 SCORING fudge does NOT apply here (no Batch -50%, no prompt-cache reuse)
   debug:                        # --debug: relax the run gate for cheap end-to-end testing (keeps 12500 cap)
     max_names: 3                # cap names scored in debug (0 = uncapped); ~cents at this size
     force_realtime: true        # skip Batch latency in debug (immediate results)
