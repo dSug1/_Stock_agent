@@ -31,6 +31,14 @@ def _run_id() -> str:
 
 
 def main(argv=None) -> int:
+    # Windows consoles are cp1252 and crash on non-cp1252 unicode in log output (σ, ×, →, ⚠).
+    # Force UTF-8 so a stray glyph can never abort a run mid-pipeline.
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
     ap = argparse.ArgumentParser(description="Momentum parser — daily signals + weekly probability")
     ap.add_argument("--stage", type=int, choices=[1, 2, 3, 4],
                     help="run a single stage (default: all)")

@@ -4,6 +4,23 @@
 
 ---
 
+## D-4 — Daily-run UX + HTML report v0.3 + Windows unicode fix (2026-06-30)
+Operator ran `--daily` (DRY): appeared "stuck then closes" + HTML report stale (no Claude reasoning). Causes
++ fixes: (1) the slow network steps (prices yfinance, GDELT harvest) were **silenced** in `daily.run` → looked
+frozen — now they print per-ticker progress + a GDELT "first run ~5s/call, cached after" notice; `--no-fetch`
+now also skips GDELT (fast offline preview). (2) `render.py` was still the M0 scaffold (P(up)/composite only)
+— **rewritten to v0.3**: expandable per-ticker cards with the blend columns (p_final/p_claude/p_model/Δ/conf/
+review) + a **Claude reasoning panel** (memo + per-dimension reads from `scores`), or a "model-only — run
+`--dispatch`" notice when unscored (DRY runs have NO Claude call by design = no spend). (3) **Windows cp1252
+console crashed on unicode** (σ/×/→/⚠) — `7_momentum.py` now `sys.stdout/stderr.reconfigure(encoding="utf-8")`
+so a stray glyph can never abort a run. Clarified to operator: DRY = no Claude/no spend; Claude reasoning
+only after `--dispatch`. **103 tests** (+render test). No new milestone — UX/robustness hardening of M8/M10.
+**D-4b — interactive .bat menu:** double-clicking `run_7_Momentum_parser.bat` passed no args → always DRY,
+no way to choose live. Rewrote the bat: NO-arg run shows a **[D]ry / [P]roduction menu** (P requires typing
+YES to confirm a billed run) + `pause` at end (window stays open). Passing any flag (scheduler/power-user)
+skips the menu and uses it as-is. (Couldn't exec the .bat in the Git-Bash sandbox — cmd bridge broken;
+verified by review + the underlying `--daily`/`--daily --no-fetch`/`--dispatch` python paths are tested.)
+
 ## M10 — GDELT news provider (real media dimension, 429-safe) (2026-06-30) — BUILT
 First real data provider — Stage-2 `media` dimension no longer a stub. `clients/gdelt.py` (DOC 2.0
 TimelineVolRaw=volume + TimelineTone=tone → `features.media_features`). **429-avoidance (5_Hype lesson,

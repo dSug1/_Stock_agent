@@ -1,7 +1,16 @@
-<!doctype html><html><head><meta charset='utf-8'><title>Momentum signals — run_20260630T153327Z</title><style>
-body{font:14px/1.5 system-ui,sans-serif;margin:24px;color:#1a1a1a;background:#fafafa}
-h1{font-size:20px} table{border-collapse:collapse;width:100%;background:#fff}
-th,td{padding:6px 10px;border-bottom:1px solid #eee;text-align:left}
-th{background:#f0f3f7;cursor:default} tr:hover td{background:#f7fbff}
-.p{font-weight:600} .up{color:#0a7d33} .dn{color:#b00020} .mut{color:#888}
-</style></head><body><h1>Momentum signals <span class='mut'>· run run_20260630T153327Z · 3 tickers</span></h1><p class='mut'>P(up) = probability the close one week out exceeds today's. Indicative until the probability model is backtest-calibrated (see spec/decisions.md D1).</p><table><thead><tr><th>#</th><th>Ticker</th><th>P(up)</th><th>Exp. return</th><th>Conf.</th><th>Composite</th><th>Fired signals</th></tr></thead><tbody><tr><td>1</td><td><b>AMD</b></td><td class='p'>60%</td><td class='up'>+1.30%</td><td>0.10</td><td>+0.44</td><td class='mut'>roc, breakout</td></tr><tr><td>2</td><td><b>TSLA</b></td><td class='p'>38%</td><td class='dn'>-1.52%</td><td>0.10</td><td>-0.08</td><td class='mut'>—</td></tr><tr><td>3</td><td><b>NVDA</b></td><td class='p'>37%</td><td class='dn'>-1.28%</td><td>0.20</td><td>-0.21</td><td class='mut'>roc</td></tr></tbody></table></body></html>
+<!doctype html><html><head><meta charset='utf-8'><title>Momentum signals — menucheck</title><style>
+body{font:14px/1.55 system-ui,sans-serif;margin:24px;color:#1a1a1a;background:#fafafa;max-width:1100px}
+h1{font-size:20px;margin-bottom:2px} .sub{color:#777;margin:0 0 16px}
+details{background:#fff;border:1px solid #e7e7e7;border-radius:8px;margin:6px 0}
+summary{padding:9px 12px;cursor:pointer;list-style:none;display:grid;
+  grid-template-columns:30px 70px repeat(5,1fr) 90px;gap:8px;align-items:center}
+summary::-webkit-details-marker{display:none}
+summary:hover{background:#f7fbff} .tk{font-weight:600}
+.pf{font-weight:700} .up{color:#0a7d33} .dn{color:#b00020} .mut{color:#888}
+.hdr{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em;padding:0 12px;
+  display:grid;grid-template-columns:30px 70px repeat(5,1fr) 90px;gap:8px}
+.body{padding:4px 14px 12px;border-top:1px solid #f0f0f0;color:#333}
+.claude{background:#f6f8fb;border-left:3px solid #4a78c2;padding:8px 10px;border-radius:4px;margin-top:6px}
+.dim{display:inline-block;margin-right:10px;color:#555} .badge{color:#b8860b;font-weight:600}
+code{background:#eef;padding:1px 4px;border-radius:3px}
+</style></head><body><h1>Momentum signals <span class='mut'>· 0 tickers · LONG-ONLY · INDICATIVE</span></h1><p class='sub'>Run menucheck · P(up) = P(forward-5d return &gt; +0.5×σ_week) = blended <b>p_final</b> = w·p_claude + (1−w)·p_model. Click a row for the Claude reasoning.</p><p class='sub'><b>This was a model-only run</b> — no Claude analysis was produced (DRY run = no spend). Run the live pipeline (<code>--dispatch</code>, capped at <code>max_usd_per_run</code>) to see Claude's reasoning per ticker.</p><div class='hdr'><span>#</span><span>Ticker</span><span>p_final</span><span>p_claude</span><span>p_model</span><span>Δ</span><span>exp.ret</span><span>conf</span></div></body></html>

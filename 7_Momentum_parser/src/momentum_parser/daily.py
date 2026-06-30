@@ -50,21 +50,28 @@ def run(store: Store, cfg: dict, run_id: str, scorer, dispatch: bool = False,
 
     # --- 1 prices (fetch the candidate set so the gate + scoring have bars) --------------------
     if fetch:
-        log(f"[daily] 1 prices · {len(cands)} candidates")
-        funnel["prices"] = stage1_prices.run(store, [UniverseRow(t, "") for t in cands], cfg, log=lambda m: None)
+        log(f"[daily] 1 prices · fetching OHLCV for {len(cands)} candidates (yfinance — slow on first run)...")
+        funnel["prices"] = stage1_prices.run(store, [UniverseRow(t, "") for t in cands], cfg, log=log)
 
     # --- 0b gate -> investable -----------------------------------------------------------------
     log("[daily] 0b liquidity/vol/price gate")
     funnel["gate"] = stage0_gate.run(store, cands, cfg, log=lambda m: None)
     investable = store.investable_tickers()
-    log(f"[daily] investable: {len(investable)} names")
+    log(f"[daily] investable: {len(investable)} names  ({funnel['gate']['by_status']})")
 
     if not investable:
         log("[daily] nothing passed the gate — no scoring/blend this run")
         return funnel
 
-    # --- 2 harvest -----------------------------------------------------------------------------
-    funnel["harvest"] = stage2_harvest.run(store, investable, cfg, log=lambda m: None)
+    # --- 2 harvest (media via GDELT is slow on a COLD cache; cached after, fail-open) -----------
+    harvest_cfg = cfg
+    if not fetch:                                   # --no-fetch = fast offline preview (skip GDELT too)
+        harvest_cfg = {**cfg, "sources": {**cfg.get("sources", {}), "media_provider": "none"}}
+        log("[daily] 2 harvest · --no-fetch -> media stub (skipping GDELT for a fast preview)")
+    elif cfg.get("sources", {}).get("media_provider", "none") == "gdelt":
+        log(f"[daily] 2 harvest · media via GDELT for {len(investable)} names — first run ~5s/call "
+            "(rate-limit spacing); cached after, fail-open on 429. Working...")
+    funnel["harvest"] = stage2_harvest.run(store, investable, harvest_cfg, log=log)
 
     # --- 3 score (gated; $5 cap protects the automated dispatch) -------------------------------
     if dispatch:
