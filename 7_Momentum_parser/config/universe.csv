@@ -1,0 +1,10 @@
+ticker,name
+# HAND-CURATED basket (spec Decision C). Pick names that are: large RETAIL ownership (low institutional
+# float) + HYPE-prone (moderate-to-significant volatility) + liquid enough to trade $100k/session.
+# A daily liquidity gate (config liquidity.*) flags any name whose ADV drops below the floor.
+# The placeholders below are large-caps for pipeline testing only — REPLACE with real retail/hype names
+# (meme stocks, hype-prone biotech) for production. Lines starting with '#' are ignored.
+AAPL,Apple Inc.
+NVDA,NVIDIA Corp.
+AMD,Advanced Micro Devices
+TSLA,Tesla Inc.

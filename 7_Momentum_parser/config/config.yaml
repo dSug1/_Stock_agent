@@ -1,0 +1,130 @@
+# 7_Momentum_parser — runtime config. All tunables here; no magic numbers in code.
+# Daily trade-signal screener + weekly (5-trading-day) price-change probability.
+
+run:
+  description: "daily momentum screen"
+
+store:
+  db_file: momentum.db          # data/momentum.db (gitignored)
+
+universe:                       # Decision C — CLAUDE-DISCOVERY-FIRST (no hand-curated CSV)
+  discovery:
+    enabled: true
+    cadence_days: 7             # weekly Claude web_search proposes the candidate basket
+    max_candidates: 60          # cap before the daily gate prunes
+  min_weekly_vol: 0.04          # volatility floor (thesis needs volatility) — weekly sigma >= 4%
+  min_price: 1.0                # drop sub-$1 penny noise
+  seed_csv: config/universe.csv # optional warm-start / fallback when discovery hasn't run yet
+
+liquidity:                      # Stage-0b daily gate (Decision C). Flag, never silent-drop.
+  min_session_usd: 100_000      # must be able to trade $100k in one session
+  safety_mult: 20               # require ADV >= 20x that (=$2M) so a $100k clip is <~5% of volume
+  adv_window: 20                # trailing sessions for average daily dollar volume
+
+harvest:                        # Stage 2 feature engineering (spec v0.3 §4) — pure, provider-isolated
+  baseline_window: 20           # trailing window for the media/search surge ratio
+  slope_window: 10              # window for the attention/search slope
+  catalyst_horizon_days: 21     # a scheduled catalyst within this many days is a forward signal
+
+gdelt:                          # GDELT news provider (Stage 2 media) — 429-SAFE (5_Hype lesson, extended)
+  min_interval_s: 5.0           # proactive spacing between ANY two GDELT calls (avoid bursting -> 429)
+  retries: 2                    # retry on 429/error with backoff (honors Retry-After), then fail open
+  backoff_s: 5.0
+  lookback: 60                  # days of daily volume/tone per ticker
+  cache_ttl_s: 86400            # same-day disk cache (data/gdelt_cache) — re-runs never re-hit GDELT
+  query_template: "{ticker} stock"   # fallback query when the company name is unknown
+  name_query_template: '"{name}"'    # preferred: company-NAME phrase query (precise; from discovery)
+
+sources:                        # Decision B — predictive-only dimensions. SOCIAL MEDIA REMOVED (D-2).
+  technical: true               # OHLCV bullishness composite + weekly sigma (built)
+  mainstream_media: true        # article/headline volume + tone (via Claude web_search, allow-listed)
+  media_provider: gdelt         # Stage 2 media dimension: "gdelt" (real, 429-safe) or "none" (stub)
+  web_search_stats: true        # search-interest surge vs baseline (5_Hype_parser idea)
+  forward_catalysts: true       # scheduled PDUFA / data-readout / earnings DATES (anticipatory, D-2/G)
+  social_sentiment: false       # REMOVED — too costly/noisy (Decision B, D-2)
+  exclude:                      # explicitly out of scope (a-posteriori / look-ahead)
+    - past_announcements        # the RESULT of a catalyst (reactive); the scheduled DATE is in-scope
+    - press_releases
+    - earnings_results
+
+prices:
+  history_period: "2y"          # yfinance lookback per ticker (LOCAL-ONLY provider; swap before deploy)
+
+signals:
+  min_bars: 60                  # skip tickers with thinner history than this
+  sma_fast: 20
+  sma_slow: 50
+  roc_window: 20
+  roc_fire: 0.10                # |ROC| over window that counts as a fired momentum signal
+  rsi_window: 14
+  rsi_overbought: 70
+  rsi_oversold: 30
+  volume_window: 20
+  volume_fire: 2.0              # today's volume >= 2x its average -> fired
+  breakout_window: 55           # new N-day high/low (Donchian)
+  weights:                      # relative weight in the bullishness composite (default 1.0 each)
+    sma_cross: 1.5
+    roc: 1.5
+    rsi: 0.8
+    macd_hist: 1.0
+    volume_surge: 0.7
+    breakout: 1.2
+
+probability:
+  horizon_days: 5               # ~ one calendar week
+  target:                       # Decision F — vol-normalized dead-band label (long-only acts on `up`)
+    vol_band_mult: 0.5          # up if fwd-5d return > +0.5*sigma_week; down if < -0.5*sigma_week
+    vol_window_weeks: 12        # trailing weeks to estimate sigma_week
+  beta: 2.2                     # logistic slope on the composite (calibrate via backtest — D-2/E)
+  bias: 0.0
+  drift_weight: 0.5             # weight on standardized recent-return momentum
+  drift_window: 20
+  use_empirical: true           # blend in the ticker's own historical conditional up-rate
+  empirical_band: 0.25          # composite neighbourhood for the empirical estimate
+  empirical_min_samples: 20
+  empirical_max_weight: 0.5     # cap on the empirical blend (rest is the logistic baseline)
+
+# --- Claude analysis (Stage 3) — TO BUILD per spec v0.2 §6 -------------------------------------
+claude:
+  enabled: false                # flip on once Stage 3 is built; daily run is cost-gated regardless
+  triage_model: claude-haiku-4-5-20251001   # Tier 1: search-free triage on ALL names (~$0.005/name)
+  rubric_model: claude-sonnet-4-6           # Tier 2: main rubric +web_search, via Batch API (-50%)
+  finalize_model: claude-opus-4-8           # Tier 3: adversarial pass on the contested band only
+  discovery_model: claude-sonnet-4-6        # Stage 0a: weekly universe discovery (one +web_search call)
+  discovery_searches: 6                     # web_search max_uses for the discovery call
+  discovery_timeout_s: 300                  # discovery runs several searches -> needs more than the 120s default
+  contested_band: [0.45, 0.65]  # p_claude in this range -> escalate to the Opus finalize tier
+  use_batch: true               # Batch API default (-50% tokens; reuse 3_Biopharmcatalyst patterns)
+  max_output_tokens: 12500      # per-CALL output ceiling (NOT a spend — billed on actual tokens). Sized to
+                                # the full structured response (memory: undersized cap truncates -> dropped).
+                                # KEEP <16000: the SDK requires streaming above that. Raise only WITH
+                                # streaming if truncation (stop_reason==max_tokens) ever appears.
+  web_search_variant: web_search_20250305   # basic variant honors max_uses + ~10x faster (D16 memory)
+  max_searches_per_company: 5
+  allowed_domains: []           # allow-list for web_search (security; populate before enabling)
+  triage_floor: 0.35            # Haiku-triage p_up below this -> dropped (recall-safe; keep borderline)
+  concurrency: 6                # bounded async concurrency for the real-time tiers (triage/finalize)
+  request_timeout_s: 120        # bound the SDK timeout (the "1hr hang" fix, memory D14)
+  max_continuations: 4          # pause_turn re-sends for the web_search server-tool loop
+  cost:
+    max_usd_per_run: 5.0        # $5/day TOTAL-RUN ceiling (Decision D); estimate-gate before dispatch.
+                                # Different axis from max_output_tokens (per-call cap). Over-estimate aborts.
+    cost_calibration_factor: 0.10   # script estimate ~10x real invoice (memory anthropic_cost_calibration)
+  debug:                        # --debug: relax the run gate for cheap end-to-end testing (keeps 12500 cap)
+    max_names: 3                # cap names scored in debug (0 = uncapped); ~cents at this size
+    force_realtime: true        # skip Batch latency in debug (immediate results)
+    ignore_budget: true         # bypass the max_usd_per_run abort in debug
+
+# --- Hybrid blend (Stage 5) — Decision A ------------------------------------------------------
+blend:
+  claude_weight: 0.6            # p_final = w*p_claude + (1-w)*p_model
+  disagree_threshold: 0.25      # |p_claude - p_model| above this -> confidence penalty + review flag
+
+validation:                     # §9 — forward ledger + historical backtest
+  up_call_threshold: 0.5        # p_final >= this -> the ledger's directional 'up' call (calibrate later)
+  min_samples: 100              # below this, metrics are flagged UNDERPOWERED (5_Hype lesson: n>=100)
+  min_calibration_samples: 50   # below this, the isotonic calibrator stays the identity (M6)
+
+export:
+  min_confidence: 0.0           # filter exported rows (0 = keep all)
+  min_p_up: 0.0
