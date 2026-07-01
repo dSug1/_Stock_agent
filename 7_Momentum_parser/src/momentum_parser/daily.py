@@ -73,6 +73,17 @@ def run(store: Store, cfg: dict, run_id: str, scorer, dispatch: bool = False,
             "(rate-limit spacing); cached after, fail-open on 429. Working...")
     funnel["harvest"] = stage2_harvest.run(store, investable, harvest_cfg, log=log)
 
+    # --- 2b top-down harvest + β loadings (v0.4 / §4b). Continuous legs are FREE; the dated
+    #     econ-calendar web_search call fires only on --dispatch (shared, cached, inside the $5 cap). ----
+    if fetch:
+        from . import loadings, stage2b_topdown
+        run_asof = max((store.latest_bar_date(t) or "") for t in investable)
+        log("[daily] 2b top-down harvest (regime + cross-asset/rotation; dated macro on --dispatch)")
+        funnel["topdown"] = stage2b_topdown.run(store, cfg, run_asof,
+                                                scorer=scorer if dispatch else None, log=log)
+        funnel["loadings"] = loadings.refresh_universe(
+            store, investable, cfg, updated_at=datetime.now(timezone.utc).isoformat(), log=log)
+
     # --- 3 score (gated; $5 cap protects the automated dispatch) -------------------------------
     if dispatch:
         log("[daily] 3 tiered Claude scoring (dispatch)")
@@ -88,6 +99,8 @@ def run(store: Store, cfg: dict, run_id: str, scorer, dispatch: bool = False,
 
     # --- §9 settle elapsed predictions + report -----------------------------------------------
     funnel["settle"] = validation.settle_pass(store, cfg, log=lambda m: None)
+    from . import feedback                                  # M16: learn signal weights from settled outcomes
+    funnel["feedback"] = feedback.run(store, cfg, log=log)
     validation.build_report(store, cfg)
 
     log(f"[daily] done · investable={len(investable)} · signals -> {path}")

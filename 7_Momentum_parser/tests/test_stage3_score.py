@@ -68,16 +68,17 @@ def test_dry_run_spends_nothing(tmp_path):
 def test_full_tiering_persist_and_contested(tmp_path):
     s = _store(tmp_path)
     _seed(s, ["AAA", "BBB", "CCC"])
-    # AAA strong (survives, not contested), BBB borderline (survives + contested), CCC dead (triaged out)
+    # M17: Opus vets the ACTIONABLE survivors (p_claude >= finalize_min_p 0.45), not a symmetric band.
+    # AAA(0.8) + BBB(0.5) are both actionable -> both finalized; CCC(0.2) triaged out.
     out = stage3_score.run(s, ["AAA", "BBB", "CCC"], CFG, "run1",
                            FakeScorer({"AAA": 0.8, "BBB": 0.5, "CCC": 0.2}), dispatch=True)
-    assert out["survivors"] == 2 and out["contested"] == 1 and out["dispatched"] is True
+    assert out["survivors"] == 2 and out["contested"] == 2 and out["dispatched"] is True
 
     rows = {r["ticker"]: r for r in s.scores_for_run("run1")}
     assert set(rows) == {"AAA", "BBB", "CCC"}
     assert rows["CCC"]["tier"] == "triage"      # never escalated
-    assert rows["AAA"]["tier"] == "rubric"      # survived, not contested
-    assert rows["BBB"]["tier"] == "finalize"    # contested -> Opus final pass
+    assert rows["AAA"]["tier"] == "finalize"    # actionable -> Opus adversarial pass
+    assert rows["BBB"]["tier"] == "finalize"    # actionable -> Opus adversarial pass
     # batch was recorded then marked done (crash-safe lifecycle)
     assert s.open_batches("run1") == []
     job = s.conn.execute("SELECT status FROM batch_jobs WHERE run_id='run1' AND tier='rubric'").fetchone()

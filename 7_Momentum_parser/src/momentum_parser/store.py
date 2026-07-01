@@ -16,7 +16,7 @@ from typing import Iterable, Optional
 
 from .models import Bar, Prediction, Signal
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
 
 
 class Store:
@@ -147,6 +147,66 @@ class Store:
             )
             self.conn.execute("PRAGMA user_version=6")
             self.conn.commit()
+        if v < 7:
+            # v0.4 (Decision L / spec §4b): the top-down market-perturbation layer.
+            #   macro_signals  — per asof, the ANTICIPATED state of each active signal (surprise, regime).
+            #   signal_weights — the LEARNED w_s (regime-conditional; regime='all' = fallback), + its prior.
+            #   ticker_loadings— the LEARNED beta_{t,s} per ticker x signal, + its prior.
+            #   attribution    — a settled 5d move decomposed into market/factor/idiosyncratic (feeds learning).
+            self.conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS macro_signals (
+                    asof TEXT NOT NULL, signal_id TEXT NOT NULL,
+                    active INTEGER, surprise REAL, regime TEXT, horizon_days INTEGER,
+                    features_json TEXT, note TEXT,
+                    PRIMARY KEY (asof, signal_id)
+                );
+                CREATE TABLE IF NOT EXISTS signal_weights (
+                    signal_id TEXT NOT NULL, regime TEXT NOT NULL,
+                    w REAL, w_prior REAL, n INTEGER, updated_at TEXT,
+                    PRIMARY KEY (signal_id, regime)
+                );
+                CREATE TABLE IF NOT EXISTS ticker_loadings (
+                    ticker TEXT NOT NULL, signal_id TEXT NOT NULL,
+                    beta REAL, beta_prior REAL, n INTEGER, updated_at TEXT,
+                    PRIMARY KEY (ticker, signal_id)
+                );
+                CREATE TABLE IF NOT EXISTS attribution (
+                    ticker TEXT NOT NULL, asof TEXT NOT NULL, run_id TEXT NOT NULL,
+                    realized_return REAL, market_comp REAL, factor_comp REAL, idio_comp REAL,
+                    contributions_json TEXT, settled_at TEXT,
+                    PRIMARY KEY (ticker, asof, run_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_macro_asof ON macro_signals(asof);
+                CREATE INDEX IF NOT EXISTS ix_attr_run ON attribution(run_id);
+                """
+            )
+            self.conn.execute("PRAGMA user_version=7")
+            self.conn.commit()
+        if v < 8:
+            # v0.4 M14: variant-perception fields on the Claude score (consensus/our_view/mispricing/why_now/
+            # macro_exposure + raw_conviction + variant_strength) — one additive JSON column (guarded).
+            existing = {r[1] for r in self.conn.execute("PRAGMA table_info(scores)")}
+            if "variant_json" not in existing:
+                self.conn.execute("ALTER TABLE scores ADD COLUMN variant_json TEXT")
+            self.conn.execute("PRAGMA user_version=8")
+            self.conn.commit()
+        if v < 9:
+            # v0.4 M15: catalyst as a FALSIFIABLE HYPOTHESIS — a quantified predicted drift recorded so the
+            # ledger can settle it vs realized and the M16 loop can learn (a calculated guess with a record).
+            self.conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS catalyst_hypotheses (
+                    ticker TEXT NOT NULL, asof TEXT NOT NULL, event_date TEXT NOT NULL, kind TEXT,
+                    days_to INTEGER, accumulation REAL, expected_drift REAL, dispersion REAL,
+                    horizon_days INTEGER, realized_drift REAL, settled_at TEXT,
+                    PRIMARY KEY (ticker, asof, event_date)
+                );
+                CREATE INDEX IF NOT EXISTS ix_cathyp_open ON catalyst_hypotheses(settled_at);
+                """
+            )
+            self.conn.execute("PRAGMA user_version=9")
+            self.conn.commit()
 
     # ------------------------------------------------------------------ bars
     def upsert_bars(self, ticker: str, bars: Iterable[Bar]) -> int:
@@ -246,10 +306,41 @@ class Store:
             (ticker, on_or_after),
         ).fetchone()
 
+    # ------------------------------------------------------------------ catalyst hypotheses (M15, falsifiable)
+    def upsert_catalyst_hypothesis(self, ticker: str, asof: str, event_date: str, kind: str,
+                                   hyp: dict) -> None:
+        """Persist a quantified, forward catalyst prediction for later settlement (§2.1-G / M15)."""
+        self.conn.execute(
+            "INSERT INTO catalyst_hypotheses(ticker,asof,event_date,kind,days_to,accumulation,"
+            "expected_drift,dispersion,horizon_days) VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(ticker,asof,event_date) DO UPDATE SET kind=excluded.kind,days_to=excluded.days_to,"
+            "accumulation=excluded.accumulation,expected_drift=excluded.expected_drift,"
+            "dispersion=excluded.dispersion,horizon_days=excluded.horizon_days",
+            (ticker, asof, event_date, kind, hyp.get("days_to_catalyst"), hyp.get("accumulation"),
+             hyp.get("expected_drift"), hyp.get("dispersion"), hyp.get("horizon_days")),
+        )
+        self.conn.commit()
+
+    def settle_catalyst_hypothesis(self, ticker: str, asof: str, event_date: str,
+                                   realized_drift: float, settled_at: str) -> None:
+        self.conn.execute(
+            "UPDATE catalyst_hypotheses SET realized_drift=?,settled_at=? "
+            "WHERE ticker=? AND asof=? AND event_date=?",
+            (realized_drift, settled_at, ticker, asof, event_date),
+        )
+        self.conn.commit()
+
+    def open_catalyst_hypotheses(self) -> list[sqlite3.Row]:
+        """Unsettled catalyst predictions (the M16 settle pass fills realized_drift)."""
+        return self.conn.execute(
+            "SELECT * FROM catalyst_hypotheses WHERE settled_at IS NULL ORDER BY asof", ()
+        ).fetchall()
+
     # ------------------------------------------------------------------ scores (Stage 3, tiered Claude)
     def write_score(self, ticker: str, asof: str, run_id: str, **kw) -> None:
         cols = ("tier", "p_up", "p_down", "p_flat", "expected_return", "conviction",
-                "dimensions_json", "memo", "config_hash", "evidence_fingerprint", "prompt_version")
+                "dimensions_json", "memo", "config_hash", "evidence_fingerprint", "prompt_version",
+                "variant_json")
         vals = [kw.get(c) for c in cols]
         self.conn.execute(
             "INSERT INTO scores(ticker,asof,run_id," + ",".join(cols) + ") "
@@ -385,6 +476,107 @@ class Store:
         from .calibration import Calibrator
         row = self.conn.execute("SELECT params_json FROM calibration WHERE leg=?", (leg,)).fetchone()
         return Calibrator.from_json(json.loads(row["params_json"])) if row else Calibrator()
+
+    # ------------------------------------------------------------------ top-down layer (v0.4 / §4b)
+    def upsert_macro_signal(self, asof: str, signal_id: str, active: bool, surprise: Optional[float],
+                            regime: Optional[str] = None, horizon_days: Optional[int] = None,
+                            features: Optional[dict] = None, note: str = "") -> None:
+        """The anticipated state of one signal on ``asof`` (before it prints — §2.3 anticipate-not-recense)."""
+        self.conn.execute(
+            "INSERT INTO macro_signals(asof,signal_id,active,surprise,regime,horizon_days,features_json,note) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(asof,signal_id) DO UPDATE SET "
+            "active=excluded.active,surprise=excluded.surprise,regime=excluded.regime,"
+            "horizon_days=excluded.horizon_days,features_json=excluded.features_json,note=excluded.note",
+            (asof, signal_id, int(active), surprise, regime, horizon_days, json.dumps(features or {}), note),
+        )
+        self.conn.commit()
+
+    def get_macro_signals(self, asof: str, active_only: bool = False) -> list[sqlite3.Row]:
+        q = "SELECT * FROM macro_signals WHERE asof=?" + (" AND active=1" if active_only else "")
+        return self.conn.execute(q + " ORDER BY signal_id", (asof,)).fetchall()
+
+    def latest_macro_asof(self) -> Optional[str]:
+        """As-of of the most recent top-down harvest (what `p_model`'s top-down term reads)."""
+        r = self.conn.execute("SELECT MAX(asof) a FROM macro_signals").fetchone()
+        return r["a"] if r and r["a"] else None
+
+    def seed_signal_weights(self, taxonomy: dict, updated_at: str = "") -> int:
+        """Seed each signal's live weight from its prior (regime='all' + per-regime when regime_conditional).
+        ``ON CONFLICT DO NOTHING`` so re-seeding NEVER clobbers a value the loop has already learned."""
+        from .taxonomy import regime_buckets
+        buckets = regime_buckets(taxonomy)
+        rows = [(s.id, r, s.w_prior, s.w_prior, 0, updated_at)
+                for s in taxonomy["signals"] for r in buckets]
+        self.conn.executemany(
+            "INSERT INTO signal_weights(signal_id,regime,w,w_prior,n,updated_at) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(signal_id,regime) DO NOTHING", rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def set_signal_weight(self, signal_id: str, regime: str, w: float, w_prior: float,
+                          n: int, updated_at: str) -> None:
+        """Write a learned weight (the feedback loop's output, M16)."""
+        self.conn.execute(
+            "INSERT INTO signal_weights(signal_id,regime,w,w_prior,n,updated_at) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(signal_id,regime) DO UPDATE SET w=excluded.w,w_prior=excluded.w_prior,"
+            "n=excluded.n,updated_at=excluded.updated_at",
+            (signal_id, regime, w, w_prior, n, updated_at),
+        )
+        self.conn.commit()
+
+    def get_signal_weight(self, signal_id: str, regime: str = "all") -> Optional[sqlite3.Row]:
+        """Live weight for a signal in a regime, falling back to the regime='all' bucket."""
+        row = self.conn.execute(
+            "SELECT * FROM signal_weights WHERE signal_id=? AND regime=?", (signal_id, regime)
+        ).fetchone()
+        if row is None and regime != "all":
+            row = self.conn.execute(
+                "SELECT * FROM signal_weights WHERE signal_id=? AND regime='all'", (signal_id,)
+            ).fetchone()
+        return row
+
+    def all_signal_weights(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM signal_weights ORDER BY signal_id, regime"
+        ).fetchall()
+
+    def upsert_ticker_loading(self, ticker: str, signal_id: str, beta: float,
+                              beta_prior: float = 0.0, n: int = 0, updated_at: str = "") -> None:
+        """A ticker's LEARNED sensitivity beta_{t,s} to a signal (init from sector/factor class, then learned)."""
+        self.conn.execute(
+            "INSERT INTO ticker_loadings(ticker,signal_id,beta,beta_prior,n,updated_at) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(ticker,signal_id) DO UPDATE SET beta=excluded.beta,beta_prior=excluded.beta_prior,"
+            "n=excluded.n,updated_at=excluded.updated_at",
+            (ticker, signal_id, beta, beta_prior, n, updated_at),
+        )
+        self.conn.commit()
+
+    def get_ticker_loadings(self, ticker: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM ticker_loadings WHERE ticker=? ORDER BY signal_id", (ticker,)
+        ).fetchall()
+
+    def upsert_attribution(self, ticker: str, asof: str, run_id: str, realized_return: Optional[float],
+                           market_comp: Optional[float], factor_comp: Optional[float],
+                           idio_comp: Optional[float], contributions: Optional[dict] = None,
+                           settled_at: str = "") -> None:
+        """A settled 5d move decomposed market/factor/idiosyncratic — the input to weight/beta learning (§4b.3)."""
+        self.conn.execute(
+            "INSERT INTO attribution(ticker,asof,run_id,realized_return,market_comp,factor_comp,idio_comp,"
+            "contributions_json,settled_at) VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(ticker,asof,run_id) DO UPDATE SET realized_return=excluded.realized_return,"
+            "market_comp=excluded.market_comp,factor_comp=excluded.factor_comp,idio_comp=excluded.idio_comp,"
+            "contributions_json=excluded.contributions_json,settled_at=excluded.settled_at",
+            (ticker, asof, run_id, realized_return, market_comp, factor_comp, idio_comp,
+             json.dumps(contributions or {}), settled_at),
+        )
+        self.conn.commit()
+
+    def get_attribution(self, run_id: str) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM attribution WHERE run_id=? ORDER BY ticker", (run_id,)
+        ).fetchall()
 
     def close(self) -> None:
         self.conn.close()

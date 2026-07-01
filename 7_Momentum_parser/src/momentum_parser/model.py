@@ -33,8 +33,13 @@ def _label_up_rate(comps: Sequence[Optional[float]], labels: Sequence[Optional[s
     return (hits + 0.5) / (total + 1.0)
 
 
-def p_up(bars, cfg: dict) -> tuple[float, float, dict]:
-    """Return ``(p_model, expected_return, components)`` for one ticker. ``p_model`` = P(up) in [0.01,0.99]."""
+def p_up(bars, cfg: dict, topdown_logit: float = 0.0) -> tuple[float, float, dict]:
+    """Return ``(p_model, expected_return, components)`` for one ticker. ``p_model`` = P(up) in [0.01,0.99].
+
+    ``topdown_logit`` (spec §4b / M13) is a log-odds shift from the top-down layer
+    (regime + Σ w_s·β_{t,s}·surprise_s). Default 0.0 = no-op, so the historical PIT backtest — which has
+    no macro archive — is unchanged and the two legs stay comparable.
+    """
     prob_cfg = cfg.get("probability", {})
     sig_cfg = cfg.get("signals", {})
     closes = [b.close for b in bars]
@@ -59,8 +64,11 @@ def p_up(bars, cfg: dict) -> tuple[float, float, dict]:
             w = float(prob_cfg.get("empirical_max_weight", 0.5))
             p = (1 - w) * p_log + w * p_emp
 
+    p = probability.apply_logit_delta(p, topdown_logit)    # top-down layer (§4b / M13); 0.0 = no-op
+
     fwd = probability.forward_returns(closes, horizon)
     typical = (sum(abs(x) for x in fwd) / len(fwd)) if fwd else 0.0
     expected_return = typical * 2.0 * (p - 0.5)
     p = min(0.99, max(0.01, p))
-    return p, expected_return, {"composite": composite, "sigma_week": sigma, "p_log": p_log}
+    return p, expected_return, {"composite": composite, "sigma_week": sigma, "p_log": p_log,
+                                "topdown_logit": topdown_logit}

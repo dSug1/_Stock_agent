@@ -4,6 +4,103 @@
 
 ---
 
+## M18 — Outputs polish (2026-06-30) — BUILT · v0.4 FEATURE-COMPLETE
+Surfaces v0.4 signals in the deliverables (§11). `signals.md` (`stage4_export._row_extras`): +**Days→cat**
+(next_catalyst) +**Our view (variant)** (scores.variant_json our_view, truncated/table-safe). `momentum_report.html`
+(`render`): +**regime banner** (`_regime_banner`: latest-harvest regime + anticipated surprises) +**forward-ledger
+panel** (`_ledger_panel`: metrics.summary Brier/base-rate/hit-rate + UNDERPOWERED flag; graceful empty). **153
+tests** (+2). Verified on live run (new cols render "—" for pre-M14/M15 run; panels degrade gracefully).
+Explainer `spec/M18_outputs_polish_explained.md`. **v0.4 (M11–M18) COMPLETE — 8 milestones, schema v9.**
+Next (not a milestone): live `--dispatch` run to exercise the new prompt + start filling the ledger the M16
+loop learns from.
+
+## M17 — Post-mortem fixes folded into v0.4 (2026-06-30) — BUILT
+Four first-run defects fixed now the rubric/model are rewritten. **(1/2) Absent dims ≠ negative:**
+`features.media/search_features` emit `no_data`(score None) when no usable feed (media below
+`media_min_volume`); `rubric._clean_dim` collapses to `{status:no_data}` + prompt says treat as absent/
+coverage-reducing, never bearish, prefer own web_search over suspected artifacts. **(3) Dead Opus tier:**
+`stage3_score` escalates ACTIONABLE survivors (p_claude≥`finalize_min_p`0.45, ranked by p_up, capped
+`finalize_max_names`6) instead of the symmetric band that caught nobody once p_claude compressed. **(4)
+Megacap drift:** `stage0_gate` new `megacap` status when $-ADV>`universe.max_adv_usd`(~$2B) — flag-not-drop,
+0=disabled; crude low-float proxy (ownership feed later). **151 tests** (+6 new, 2 updated to new semantics).
+Honest limits: MRNA-style GDELT artifact not fully code-detectable (rubric distrusts + volume floor); $-ADV
+proxy coarse. Explainer `spec/M17_postmortem_fixes_explained.md`.
+
+## M16 — The feedback loop (2026-06-30) — BUILT
+The keystone (§4b.3): top-down priors become self-improving. `feedback.py` — pure `signal_skill`
+(shrunk hit-rate → [-1,1]) / `updated_weight` (w_prior·(1+skill), clamp [0, weight_max]) / `attribute`
+(market/factor/idio split). Store-facing: `settle_catalyst_hypotheses` (fill realized_drift once horizon
+elapses → closes M15 predictions); `learn` (per settled ledger row, look up archived top-down read, score a
+directional HIT sign(β·surprise)==sign(realized) per (signal,regime)+(signal,'all'), update `signal_weights`
++ record `attribution`). A reliable anticipator earns weight up to `topdown.weight_max`(0.5); coin-flip stays
+at prior (shrinkage `learning.shrinkage_prior_n`=30); anti-signal → 0. Weights read straight back by
+topdown_model (M13) ⇒ model grows. β stays the M13 regression (return-based β learning = later). Wired into
+daily settle + `--settle` CLI. Graceful no-op when nothing settled / no archived read. **145 tests** (+6).
+Verified no-op on live DB. Explainer `spec/M16_feedback_loop_explained.md`. LOOP CLOSED end-to-end.
+
+## M15 — Catalyst redefinition: forward fact + falsifiable hypothesis (2026-06-30) — BUILT
+Answers operator bullet 4 (§2.1-G revised). A catalyst is now (1) a forward FACT — `pre_event_accumulation`
+(price drift × volume confirmation into the known date, [-1,1]); and (2) a falsifiable HYPOTHESIS —
+`analog_drift` (expected_drift ± dispersion from the ticker's fwd-return dist) RECORDED in `catalyst_hypotheses`
+for M16 settlement. `catalyst_signal.py` (pure: accumulation/analog_drift/hypothesis[forward-only, drops
+past/beyond horizon]/catalyst_score). Store **v9** `catalyst_hypotheses` + upsert/settle/open. `stage2_harvest`
+catalyst block computes hypothesis → enriched `catalyst` evidence (features carry accumulation/expected_drift/
+dispersion/falsifiable) + persists hypothesis; proximity fallback only when nothing in horizon. Key semantic
+shift: **a bare known date is no longer bullish by itself** (that was the recap) — the signal is positioning
+INTO it + the calculated guess. Existing harvest test updated to new semantics. Config `catalyst_accum_window`
+(5)/`catalyst_accum_scale`(0.1). **139 tests** (+6). Live DB migrated 8→9. Estimate-revision feed for true
+beat/miss deferred (proxy for now). Explainer `spec/M15_catalyst_redefinition_explained.md`.
+
+## M14 — Variant-perception rubric + top-down context (2026-06-30) — BUILT
+The `p_claude` side of v0.4 (§6). `scoring/rubric.py`: OUTPUT_SCHEMA + system prompt gain `consensus_view/
+our_view/mispricing/why_now/variant_strength/macro_exposure`; `PROMPT_VERSION→m14`. **Delta-scaled conviction**
+(`clamp_parsed`): effective conviction = raw_conviction × variant_strength, so a pure recap (variant_strength
+≈0) collapses to ≈base-rate STRUCTURALLY (flows into blend.confidence) — recap can't buy a high-conf slot;
+raw+strength kept for transparency. `build_bundle` adds `_topdown_context` (regime + anticipated signals +
+this ticker's β exposures; None when no harvest = absence≠signal) and the prompt tells Claude to weigh it.
+Store **v8** (additive guarded ALTER): `scores.variant_json`; `write_score`+`_persist` pack it. `render.py`
+`_variant_html` shows Consensus/Our view/Mispricing/Why now/Macro + strength tag; legacy NULL-variant scores
+render gracefully. **133 tests** (+5). Live DB migrated 7→8; report re-renders. No live Claude call yet
+(offline/fakes) — first `--dispatch` exercises the new prompt. Explainer `spec/M14_variant_rubric_explained.md`.
+
+## M13 — Regime prior + p_model top-down term (2026-06-30) — BUILT
+The top-down harvest now moves the code leg: `logit(p_model) += gain·Σ w_s·β_{t,s}·surprise_s` (§4b.4).
+`probability.apply_logit_delta` (log-odds shift, clamp, 0=no-op) + `model.p_up(topdown_logit=0.0)` (default
+no-op keeps the PIT backtest — no macro archive — unchanged). `loadings.py`: β INIT = OLS of ticker trailing
+returns on factor-spread returns (ai_basket−market / growth−value / hibeta−lowvol); market-scope β=1,
+uninitialized factor β=`beta_default` 0. `topdown_model.py`: pure `topdown_score` (Σ w·β·surprise; weight =
+regime-conditional `signal_weights` → 'all' → 0) + `logit_for` (gain·score). CONSUMER wired: `stage5_blend`
+computes the shift per ticker → `model.p_up`. `daily.py` runs Stage 2b + `loadings.refresh_universe` after
+harvest — **continuous legs FREE + always; paid dated econ call only on --dispatch** (shared/cached, $5 cap).
+`store.latest_macro_asof`. Config: `topdown.model_gain`(1.5)/`beta_default`(0)/`loadings_window`(60).
+**128 tests** (+6). First-pass signs/weights; M16 loop learns them. Explainer `spec/M13_topdown_model_term_explained.md`.
+
+## M12 — Top-down harvest / Stage 2b (2026-06-30) — BUILT
+Populates `macro_signals` with the day's ANTICIPATED top-down read (§4b, §2.3 forward-only). `topdown.py`
+(pure): `classify_regime` (VIX + HY/IG trend → risk_on/neutral/risk_off) + `continuous_surprises` (6 signals
+risk_regime/rates_usd/commodities/ai_crowding/style_factors/sector_flows → signed [-1,1] from the recent
+SHIFT; first-pass signs the M16 loop will learn; missing proxy → 0). `clients/econ_calendar.py`: ONE shared
+web_search/day → dated FOMC/CPI/NFP/GDP + consensus → signed surprise; `parse_events` forward-only (drops
+past + beyond-horizon, soonest-per-signal, clamp). `stage2b_topdown.py`: fetch proxies (injectable, fail-open
+per role) → write continuous (active) + dated (active, horizon_days) + geopolitical stub (active=0). **Operator
+provider decisions (handoff §2): (1) yfinance proxies (^VIX/^TNX/DX-Y/CL=F/GC=F/HYG/LQD/BOTZ/IWF/IWD/SPHB/
+SPLV/SPY; swap pre-deploy), (2) shared cached web_search calendar+consensus (only net-new spend, amortized),
+(3) geopolitical stubbed+flagged.** **122 tests** (+7). NOT wired into daily.py yet (no consumer until M13/M14
+— avoid paying for unconsumed signals); β loadings not yet initialized (first M13 task). Explainer
+`spec/M12_topdown_harvest_explained.md`.
+
+## M11 — Top-down taxonomy + store v7 (2026-06-30) — BUILT
+First v0.4 milestone (Decision L / §4b): the offline foundation for the top-down layer. `config/
+signals_taxonomy.yaml` (18 signals across all 5 classes, priors only) + `taxonomy.py` (safe_load + validate:
+unique ids, enum membership, `w_prior∈[0,1]`, path config-overridable) + store schema **v7** (additive 6→7):
+`macro_signals` (anticipated state, `active` flag = §2.3 anticipate-not-recense) · `signal_weights`
+(learned `w_s`, regime-conditional, `regime='all'` fallback) · `ticker_loadings` (learned `beta_{t,s}`) ·
+`attribution` (settled-move decomposition). `seed_signal_weights` uses `ON CONFLICT DO NOTHING` so a
+re-seed NEVER clobbers a learned value; `models.py` dataclasses added. **115 tests** (was 103; +12). Live
+`momentum.db` migrated 6→7 cleanly (37 predictions intact) + seeded 72 weight rows. Explainer
+`spec/M11_topdown_taxonomy_explained.md`. NEXT = M12 (harvest/Stage 2b), gated on provider decisions
+(handoff §2). Invariant held: priors in config, learned values in store.
+
 ## D-6 — v0.4 redesign: top-down layer + catalyst redefinition + variant-perception (2026-06-30)
 Operator reviewed the first real run (`run_20260630T160212Z`, 37 names) and **rejected the analysis as
 low-value: descriptive, not predictive.** It recaps momentum indicators + **already-public, already-priced**

@@ -45,11 +45,16 @@ def _persist(store: Store, res: dict, run_id: str, tier: str, chash: str, asof_f
         return
     p, cid = res["parsed"], res["custom_id"]
     asof, fp = asof_fp[cid]
+    variant = {k: p.get(k, "") for k in
+               ("consensus_view", "our_view", "mispricing", "why_now", "macro_exposure")}
+    variant["variant_strength"] = p.get("variant_strength")
+    variant["raw_conviction"] = p.get("raw_conviction")
     store.write_score(
         cid, asof, run_id, tier=tier, p_up=p.get("p_up"), p_down=p.get("p_down"), p_flat=p.get("p_flat"),
         expected_return=p.get("expected_return"), conviction=p.get("conviction"),
         dimensions_json=json.dumps(p.get("dimensions", {})), memo=p.get("memo", ""),
         config_hash=chash, evidence_fingerprint=fp, prompt_version=PROMPT_VERSION,
+        variant_json=json.dumps(variant),
     )
 
 
@@ -155,9 +160,14 @@ def run(store: Store, tickers: list[str], cfg: dict, run_id: str, scorer,
                 rubric_reqs, lambda res: (_persist(store, res, run_id, "rubric", chash, asof_fp),
                                           _track(res, p_claude)))
 
-    # --- Tier 3: finalize on the contested band (real-time) -------------------------------------
-    band = cl.get("contested_band", [0.45, 0.65])
-    contested = [t for t in survivors if band[0] <= p_claude.get(t, 0.0) <= band[1]]
+    # --- Tier 3: Opus adversarial pass on the ACTIONABLE names (real-time) ----------------------
+    # M17 fix: the old symmetric contested band [0.45,0.65] caught nobody once p_claude compressed below
+    # 0.45 (dead tier). Instead adversarially vet the highest-p_up survivors above a floor, capped for cost —
+    # a second opinion where it matters (the names we'd actually go long), not a narrow dead zone.
+    fin_min = float(cl.get("finalize_min_p", 0.45))
+    fin_max = int(cl.get("finalize_max_names", 6))
+    contested = [t for _, t in sorted(((p_claude.get(t, 0.0), t) for t in survivors
+                                       if p_claude.get(t, 0.0) >= fin_min), reverse=True)[:fin_max]]
     fin_reqs = [build_request(build_bundle(store, t, asof_fp[t][0], cfg), tiers["finalize"], cfg)
                 for t in contested]
     scorer.score_many_realtime(

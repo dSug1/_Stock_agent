@@ -28,8 +28,9 @@ def test_media_features_bullish_on_surge_and_positive_tone():
 
 
 def test_media_features_failopen_empty():
+    # M17: no feed -> no_data (score None), NOT a bearish 0/negative (absence ≠ negative evidence)
     feats, score = media_features([], [], {})
-    assert score == 0.0 and feats["surge_ratio"] is None
+    assert score is None and feats["surge_ratio"] is None and feats["no_data"] is True
 
 
 def test_search_features_surge_positive():

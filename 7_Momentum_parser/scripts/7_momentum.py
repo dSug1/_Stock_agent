@@ -124,9 +124,11 @@ def main(argv=None) -> int:
         return 0
 
     if args.settle:
-        from momentum_parser import validation
+        from momentum_parser import feedback, validation
         print("[7] §9: settling elapsed ledger predictions...")
         print("   ", validation.settle_pass(store, cfg))
+        print("[7] M16: feedback loop — settle catalyst hypotheses + learn signal weights...")
+        print("   ", feedback.run(store, cfg))
         path, summ = validation.build_report(store, cfg)
         print(f"[7] validation: {path} · {summ}")
         store.close()

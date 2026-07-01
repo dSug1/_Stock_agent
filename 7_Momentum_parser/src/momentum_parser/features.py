@@ -61,7 +61,14 @@ def media_features(counts: Sequence[float], tones: Sequence[float], cfg: dict) -
         "attention_slope": att_slope,
         "tone_mean": tone_mean,
     }
-    surge_component = _clip(ratio - 1.0) if ratio is not None else 0.0
+    # M17: absent/near-empty coverage is NOT bearish — emit no_data (score None) so the rubric treats it as
+    # ABSENT (coverage-reducing), never as negative evidence (post-mortem: stub/artifact media read as -0.6).
+    min_vol = float(cfg.get("media_min_volume", 1))
+    recent_mean = (sum(counts[-bw:]) / min(len(counts), bw)) if counts else 0.0
+    if ratio is None or recent_mean < min_vol:
+        feats["no_data"] = True
+        return feats, None
+    surge_component = _clip(ratio - 1.0)
     score = _clip(0.6 * surge_component + 0.4 * _clip(tone_mean))
     return feats, score
 
@@ -70,11 +77,14 @@ def search_features(interest: Sequence[float], cfg: dict) -> tuple[dict, float]:
     """Web-search-statistics dimension: search-interest **surge vs baseline** (the 5_Hype_parser idea).
 
     Direction-agnostic magnitude — a search spike means retail attention building; Stage 3 judges
-    whether that resolves up. Fading attention (ratio < 1) reads mildly negative for a hype name.
+    whether that resolves up. When there is NO feed (the stub, or no history) the dimension is ABSENT,
+    not bearish — it returns no_data (score None), never a negative score (M17 / post-mortem fix).
     """
     bw = int(cfg.get("baseline_window", 20))
     ratio = surge_ratio(interest, bw)
     s_slope = slope(interest, int(cfg.get("slope_window", 10)))
     feats = {"latest": interest[-1] if interest else 0, "surge_ratio": ratio, "slope": s_slope}
-    score = _clip(ratio - 1.0) if ratio is not None else 0.0
-    return feats, score
+    if ratio is None:                                      # no usable search history -> absent, not negative
+        feats["no_data"] = True
+        return feats, None
+    return feats, _clip(ratio - 1.0)

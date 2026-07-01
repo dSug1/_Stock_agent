@@ -11,10 +11,11 @@ import json
 from datetime import datetime, timezone
 
 from . import blend as blend_mod
-from . import model, targets
+from . import model, targets, topdown_model
 from .models import Prediction, Signal
 from .signals import compute_signals
 from .store import Store
+from .taxonomy import load_taxonomy
 
 
 def _data_coverage(store: Store, ticker: str, asof: str, n_bars: int, min_bars: int) -> float:
@@ -42,6 +43,7 @@ def run(store: Store, tickers: list[str], cfg: dict, run_id: str, log=print) -> 
     cal_model = store.load_calibrator("model")
     cal_claude = store.load_calibrator("claude")
     calibrate = lambda p, leg: (cal_model if leg == "model" else cal_claude).apply(p)
+    taxonomy = load_taxonomy(cfg)                          # for the top-down term (§4b / M13)
 
     written = with_claude = flagged = 0
     for t in tickers:
@@ -51,7 +53,8 @@ def run(store: Store, tickers: list[str], cfg: dict, run_id: str, log=print) -> 
         asof = bars[-1].date
         closes = [b.close for b in bars]
 
-        p_model, exp_ret, comps = model.p_up(bars, cfg)
+        td_logit, td_breakdown = topdown_model.logit_for(store, t, cfg, taxonomy)  # 0.0 if no harvest
+        p_model, exp_ret, comps = model.p_up(bars, cfg, topdown_logit=td_logit)
         sc = store.latest_score(t, asof)
         p_claude = sc["p_up"] if sc else None
         conviction = sc["conviction"] if sc else 0.4

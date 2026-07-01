@@ -44,6 +44,18 @@ def logistic_probability(composite: float, cfg: dict, drift: float = 0.0) -> flo
     return min(0.99, max(0.01, p))
 
 
+def apply_logit_delta(p: float, delta: float) -> float:
+    """Shift a probability by ``delta`` in log-odds space, then clamp to [0.01, 0.99].
+
+    The top-down layer (spec §4b / M13) adds its contribution here so a regime/rotation read nudges
+    ``p_model`` without ever forcing a certainty. ``delta`` = 0 is an exact no-op.
+    """
+    if not delta:
+        return p
+    q = min(1.0 - _EPS, max(_EPS, p))
+    return min(0.99, max(0.01, _sigmoid(math.log(q / (1.0 - q)) + delta)))
+
+
 def forward_returns(closes: Sequence[float], horizon: int) -> list[float]:
     """Realized fractional return from each bar to ``horizon`` bars later (length = len-horizon)."""
     out: list[float] = []

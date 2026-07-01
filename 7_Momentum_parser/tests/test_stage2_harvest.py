@@ -40,7 +40,10 @@ def test_harvest_writes_three_dimensions_and_catalysts(tmp_path):
     assert dims["search"]["score"] > 0                     # search surge
     cat_feats = json.loads(dims["catalyst"]["features_json"])
     assert cat_feats["days_to_catalyst"] == 10             # 2025-01-10 -> 2025-01-20
-    assert dims["catalyst"]["score"] > 0
+    # M15: the catalyst dimension is now a forward FACT + falsifiable HYPOTHESIS, not bare proximity
+    # (a known date with no accumulation/drift is not a bullish signal by itself — that was the recap).
+    assert cat_feats["falsifiable"] is True
+    assert len(s.open_catalyst_hypotheses()) == 1          # the quantified prediction is recorded
     assert s.next_catalyst("AAA", "2025-01-10")["kind"] == "pdufa"
 
 

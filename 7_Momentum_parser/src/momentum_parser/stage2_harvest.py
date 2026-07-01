@@ -9,6 +9,7 @@ Stage 3 — this stage produces *numbers only* (no untrusted text enters a promp
 
 from __future__ import annotations
 
+from . import catalyst_signal
 from . import catalysts as catalyst_mod
 from . import features
 from .clients import catalysts_client, news as news_client, search_interest as search_client
@@ -18,6 +19,7 @@ from .store import Store
 def run(store: Store, tickers: list[str], cfg: dict, asof: str | None = None,
         clients: dict | None = None, log=print) -> dict:
     h = cfg.get("harvest", {})
+    horizon = int(cfg.get("probability", {}).get("horizon_days", 5))   # for the catalyst drift hypothesis (M15)
     clients = clients or {}
     # media provider: real GDELT (429-safe) when configured, else the fail-open stub. Injected client wins.
     if "news" in clients:
@@ -55,17 +57,26 @@ def run(store: Store, tickers: list[str], cfg: dict, asof: str | None = None,
         if interest:
             n_search += 1
 
-        # --- catalysts: forward calendar + proximity ------------------------------------------
+        # --- catalysts: forward calendar + FORWARD-FACT accumulation + FALSIFIABLE hypothesis (M15) ---
         events = cat_c.upcoming(t, a)                      # [(date, kind, note, source)]
         if events:
             store.upsert_catalysts(t, events)
             n_cat += 1
-        days = catalyst_mod.days_to_next([e[0] for e in events], a)
-        c_score, c_feats = catalyst_mod.proximity_score(days, h)
-        store.upsert_evidence(t, a, "catalyst", c_score, c_feats)
+        nxt = store.next_catalyst(t, a)                    # soonest scheduled date on/after asof
+        bars = store.get_bars(t)
+        hyp = catalyst_signal.hypothesis(bars, nxt["event_date"] if nxt else None, a, h, horizon) if nxt else None
+        if hyp:
+            c_score = catalyst_signal.catalyst_score(hyp, h)
+            store.upsert_evidence(t, a, "catalyst", c_score, hyp)
+            store.upsert_catalyst_hypothesis(t, a, nxt["event_date"], nxt["kind"], hyp)
+            c_days = hyp["days_to_catalyst"]
+        else:                                              # none inside horizon -> proximity fallback (0)
+            days = catalyst_mod.days_to_next([e[0] for e in events], a)
+            c_score, c_feats = catalyst_mod.proximity_score(days, h)
+            store.upsert_evidence(t, a, "catalyst", c_score, c_feats)
+            c_days = c_feats.get("days_to_catalyst")
 
-        log(f"  [harvest] {t}@{a}: media={len(counts)} search={len(interest)} "
-            f"catalyst_days={c_feats.get('days_to_catalyst')}")
+        log(f"  [harvest] {t}@{a}: media={len(counts)} search={len(interest)} catalyst_days={c_days}")
 
     return {"tickers": len(tickers), "media": n_media, "search": n_search,
             "catalysts": n_cat, "skipped": skipped}

@@ -13,7 +13,7 @@ from .targets import weekly_sigma
 
 
 def gate_ticker(bars, cfg: dict) -> tuple[str, dict]:
-    """Return ``(status, metrics)`` — status in {pass, penny, illiquid, placid, no_data}."""
+    """Return ``(status, metrics)`` — status in {pass, penny, illiquid, placid, megacap, no_data}."""
     liq = cfg.get("liquidity", {})
     uni = cfg.get("universe", {})
     adv_w = int(liq.get("adv_window", 20))
@@ -36,6 +36,12 @@ def gate_ticker(bars, cfg: dict) -> tuple[str, dict]:
         return "illiquid", m
     if sigma is None or sigma < min_vol:
         return "placid", m
+    # M17: flag (never silently drop) heavily-institutional MEGA-CAPs — Decision C wants retail-heavy/low-float
+    # names, but discovery drifted to NVDA/MU/… . $-ADV is a crude float proxy (a proper ownership feed is a
+    # later provider); the ceiling excludes only true mega-caps and is reversible via config (0 = disabled).
+    max_adv = float(uni.get("max_adv_usd", 0) or 0)
+    if max_adv and adv > max_adv:
+        return "megacap", m
     return "pass", m
 
 

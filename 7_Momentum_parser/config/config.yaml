@@ -14,6 +14,8 @@ universe:                       # Decision C — CLAUDE-DISCOVERY-FIRST (no hand
     max_candidates: 60          # cap before the daily gate prunes
   min_weekly_vol: 0.04          # volatility floor (thesis needs volatility) — weekly sigma >= 4%
   min_price: 1.0                # drop sub-$1 penny noise
+  max_adv_usd: 2000000000       # M17: flag mega-caps as 'megacap' above this $-ADV (~$2B/day = NVDA/MU/…);
+                                #   crude low-float proxy for Decision C's retail-heavy intent. 0 = disabled.
   seed_csv: config/universe.csv # optional warm-start / fallback when discovery hasn't run yet
 
 liquidity:                      # Stage-0b daily gate (Decision C). Flag, never silent-drop.
@@ -23,8 +25,11 @@ liquidity:                      # Stage-0b daily gate (Decision C). Flag, never 
 
 harvest:                        # Stage 2 feature engineering (spec v0.3 §4) — pure, provider-isolated
   baseline_window: 20           # trailing window for the media/search surge ratio
+  media_min_volume: 1           # M17: below this recent article volume, media is no_data (not bearish)
   slope_window: 10              # window for the attention/search slope
   catalyst_horizon_days: 21     # a scheduled catalyst within this many days is a forward signal
+  catalyst_accum_window: 5      # M15: window for the pre-event price/volume accumulation (forward fact)
+  catalyst_accum_scale: 0.1     # M15: tanh scale mapping pre-event drift -> accumulation in [-1,1]
 
 gdelt:                          # GDELT news provider (Stage 2 media) — 429-SAFE (5_Hype lesson, extended)
   min_interval_s: 5.0           # proactive spacing between ANY two GDELT calls (avoid bursting -> 429)
@@ -93,7 +98,9 @@ claude:
   discovery_model: claude-sonnet-4-6        # Stage 0a: weekly universe discovery (one +web_search call)
   discovery_searches: 6                     # web_search max_uses for the discovery call
   discovery_timeout_s: 300                  # discovery runs several searches -> needs more than the 120s default
-  contested_band: [0.45, 0.65]  # p_claude in this range -> escalate to the Opus finalize tier
+  contested_band: [0.45, 0.65]  # (deprecated M17) old symmetric Opus band — superseded by finalize_min_p
+  finalize_min_p: 0.45          # M17: Opus adversarially vets survivors with p_claude >= this (the actionable
+  finalize_max_names: 6         #   names), capped to this many by p_up. Fixes the dead symmetric-band tier.
   use_batch: true               # Batch API default (-50% tokens; reuse 3_Biopharmcatalyst patterns)
   max_output_tokens: 12500      # per-CALL output ceiling (NOT a spend — billed on actual tokens). Sized to
                                 # the full structured response (memory: undersized cap truncates -> dropped).
@@ -118,6 +125,45 @@ claude:
     max_names: 3                # cap names scored in debug (0 = uncapped); ~cents at this size
     force_realtime: true        # skip Batch latency in debug (immediate results)
     ignore_budget: true         # bypass the max_usd_per_run abort in debug
+
+# --- Top-down market-perturbation layer (Decision L, spec §4b) — v0.4 -------------------------
+topdown:
+  taxonomy_file: null           # null -> config/signals_taxonomy.yaml (override for tests). Priors live there;
+                                # LEARNED weights/loadings live in the store (signal_weights/ticker_loadings).
+  horizon_days: 5               # a `dated` signal is ACTIVE only while it lands within this forward window
+  lookback_days: 20             # trend window for continuous/factor "surprise" (the anticipated SHIFT)
+  squash_scale: 0.05            # tanh scale mapping a lookback move -> surprise in [-1,1]
+  model_gain: 1.5               # scales the top-down score (Σ w·β·surprise) into a logit shift on p_model (M13)
+  weight_max: 0.5               # M16 cap on a learned signal weight w_s (a skilled signal earns up to this)
+  beta_default: 0.0             # loading for a factor/sector signal with no learned β yet (conservative: no tilt)
+  loadings_window: 60           # trailing days for the β regression (ticker returns ~ factor-spread returns)
+  # Cross-asset + rotation PROXIES (yfinance; swap to licensed later — data_provider_switch). role -> ticker.
+  proxies:
+    vix: "^VIX"                 # implied vol (risk regime)
+    tnx: "^TNX"                 # 10Y yield
+    irx: "^IRX"                 # 13-wk bill (short-rate / curve proxy)
+    dxy: "DX-Y.NYB"            # US dollar index
+    oil: "CL=F"
+    gold: "GC=F"
+    credit_hy: "HYG"           # HY credit ETF   } HY/IG ratio rising = risk appetite up
+    credit_ig: "LQD"           # IG credit ETF   }
+    ai_basket: "BOTZ"          # AI/robotics ETF = the AI-trade proxy (rotation)
+    growth: "IWF"              # R1000 growth  } growth-value spread
+    value: "IWD"               # R1000 value   }
+    hibeta: "SPHB"             # hi-beta   } risk-appetite factor
+    lowvol: "SPLV"             # low-vol   }
+    market: "SPY"              # benchmark for relative momentum
+  regime:                       # risk-on/off classifier (spec §4b) — thresholds on the proxies
+    vix_high: 22.0             # VIX at/above -> risk-off lean
+    vix_low: 15.0              # VIX at/below (+ credit not widening) -> risk-on lean
+    credit_lookback: 20        # HY/IG ratio trend window
+    credit_widen: -0.01        # HY/IG falling more than this over the window -> risk-off
+  econ_calendar:                # dated macro signals (fomc/inflation/labor/growth) + consensus -> surprise
+    enabled: true              # ONE shared web_search call/day (cached), amortized across the basket (<$5/day)
+    model: claude-sonnet-4-6
+    searches: 4
+    timeout_s: 120
+  geopolitical_stub: true       # v0.4/M12: war_peace/trade_policy/fiscal seeded active=0 + flagged; wire later
 
 # --- Hybrid blend (Stage 5) — Decision A ------------------------------------------------------
 blend:

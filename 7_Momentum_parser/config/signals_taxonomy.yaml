@@ -1,0 +1,142 @@
+# Top-down market-perturbation signal taxonomy — Decision L / spec SPEC_momentum_parser.md §4b (v0.4).
+#
+# These are the signals that move the whole market and/or cohorts of tickers, in ADDITION to the
+# bottom-up four dimensions (§4). Everything here is a PRIOR: `w_prior` is the analyst's starting
+# impact weight; the LIVE weights `w_s` and per-ticker loadings `beta_{t,s}` are LEARNED by the
+# ledger feedback loop and live in the store (`signal_weights` / `ticker_loadings`), never here
+# (invariant §12: weights are learned, config holds priors only).
+#
+# Fields per signal:
+#   id            unique key (used in the store + model)
+#   class         monetary | geopolitical | cross_asset | rotation | ticker_catalyst
+#   scope         market (moves everything) | sector | factor | ticker (idiosyncratic)
+#   schedule      dated (known date) | continuous (a level/trend) | probabilistic (arrival odds)
+#   anticipation  how we know it's COMING and estimate its surprise BEFORE it prints (§2.3)
+#   w_prior       starting impact weight on P(up), in [0,1]  (illustrative; the loop normalizes+learns)
+#   learnable     whether the feedback loop may move its weight (default true)
+
+version: 1
+
+learning:
+  regimes: [risk_on, neutral, risk_off]   # regime buckets for regime-conditional weights (§4b.3)
+  regime_conditional: true                # learn a separate weight per regime bucket
+  shrinkage_prior_n: 30                    # pseudo-count pulling learned w_s/beta toward prior at small n
+
+signals:
+  # --- MONETARY (scheduled macro data — the week-defining events) ---------------------------------
+  - id: fomc
+    class: monetary
+    scope: market
+    schedule: dated
+    anticipation: "FOMC calendar + fed-funds-futures-implied move + surprise risk"
+    w_prior: 0.18
+  - id: inflation
+    class: monetary
+    scope: market
+    schedule: dated
+    anticipation: "CPI / PCE / PPI release calendar + consensus vs whisper"
+    w_prior: 0.15
+  - id: labor
+    class: monetary
+    scope: market
+    schedule: dated
+    anticipation: "NFP / jobless claims / JOLTS / ADP calendar + consensus"
+    w_prior: 0.10
+  - id: growth
+    class: monetary
+    scope: market
+    schedule: dated
+    anticipation: "GDP / ISM-PMI / retail sales / confidence calendar + consensus"
+    w_prior: 0.06
+
+  # --- GEOPOLITICAL (event risk — some dated, some probabilistic) --------------------------------
+  - id: war_peace
+    class: geopolitical
+    scope: market
+    schedule: probabilistic
+    anticipation: "prediction-market odds + leading-news LLM scan (delimited, untrusted)"
+    w_prior: 0.08
+  - id: trade_policy
+    class: geopolitical
+    scope: market
+    schedule: probabilistic
+    anticipation: "scheduled hearings + tariff/trade news scan"
+    w_prior: 0.06
+  - id: fiscal
+    class: geopolitical
+    scope: market
+    schedule: probabilistic
+    anticipation: "shutdown / debt-ceiling legislative calendar"
+    w_prior: 0.04
+  - id: elections_reg
+    class: geopolitical
+    scope: market
+    schedule: dated
+    anticipation: "electoral + major-regulatory-ruling calendar"
+    w_prior: 0.04
+  - id: energy_opec
+    class: geopolitical
+    scope: sector
+    schedule: dated
+    anticipation: "OPEC meeting schedule + oil term structure"
+    w_prior: 0.04
+
+  # --- CROSS-ASSET (continuous regime — anticipate the SHIFT, not the level) ---------------------
+  - id: risk_regime
+    class: cross_asset
+    scope: market
+    schedule: continuous
+    anticipation: "VIX term-structure + HY/IG credit-spread shift"
+    w_prior: 0.12
+  - id: rates_usd
+    class: cross_asset
+    scope: market
+    schedule: continuous
+    anticipation: "2s10s / 10Y / DXY trend shift"
+    w_prior: 0.06
+  - id: commodities
+    class: cross_asset
+    scope: market
+    schedule: continuous
+    anticipation: "oil / gold / BTC (risk-appetite proxies) trend shift"
+    w_prior: 0.04
+
+  # --- ROTATION / FACTOR (per-ticker loading applies here) ---------------------------------------
+  - id: ai_crowding
+    class: rotation
+    scope: factor
+    schedule: continuous
+    anticipation: "AI-trade crowding & momentum + momentum-unwind risk"
+    w_prior: 0.14
+  - id: style_factors
+    class: rotation
+    scope: factor
+    schedule: continuous
+    anticipation: "growth<->value, hi-beta<->low-vol factor-spread trend"
+    w_prior: 0.08
+  - id: sector_flows
+    class: rotation
+    scope: sector
+    schedule: continuous
+    anticipation: "sector relative-strength / flow trend"
+    w_prior: 0.06
+
+  # --- TICKER CATALYSTS (idiosyncratic, forward-only — Decision G) -------------------------------
+  - id: catalyst_date
+    class: ticker_catalyst
+    scope: ticker
+    schedule: dated
+    anticipation: "forward catalyst calendar (PDUFA/readout/earnings) + pre-event accumulation drift"
+    w_prior: 0.20
+  - id: earnings_surprise
+    class: ticker_catalyst
+    scope: ticker
+    schedule: dated
+    anticipation: "estimate-revision trend + whisper vs consensus (expected beat/miss)"
+    w_prior: 0.10
+  - id: index_lockup
+    class: ticker_catalyst
+    scope: ticker
+    schedule: dated
+    anticipation: "index add/delete + lockup-expiry calendar"
+    w_prior: 0.05
