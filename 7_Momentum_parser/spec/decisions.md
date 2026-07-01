@@ -4,6 +4,19 @@
 
 ---
 
+## D-7 — expected_return must track p_final, not the raw p_model leg (2026-07-01) — FIX
+First live `--dispatch` run (run_20260701T151823Z, 30 names) surfaced a contradiction (operator caught it):
+CLOV showed **exp.ret +1.28%** next to **p_final 43%** and a thoroughly bearish memo. Cause: `model.p_up`
+computed `expected_return = typical·2·(p_model−0.5)` from the code leg (p_model 0.58, bullish) and
+`stage5_blend` stored that raw value while `p_up=p_final` (0.43, after the bearish p_claude 0.33 blended it
+down). So the probability got blended but the expected return never did. Fix: `model.p_up` exports `typical`
+in comps; `stage5_blend` re-derives `exp_ret = typical·2·(p_final−0.5)` so the reported return is sign-
+consistent with the reported probability (and identical for the model-only path where p_final=p_model).
+Re-blended+re-rendered the live run → CLOV −1.22%; 0 rows with a sign contradiction (was many). **153 tests**
+(+2 assertions in test_stage5_blend). NOTE: this run is the first REAL ledger data — v0.4 variant-perception +
+macro layer confirmed working live (CLOV: genuine variant view + real style_factors/ai_crowding headwinds
+pulling p_final down). Claude's own `expected_return` output is still unused (future: blend magnitudes too).
+
 ## M18 — Outputs polish (2026-06-30) — BUILT · v0.4 FEATURE-COMPLETE
 Surfaces v0.4 signals in the deliverables (§11). `signals.md` (`stage4_export._row_extras`): +**Days→cat**
 (next_catalyst) +**Our view (variant)** (scores.variant_json our_view, truncated/table-safe). `momentum_report.html`

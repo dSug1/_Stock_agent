@@ -62,6 +62,9 @@ def run(store: Store, tickers: list[str], cfg: dict, run_id: str, log=print) -> 
             with_claude += 1
 
         p_final, d, review = blend_mod.blend(p_claude, p_model, w, disagree, calibrate=calibrate)
+        # re-derive expected_return from p_final so it can't contradict the reported probability (a bullish
+        # p_model blended down by a bearish p_claude must yield a bearish expected return, not the raw model one)
+        exp_ret = comps.get("typical", 0.0) * 2.0 * (p_final - 0.5)
         coverage = _data_coverage(store, t, asof, len(bars), min_bars)
         hist = min(1.0, len(bars) / (horizon * 8))
         conf = blend_mod.confidence(conviction, coverage, d, hist)

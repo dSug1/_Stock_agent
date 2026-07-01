@@ -70,5 +70,7 @@ def p_up(bars, cfg: dict, topdown_logit: float = 0.0) -> tuple[float, float, dic
     typical = (sum(abs(x) for x in fwd) / len(fwd)) if fwd else 0.0
     expected_return = typical * 2.0 * (p - 0.5)
     p = min(0.99, max(0.01, p))
+    # `typical` is exported so the blend can re-derive expected_return from p_final (not just p_model),
+    # keeping the reported return sign-consistent with the reported probability.
     return p, expected_return, {"composite": composite, "sigma_week": sigma, "p_log": p_log,
-                                "topdown_logit": topdown_logit}
+                                "topdown_logit": topdown_logit, "typical": typical}

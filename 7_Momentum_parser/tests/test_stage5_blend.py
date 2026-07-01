@@ -38,6 +38,8 @@ def test_blend_uses_claude_leg_and_writes_ledger(tmp_path):
     assert pred["p_model"] is not None
     # p_final is the weighted blend of the two legs
     assert abs(pred["p_up"] - (0.6 * 0.7 + 0.4 * pred["p_model"])) < 1e-6
+    # expected_return is derived from p_final, so its sign tracks the blended probability (both bullish here)
+    assert (pred["expected_return"] >= 0) == (pred["p_up"] >= 0.5)
     # ledger opened with the directional call
     led = s.open_ledger()
     assert len(led) == 1 and led[0]["ticker"] == "AAA" and led[0]["predicted_label"] in ("up", "flat")
@@ -64,3 +66,6 @@ def test_review_flag_on_disagreement(tmp_path):
     assert out["flagged_review"] == 1                         # claude bearish vs model bullish -> review
     pred = s.predictions_for_run("blendRun")[0]
     assert pred["review"] == 1 and pred["disagreement"] > 0.25
+    # the CLOV bug: a bullish p_model blended DOWN by a bearish p_claude must yield a bearish (<=0)
+    # expected_return, not the raw model-leg positive — it now tracks p_final, not p_model.
+    assert pred["p_up"] < 0.5 and pred["expected_return"] <= 0
