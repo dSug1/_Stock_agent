@@ -4,6 +4,21 @@
 
 ---
 
+## M20 — Leading microstructure signals (v0.5, Tier-1 forward inputs) (2026-07-01) — BUILT
+The deferred "leading INPUT signals" lever, Tier-1 slice: give the M19 forward-driver rubric real *forward*
+data (it had the mandate to reason forward but a backward input set). Feasibility scoped: Tier-1 = OHLCV-only
+(no new provider) → BUILT now; Tier-2 = short-interest (yfinance.info, stale ~2x/mo) + options-implied
+(yfinance.option_chain, delayed) — feasible-but-caveated, DEFERRED; RS-vs-benchmark needs SPY cached in bars
+(easy follow-up); Tier-3 = borrow/live-flow = paid, OUT. `microstructure.py` (pure, OHLCV): `coil` (vol
+compression 0..1, 1=tightly wound), `cmf` (Chaikin Money Flow accumulation/distribution -1..1),
+`bullish_divergence` (accumulating into price weakness), `breakout_pressure` (range position, vol-confirmed),
+`leading_features`→ combined leading_score. Wired as a `leading` block in the rubric bundle
+(`rubric._leading`, computed from bars) + a prompt section telling Claude these ANTICIPATE a move (use them
+to GENERATE high-novelty forward_drivers, e.g. tight coil + accumulation + no catalyst = pre-breakout). Config
+`leading:` block (windows). No store/schema change; feeds the rubric only (p_model integration = optional later).
+Live check: CLOV coil 0.80 / cmf +0.10 (coiled, mildly accumulating). **164 tests** (+6). Explainer
+`spec/M20_leading_microstructure_explained.md`. NEXT: RS inflection (cache benchmark), then Tier-2 short/options.
+
 ## M19 — Forward-driver generation (v0.5, Decision M) (2026-07-01) — BUILT
 Operator: even v0.4 output is "still not enough predictive and still too oriented on past milestone catalysts
 and trades" (CLOV memo organized around the June-9 ruling / May-6 print + the run-up = backward mean-reversion

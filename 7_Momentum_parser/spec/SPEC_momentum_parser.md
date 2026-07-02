@@ -189,6 +189,22 @@ AI-crowding-beta, …). Initialized from sector/factor classification; **learned
 
 ---
 
+## 4c. Leading microstructure inputs (v0.5 / M20 — the forward-driver rubric's leading data)
+
+Decision M (forward-driver generation) needs genuinely **leading** inputs, not a backward set. A `leading`
+block (OHLCV-only, pure — `microstructure.py`) is added to the Stage-3 bundle so the rubric can turn a
+**pre-move setup** into a high-novelty forward driver:
+- **coil** — volatility compression (0..1, 1 = tightly wound → energy building);
+- **accumulation_cmf** — Chaikin Money Flow (-1..1, quiet buying vs selling pressure);
+- **bullish_divergence** — accumulating while price drifts down;
+- **breakout_pressure** — range position, volume-confirmed.
+
+Feasibility tiers (no paid data): **Tier 1 = OHLCV-only** (built); RS-vs-benchmark needs the benchmark cached;
+**Tier 2** = short-interest (`yfinance.info`, stale) + options-implied (`yfinance.option_chain`, delayed),
+feasible-but-caveated, deferred; **Tier 3** = borrow / live flow = paid, out of scope.
+
+---
+
 ## 5. Pipeline (orchestrator `scripts/7_momentum.py --stage N`)
 
 | Stage | Name | Cadence / Cost | What |

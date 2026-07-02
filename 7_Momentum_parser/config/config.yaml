@@ -31,6 +31,15 @@ harvest:                        # Stage 2 feature engineering (spec v0.3 §4) �
   catalyst_accum_window: 5      # M15: window for the pre-event price/volume accumulation (forward fact)
   catalyst_accum_scale: 0.1     # M15: tanh scale mapping pre-event drift -> accumulation in [-1,1]
 
+# --- Leading microstructure setup (Stage 3 bundle input, forward/pre-move) — v0.5/M20 ---------
+leading:
+  min_bars: 30                  # below this -> no_data (absent, not bearish)
+  coil_short: 5                 # short realized-vol window (the current compression)
+  coil_long: 60                 # range the current vol is ranked against (1 = tightly coiled)
+  cmf_window: 20                # Chaikin Money Flow window (accumulation vs distribution)
+  divergence_min: 0.05          # CMF above this while price drifts down -> bullish divergence
+  breakout_window: 20           # range for breakout-pressure (proximity to the high, vol-confirmed)
+
 gdelt:                          # GDELT news provider (Stage 2 media) — 429-SAFE (5_Hype lesson, extended)
   min_interval_s: 5.0           # proactive spacing between ANY two GDELT calls (avoid bursting -> 429)
   retries: 2                    # retry on 429/error with backoff (honors Retry-After), then fail open

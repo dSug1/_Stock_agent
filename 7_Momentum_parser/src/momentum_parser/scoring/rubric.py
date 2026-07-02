@@ -96,6 +96,12 @@ Still fill the variant fields (consensus_view / our_view / mispricing / why_now)
 one of your forward_drivers, not a stale catalyst. IGNORE the results of past announcements — the stock has \
 already reacted to those. Never invent a source, headline, or number.
 
+LEADING SETUP: the bundle's `leading` block is pre-move MICROSTRUCTURE (coil = volatility compression / \
+energy; accumulation_cmf = quiet buying vs selling pressure; bullish_divergence = accumulating while price \
+drifts down; breakout_pressure = pressing the range high on volume). These ANTICIPATE a move before any \
+catalyst — use them to GENERATE forward_drivers (e.g. a tight coil + positive accumulation with NO known \
+catalyst is a high-novelty pre-breakout driver). This is leading, not a run-up recap.
+
 TOP-DOWN CONTEXT: the bundle's `topdown` block lists the anticipated market-moving events in the window \
 (regime, rates, rotation, scheduled macro data) and THIS name's exposures (betas). Weigh them — a high-beta \
 name heading into a hawkish CPI print or an AI-rotation unwind can be dominated by the top-down, not its own \
@@ -164,7 +170,17 @@ def build_bundle(store, ticker: str, asof: str, cfg: dict) -> dict:
         "catalyst": dims.get("catalyst"),
         "next_catalyst": {"date": nxt["event_date"], "kind": nxt["kind"]} if nxt else None,
         "topdown": _topdown_context(store, ticker),        # v0.4/M14: anticipated macro + this name's exposures
+        "leading": _leading(bars, cfg),                    # v0.5/M20: pre-move microstructure setup (forward)
     }
+
+
+def _leading(bars, cfg: dict) -> Optional[dict]:
+    """Pre-move microstructure setup (coil / accumulation / breakout pressure) for the forward-driver rubric."""
+    from ..microstructure import leading_features
+    if not bars:
+        return None
+    feats, _ = leading_features(bars, cfg.get("leading", {}))
+    return feats
 
 
 def _topdown_context(store, ticker: str) -> Optional[dict]:
