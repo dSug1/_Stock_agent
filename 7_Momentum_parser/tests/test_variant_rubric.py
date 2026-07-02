@@ -14,7 +14,8 @@ def test_schema_and_prompt_demand_variant_perception():
     for f in ("consensus_view", "our_view", "mispricing", "why_now", "variant_strength", "macro_exposure"):
         assert f in rubric.OUTPUT_SCHEMA["properties"] and f in rubric.OUTPUT_SCHEMA["required"]
     sysp = rubric.system_prompt(CFG)
-    assert "VARIANT PERCEPTION" in sysp and "variant_strength" in sysp and "TOP-DOWN CONTEXT" in sysp
+    # v0.5 reworded the lead to forward-driver generation, but the variant fields + top-down context remain
+    assert "consensus_view" in sysp and "variant_strength" in sysp and "TOP-DOWN CONTEXT" in sysp
 
 
 def test_conviction_is_delta_scaled_by_variant_strength():

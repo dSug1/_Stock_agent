@@ -49,6 +49,8 @@ def _persist(store: Store, res: dict, run_id: str, tier: str, chash: str, asof_f
                ("consensus_view", "our_view", "mispricing", "why_now", "macro_exposure")}
     variant["variant_strength"] = p.get("variant_strength")
     variant["raw_conviction"] = p.get("raw_conviction")
+    variant["forward_novelty"] = p.get("forward_novelty")           # v0.5/M19
+    variant["forward_drivers"] = p.get("forward_drivers") or []     # the GENERATED forward theses
     store.write_score(
         cid, asof, run_id, tier=tier, p_up=p.get("p_up"), p_down=p.get("p_down"), p_flat=p.get("p_flat"),
         expected_return=p.get("expected_return"), conviction=p.get("conviction"),

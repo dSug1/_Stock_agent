@@ -4,6 +4,25 @@
 
 ---
 
+## M19 — Forward-driver generation (v0.5, Decision M) (2026-07-01) — BUILT
+Operator: even v0.4 output is "still not enough predictive and still too oriented on past milestone catalysts
+and trades" (CLOV memo organized around the June-9 ruling / May-6 print + the run-up = backward mean-reversion
+in variant-perception clothing). Root cause: the rubric EVALUATES known information for pricing over a
+backward input set; it never GENERATES a forward hypothesis. Chosen lever (of 3): reframe the rubric.
+Built: `scoring/rubric.py` PRIMARY output is now `forward_drivers` (1-3 generated unpriced drivers — need not
+be scheduled: emergent narrative / flow-squeeze unwind / sympathy / technical break / 2nd-order macro — each
+with probability, expected_impact, novelty) + top-level `forward_novelty`. System prompt leads with GENERATE
+(not evaluate), AGGRESSIVELY sets novelty≈0 for scheduled/public/past milestones and run-up recaps, grounds
+p_up in the drivers. `clamp_parsed` now GATES conviction on `forward_novelty` (raw × forward_novelty →
+milestone/recap thesis collapses to ≈base-rate; falls back to v0.4 variant_strength if absent) — this is the
+structural fix, forward_novelty dominates even a high variant_strength (the CLOV case). Persisted in
+variant_json (forward_drivers + forward_novelty); render shows the drivers (with p/impact/novelty) atop the
+Claude panel + a "forward novelty" tag. PROMPT_VERSION m19. **158 tests** (+5). Explainer
+`spec/M19_forward_driver_generation_explained.md`. Honest: 1-week forward is near-efficient — goal is a
+differentiated forward hypothesis with modest ledger-validated edge, not certainty. NEXT levers (deferred,
+operator to choose): leading/forward INPUT signals (coil/vol-compression, short-interest/borrow, options-
+implied, RS inflection — need providers); driver-TYPE feedback learning (categorize + learn which pan out).
+
 ## D-7 — expected_return must track p_final, not the raw p_model leg (2026-07-01) — FIX
 First live `--dispatch` run (run_20260701T151823Z, 30 names) surfaced a contradiction (operator caught it):
 CLOV showed **exp.ret +1.28%** next to **p_final 43%** and a thoroughly bearish memo. Cause: `model.p_up`

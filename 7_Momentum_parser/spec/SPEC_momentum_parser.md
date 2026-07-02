@@ -1,10 +1,12 @@
 # 7_Momentum_parser — Specification
 
 *Daily, LLM-centric pipeline that anticipates one-week moves in retail-driven, hype-prone stocks.*
-*Analyst-authored target. Status: spec **v0.4** (2026-06-30) — adds the **top-down market-perturbation
-layer** (Decision L) + catalyst redefinition + variant-perception rubric, after the first real run was
-judged a low-value recap (see `decisions.md` D-6 and the post-mortem). v0.4 sections are the build target
-for the next milestones (M11+); the M1–M10 bottom-up pipeline below is built.*
+*Analyst-authored target. Status: spec **v0.5** (2026-07-01) — after the first live run still read as
+backward-looking, the Stage-3 rubric is reoriented from *evaluating known catalysts* to **GENERATING
+forward drivers** (Decision M, §6); conviction is gated on forward-ness. Builds on **v0.4** (2026-06-30):
+the **top-down market-perturbation layer** (Decision L) + catalyst redefinition + variant-perception rubric,
+after the first real run was judged a low-value recap (`decisions.md` D-6). M1–M10 = bottom-up base (built);
+M11–M18 = v0.4 (built); M19+ = v0.5.*
 
 ---
 
@@ -39,6 +41,7 @@ analysis into a **probabilistic** assessment for specific stocks.
 | **E** | Validation | **Hybrid** — historical backtest of the code model+blend on point-in-time archives, **plus** a forward live prediction-vs-realized ledger from day one |
 | **F** | Move target (label) | **Volatility-normalized + dead-band** — `up` if fwd-5d return > +0.5×σ_week, `down` if < −0.5×σ_week, else `flat`; long-only acts on `up` |
 | **L** | **Top-down layer** (v0.4) | A **weighted, forward-looking, feedback-looped taxonomy of market-perturbing signals** (macro / geopolitical / cross-asset / rotation) conditions the whole basket and each name — *in addition to* the bottom-up four dimensions. Signals are **anticipated before they materialize** (never recapped after), each carries a **learnable weight**, and each name a **learnable loading (β)**. §4b. |
+| **M** | **Forward-driver generation** (v0.5) | The rubric's PRIMARY job is to **generate 1–3 unpriced forward drivers** (a driver need not be scheduled — emergent narrative, flow/squeeze unwind, sympathy move, technical break, second-order macro), each with probability + expected impact + **novelty**. **Conviction is gated by `forward_novelty`**, so a thesis built on past/scheduled milestones or a run-up recap earns ≈0. Cataloging known catalysts and judging "priced-in?" is explicitly NOT the task. §6. |
 
 ### 2.1 Defaults set by the author (override any of these)
 - **G — Catalysts are FORWARD-only, and are EITHER a forward fact OR a quantified hypothesis (v0.4).**
@@ -230,7 +233,11 @@ only content is already-public, already-priced facts, `conviction` collapses to 
 
 **Structured output (JSON, strict schema):**
 ```
-p_up            # P(fwd-5d return > +0.5*sigma_week)         (Decision F target)
+forward_drivers # (v0.5/M) 1-3 GENERATED unpriced forward drivers, each:
+                #   {driver, unpriced_why, probability, expected_impact, novelty}
+                #   novelty~0 for a scheduled/past/public milestone or run-up recap; ~1 for emergent+unpriced
+forward_novelty # (v0.5/M) 0..1 overall forward-ness; conviction is SCALED by this (milestone/recap -> ~0)
+p_up            # P(fwd-5d return > +0.5*sigma_week)         (Decision F target), grounded in forward_drivers
 p_down          # P(fwd-5d return < -0.5*sigma_week)
 p_flat          # 1 - p_up - p_down
 expected_return # signed fractional point estimate over 5 trading days

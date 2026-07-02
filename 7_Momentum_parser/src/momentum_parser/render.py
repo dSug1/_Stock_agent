@@ -49,6 +49,23 @@ def _variant_html(sc) -> str:
     except (ValueError, TypeError):
         return ""
     rows = []
+    # v0.5/M19: the GENERATED forward drivers lead the panel (the anticipatory thesis, not a milestone recap)
+    drivers = v.get("forward_drivers") or []
+    if drivers:
+        items = []
+        for d in drivers[:3]:
+            drv = html.escape((d.get("driver") or "").strip())
+            why = html.escape((d.get("unpriced_why") or "").strip())
+            try:
+                meta = f" <span class='vstr'>(p {float(d.get('probability')):.0%} · impact " \
+                       f"{float(d.get('expected_impact')):+.1%} · novelty {float(d.get('novelty')):.2f})</span>"
+            except (TypeError, ValueError):
+                meta = ""
+            if drv:
+                items.append(f"<li><b>{drv}</b>{meta}{(' — ' + why) if why else ''}</li>")
+        if items:
+            rows.append("<div><span class='vk'>Forward drivers:</span><ul style='margin:2px 0 2px 16px'>"
+                        + "".join(items) + "</ul></div>")
     for key, label in (("consensus_view", "Consensus"), ("our_view", "Our view"),
                        ("mispricing", "Mispricing"), ("why_now", "Why now"),
                        ("macro_exposure", "Macro")):
@@ -57,10 +74,15 @@ def _variant_html(sc) -> str:
             rows.append(f"<div><span class='vk'>{label}:</span> {html.escape(val)}</div>")
     if not rows:
         return ""
-    vs, raw = v.get("variant_strength"), v.get("raw_conviction")
-    tag = (f"<div class='vstr'>variant strength {float(vs):.2f}"
-           f"{f' · raw conviction {float(raw):.2f}' if raw is not None else ''}</div>"
-           if vs is not None else "")
+    fn, vs, raw = v.get("forward_novelty"), v.get("variant_strength"), v.get("raw_conviction")
+    bits = []
+    if fn is not None:
+        bits.append(f"forward novelty {float(fn):.2f}")
+    if vs is not None:
+        bits.append(f"variant strength {float(vs):.2f}")
+    if raw is not None:
+        bits.append(f"raw conviction {float(raw):.2f}")
+    tag = f"<div class='vstr'>{' · '.join(bits)}</div>" if bits else ""
     return f"<div class='variant'>{''.join(rows)}{tag}</div>"
 
 
