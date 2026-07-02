@@ -43,9 +43,16 @@ PYTHONPATH=src ../.venv/Scripts/python.exe -m pytest tests/test_microstructure.p
 Full suite: **164 passing** (+6). Live check on real data: CLOV `coil 0.80 / cmf +0.10 / breakout 0.66` — a
 coiled, mildly-accumulating setup, forward and independent of its stale catalysts.
 
+## RS inflection (M20b — DONE)
+Relative strength vs a cached benchmark (SPY): `stage1_prices.ensure_benchmark` fetches+stores the benchmark
+in `bars` (wired into the daily price step), and `microstructure.relative_strength` adds `rs_momentum`
+(established RS — contextual, can reflect a past run), `rs_inflection` (RS slope **accelerating** up = the
+genuinely *leading* leadership turn), and `rs_slope`. Folded into `leading_features(..., bench_closes)` and
+the bundle (omitted, not bearish, if the benchmark isn't cached). Config `leading.benchmark/rs_window/rs_scale`.
+Live: CLOV `rs_momentum +0.49` (a strong outperformer) with `rs_inflection false` (no fresh turn) — the split
+lets the rubric down-weight the run (low novelty) while still reading a genuine inflection when it appears.
+
 ## What's NOT here (next)
-- **RS inflection** — relative strength vs SPY; needs the benchmark cached in `bars` (small change to the
-  price fetch). Highest-value next addition.
 - **Tier 2** — short-interest/days-to-cover + options-implied move, with staleness/ToS caveats surfaced.
 - **p_model integration** — the leading setup currently feeds only the rubric; a leading term in `p_model`
   is an optional later addition.

@@ -52,6 +52,7 @@ def run(store: Store, cfg: dict, run_id: str, scorer, dispatch: bool = False,
     if fetch:
         log(f"[daily] 1 prices · fetching OHLCV for {len(cands)} candidates (yfinance — slow on first run)...")
         funnel["prices"] = stage1_prices.run(store, [UniverseRow(t, "") for t in cands], cfg, log=log)
+        funnel["benchmark"] = stage1_prices.ensure_benchmark(store, cfg, log=log)   # M20: RS benchmark (SPY)
 
     # --- 0b gate -> investable -----------------------------------------------------------------
     log("[daily] 0b liquidity/vol/price gate")

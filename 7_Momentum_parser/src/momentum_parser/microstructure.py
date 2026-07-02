@@ -92,10 +92,31 @@ def breakout_pressure(bars: Sequence[Bar], window: int) -> float:
     return round(pos * vconf, 4)
 
 
-def leading_features(bars: Sequence[Bar], cfg: dict) -> tuple[dict, float]:
+def relative_strength(closes: Sequence[float], bench_closes: Sequence[float], window: int):
+    """RS of the ticker vs a benchmark (e.g. SPY): momentum of the RS line + a leading INFLECTION (its slope
+    turning up). None if data is short. RS-momentum > 0 = outperforming; inflection anticipates a leadership
+    turn before it shows in absolute price."""
+    n = min(len(closes), len(bench_closes))
+    if n < window + 2:
+        return None
+    c, b = list(closes)[-n:], list(bench_closes)[-n:]
+    rs = [c[i] / b[i] for i in range(n) if b[i] > 0]
+    if len(rs) < window + 2:
+        return None
+    base = rs[-window - 1]
+    rs_mom = (rs[-1] / base - 1.0) if base else 0.0
+    half = max(2, window // 2)
+    recent = _slope_norm(rs[-half:], half)
+    prior = _slope_norm(rs[-2 * half:-half], half) if len(rs) >= 2 * half else 0.0
+    return {"rs_momentum": round(rs_mom, 4), "rs_slope": round(recent, 4),
+            "rs_inflection": (recent > prior) and (recent > 0)}
+
+
+def leading_features(bars: Sequence[Bar], cfg: dict, bench_closes: Sequence[float] | None = None) -> tuple[dict, float]:
     """Assemble the leading setup read → (features, leading_score∈[-1,1]). ``leading_score`` is a first-pass
-    combination (accumulation direction, breakout pressure, coil energy signed by accumulation); the rubric
-    reasons over the components. Bullish DIVERGENCE = accumulating (CMF>0) while price is drifting down."""
+    combination (accumulation, breakout pressure, coil energy signed by accumulation, + RS momentum when a
+    benchmark is given); the rubric reasons over the components. Bullish DIVERGENCE = accumulating while
+    price drifts down. RS inflection = the ticker's leadership vs the benchmark turning up (leading)."""
     if len(bars) < int(cfg.get("min_bars", 30)):
         return {"no_data": True}, 0.0
     closes = [b.close for b in bars]
@@ -104,12 +125,18 @@ def leading_features(bars: Sequence[Bar], cfg: dict) -> tuple[dict, float]:
     px_slope = _slope_norm(closes, int(cfg.get("cmf_window", 20)))
     bull_div = (acc > float(cfg.get("divergence_min", 0.05))) and (px_slope < 0)
     brk = breakout_pressure(bars, int(cfg.get("breakout_window", 20)))
-    leading_score = _clip(0.5 * acc + 0.3 * (2 * brk - 1) + 0.2 * (coil_v if acc >= 0 else -coil_v))
+    leading_score = 0.5 * acc + 0.3 * (2 * brk - 1) + 0.2 * (coil_v if acc >= 0 else -coil_v)
     feats = {
         "coil": coil_v,                          # 0..1 compression (energy)
         "accumulation_cmf": acc,                 # -1..1 buying/selling pressure
         "bullish_divergence": bull_div,          # accumulating into price weakness
         "breakout_pressure": brk,                # 0..1 pressing the range high (vol-confirmed)
-        "leading_score": round(leading_score, 4),
     }
+    if bench_closes is not None:
+        rs = relative_strength(closes, bench_closes, int(cfg.get("rs_window", 20)))
+        if rs:
+            feats.update(rs)                     # rs_momentum / rs_slope / rs_inflection
+            leading_score += 0.25 * _clip(rs["rs_momentum"] / float(cfg.get("rs_scale", 0.05)))
+    leading_score = _clip(leading_score)
+    feats["leading_score"] = round(leading_score, 4)
     return feats, leading_score

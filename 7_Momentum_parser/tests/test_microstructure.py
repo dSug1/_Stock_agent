@@ -47,10 +47,33 @@ def test_leading_features_no_data_when_short():
     assert feats.get("no_data") is True and score == 0.0         # absent, not bearish
 
 
+def test_relative_strength_momentum_and_inflection():
+    bench = [100.0] * 60                                          # flat benchmark
+    # RS flat then ACCELERATING up in the recent half = a leadership inflection (not just a steady trend)
+    turn = [100.0] * 50 + [100.0 + i for i in range(10)]
+    rs = ms.relative_strength(turn, bench, 20)
+    assert rs["rs_momentum"] > 0 and rs["rs_inflection"] is True
+    # steadily declining relative -> negative momentum, no upward inflection
+    rs2 = ms.relative_strength([100.0 - i for i in range(60)], bench, 20)
+    assert rs2["rs_momentum"] < 0 and rs2["rs_inflection"] is False
+    assert ms.relative_strength([1, 2], bench, 20) is None        # too short
+
+
+def test_leading_features_folds_in_rs_when_benchmark_given():
+    bars = [_bar(100 + i) for i in range(40)]
+    feats, _ = ms.leading_features(bars, LCFG, bench_closes=[100.0] * 40)
+    assert "rs_momentum" in feats and "rs_inflection" in feats
+    # without a benchmark, RS is simply absent (not bearish)
+    feats2, _ = ms.leading_features(bars, LCFG)
+    assert "rs_momentum" not in feats2
+
+
 def test_bundle_includes_leading_block(tmp_path):
     s = Store(tmp_path / "t.db")
     s.upsert_bars("AAA", [_bar(100 + 0.1 * i, i=i) for i in range(40)])
-    b = rubric.build_bundle(s, "AAA", "2026-06-01",
-                            {"probability": {"target": {"vol_band_mult": 0.5}}, "leading": LCFG})
+    s.upsert_bars("SPY", [_bar(400.0, i=i) for i in range(40)])   # cached benchmark -> RS computable
+    cfg = {"probability": {"target": {"vol_band_mult": 0.5}}, "leading": {**LCFG, "benchmark": "SPY"}}
+    b = rubric.build_bundle(s, "AAA", "2026-06-01", cfg)
     assert b["leading"] is not None and "coil" in b["leading"] and "accumulation_cmf" in b["leading"]
+    assert "rs_momentum" in b["leading"]                          # RS folded in from the cached benchmark
     assert "LEADING SETUP" in rubric.system_prompt({})            # prompt tells Claude to use it forward

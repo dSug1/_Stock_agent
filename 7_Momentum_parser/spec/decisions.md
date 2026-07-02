@@ -17,7 +17,15 @@ compression 0..1, 1=tightly wound), `cmf` (Chaikin Money Flow accumulation/distr
 to GENERATE high-novelty forward_drivers, e.g. tight coil + accumulation + no catalyst = pre-breakout). Config
 `leading:` block (windows). No store/schema change; feeds the rubric only (p_model integration = optional later).
 Live check: CLOV coil 0.80 / cmf +0.10 (coiled, mildly accumulating). **164 tests** (+6). Explainer
-`spec/M20_leading_microstructure_explained.md`. NEXT: RS inflection (cache benchmark), then Tier-2 short/options.
+`spec/M20_leading_microstructure_explained.md`.
+**M20b — RS inflection (2026-07-01):** added relative-strength vs a cached benchmark. `stage1_prices.
+ensure_benchmark` fetches+stores SPY (`leading.benchmark` → topdown.proxies.market → SPY) in `bars`, wired
+into `daily` price step; `microstructure.relative_strength` → `rs_momentum` (established RS, contextual/can be
+backward) + `rs_inflection` (RS slope ACCELERATING up = the genuinely LEADING turn) + `rs_slope`; folded into
+`leading_features(..., bench_closes)` + the bundle via `rubric._leading` (omitted, not bearish, if benchmark
+uncached). Config `leading.benchmark/rs_window/rs_scale`. Live: CLOV rs_momentum +0.49 (outperformer),
+rs_inflection false (no fresh turn). **166 tests** (+2). Tier-1 leading inputs COMPLETE (OHLCV + RS). NEXT:
+Tier-2 short-interest/options (yfinance, caveated) + driver-type feedback learning.
 
 ## M19 — Forward-driver generation (v0.5, Decision M) (2026-07-01) — BUILT
 Operator: even v0.4 output is "still not enough predictive and still too oriented on past milestone catalysts

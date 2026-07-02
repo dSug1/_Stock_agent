@@ -39,6 +39,9 @@ leading:
   cmf_window: 20                # Chaikin Money Flow window (accumulation vs distribution)
   divergence_min: 0.05          # CMF above this while price drifts down -> bullish divergence
   breakout_window: 20           # range for breakout-pressure (proximity to the high, vol-confirmed)
+  benchmark: SPY                # RS benchmark (cached in bars by stage1); null -> topdown.proxies.market
+  rs_window: 20                 # window for RS momentum + inflection (ticker vs benchmark)
+  rs_scale: 0.05                # tanh scale folding RS momentum into leading_score
 
 gdelt:                          # GDELT news provider (Stage 2 media) — 429-SAFE (5_Hype lesson, extended)
   min_interval_s: 5.0           # proactive spacing between ANY two GDELT calls (avoid bursting -> 429)

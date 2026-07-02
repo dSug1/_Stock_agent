@@ -170,16 +170,22 @@ def build_bundle(store, ticker: str, asof: str, cfg: dict) -> dict:
         "catalyst": dims.get("catalyst"),
         "next_catalyst": {"date": nxt["event_date"], "kind": nxt["kind"]} if nxt else None,
         "topdown": _topdown_context(store, ticker),        # v0.4/M14: anticipated macro + this name's exposures
-        "leading": _leading(bars, cfg),                    # v0.5/M20: pre-move microstructure setup (forward)
+        "leading": _leading(store, bars, cfg),             # v0.5/M20: pre-move microstructure setup (forward)
     }
 
 
-def _leading(bars, cfg: dict) -> Optional[dict]:
-    """Pre-move microstructure setup (coil / accumulation / breakout pressure) for the forward-driver rubric."""
+def _leading(store, bars, cfg: dict) -> Optional[dict]:
+    """Pre-move microstructure setup (coil / accumulation / breakout / RS inflection) for the rubric.
+    RS uses the cached benchmark bars (M20) when present — omitted (not bearish) if the benchmark isn't cached."""
     from ..microstructure import leading_features
+    from ..stage1_prices import benchmark_ticker
     if not bars:
         return None
-    feats, _ = leading_features(bars, cfg.get("leading", {}))
+    bench = None
+    bb = store.get_bars(benchmark_ticker(cfg)) if store is not None else None
+    if bb:
+        bench = [b.close for b in bb]
+    feats, _ = leading_features(bars, cfg.get("leading", {}), bench_closes=bench)
     return feats
 
 
