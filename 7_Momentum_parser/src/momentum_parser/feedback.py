@@ -127,10 +127,59 @@ def learn(store, cfg: dict, taxonomy: dict, now: str, log=print) -> dict:
     return {"weights_updated": len(acc), "settled_used": used}
 
 
+def _novelty_bucket(nov) -> str:
+    try:
+        n = float(nov)
+    except (TypeError, ValueError):
+        return "unknown"
+    return "low" if n < 0.34 else ("high" if n >= 0.67 else "med")
+
+
+def learn_drivers(store, cfg: dict, now: str, log=print) -> dict:
+    """Settle the rubric's GENERATED forward drivers vs realized outcome and learn which TYPES precede moves
+    (M21). Also buckets by novelty so we can VALIDATE whether high-novelty forward drivers actually add edge.
+    A driver's directional bet = sign(expected_impact); hit = it matched the realized 5-day move."""
+    import json
+    pseudo = float(cfg.get("topdown", {}).get("learning", {}).get("driver_prior_n", 20))
+    by_type: dict = {}                                     # driver_type -> [hits, n]
+    by_novelty: dict = {}                                  # low/med/high -> [hits, n]
+    used = 0
+    for row in store.settled_ledger():
+        r = row["realized_return"]
+        if r is None:
+            continue
+        sc = store.score_for(row["ticker"], row["asof"], row["run_id"])
+        if not sc or "variant_json" not in sc.keys() or not sc["variant_json"]:
+            continue
+        try:
+            drivers = json.loads(sc["variant_json"]).get("forward_drivers") or []
+        except (ValueError, TypeError):
+            continue
+        for idx, d in enumerate(drivers):
+            imp = d.get("expected_impact")
+            if imp in (None, 0):
+                continue
+            pred_dir = 1 if imp > 0 else -1
+            hit = 1 if (pred_dir > 0) == (r > 0) else 0
+            dtype = d.get("type") or "other"
+            store.upsert_driver_outcome(row["ticker"], row["asof"], row["run_id"], idx, dtype,
+                                        d.get("novelty"), pred_dir, r, hit, now)
+            for bucket, key in ((by_type, dtype), (by_novelty, _novelty_bucket(d.get("novelty")))):
+                h, n = bucket.get(key, (0, 0))
+                bucket[key] = (h + hit, n + 1)
+            used += 1
+    for dtype, (h, n) in by_type.items():
+        store.upsert_driver_stats(dtype, n, h, round(signal_skill(h, n, pseudo), 4), now)
+    novelty_edge = {k: {"n": n, "hit_rate": round(h / n, 4)} for k, (h, n) in by_novelty.items() if n}
+    log(f"  [feedback] settled {used} forward drivers across {len(by_type)} types · novelty-edge {novelty_edge}")
+    return {"drivers_settled": used, "driver_types": len(by_type), "novelty_edge": novelty_edge}
+
+
 def run(store, cfg: dict, now: str | None = None, log=print) -> dict:
-    """The daily feedback pass: settle catalyst hypotheses, then learn weights + record attribution."""
+    """The daily feedback pass: settle catalyst hypotheses + forward drivers, then learn weights + attribution."""
     from .taxonomy import load_taxonomy
     now = now or datetime.now(timezone.utc).isoformat()
     out = dict(settle_catalyst_hypotheses(store, cfg, now, log))
     out.update(learn(store, cfg, load_taxonomy(cfg), now, log))
+    out.update(learn_drivers(store, cfg, now, log))
     return out

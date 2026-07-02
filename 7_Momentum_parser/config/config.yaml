@@ -43,6 +43,12 @@ leading:
   rs_window: 20                 # window for RS momentum + inflection (ticker vs benchmark)
   rs_scale: 0.05                # tanh scale folding RS momentum into leading_score
 
+# --- Tier-2 leading inputs: short interest + options-implied (opt-in) — v0.5/M22 --------------
+short_options:                  # positioning signals for the leading block. CAVEAT: yfinance short = stale
+  horizon_days: 7               #   (~2x/month), options = delayed, ToS-gray. Swap to a licensed feed before
+  squeeze_pct_float: 0.20       #   relying on it. Enable via sources.short_options: true.
+  squeeze_days_cover: 5.0       # short-%-float / days-to-cover levels that read as high squeeze fuel
+
 gdelt:                          # GDELT news provider (Stage 2 media) — 429-SAFE (5_Hype lesson, extended)
   min_interval_s: 5.0           # proactive spacing between ANY two GDELT calls (avoid bursting -> 429)
   retries: 2                    # retry on 429/error with backoff (honors Retry-After), then fail open
@@ -58,6 +64,8 @@ sources:                        # Decision B — predictive-only dimensions. SOC
   media_provider: gdelt         # Stage 2 media dimension: "gdelt" (real, 429-safe) or "none" (stub)
   web_search_stats: true        # search-interest surge vs baseline (5_Hype_parser idea)
   forward_catalysts: true       # scheduled PDUFA / data-readout / earnings DATES (anticipatory, D-2/G)
+  short_options: false          # M22 Tier-2 leading inputs (short interest + options-implied). OPT-IN:
+                                #   yfinance short is stale (~2x/mo), options delayed, ToS-gray. See short_options:.
   social_sentiment: false       # REMOVED — too costly/noisy (Decision B, D-2)
   exclude:                      # explicitly out of scope (a-posteriori / look-ahead)
     - past_announcements        # the RESULT of a catalyst (reactive); the scheduled DATE is in-scope

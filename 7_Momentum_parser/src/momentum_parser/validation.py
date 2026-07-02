@@ -67,5 +67,32 @@ def build_report(store: Store, cfg: dict) -> tuple[Path, dict]:
         for b in s["reliability"]:
             lines.append(f"| {b['bin']} | {b['n']} | {b['mean_pred']} | {b['obs_rate']} |")
         lines.append("")
+    lines += _driver_section(store)                        # M21: which forward-driver TYPES precede moves
     path.write_text("\n".join(lines), encoding="utf-8")
     return path, s
+
+
+def _driver_section(store: Store) -> list[str]:
+    """Driver-type skill + the novelty-edge check — does the forward machinery (M19/M20) actually add edge?"""
+    stats = store.driver_stats()
+    if not stats:
+        return ["## Forward drivers (M21)", "", "_No settled forward drivers yet._", ""]
+    out = ["## Forward drivers — which TYPES precede moves (M21)", "",
+           "| Driver type | n | hit-rate | skill |", "|---|---|---|---|"]
+    for r in stats:
+        hr = round(r["hits"] / r["n"], 3) if r["n"] else "—"
+        out.append(f"| {r['driver_type']} | {r['n']} | {hr} | {r['skill']} |")
+    buckets: dict = {}                                     # novelty-edge: does forward-ness pay?
+    for o in store.driver_outcomes():
+        nov = o["novelty"] or 0
+        b = "high" if nov >= 0.67 else ("low" if nov < 0.34 else "med")
+        h, n = buckets.get(b, (0, 0))
+        buckets[b] = (h + (o["hit"] or 0), n + 1)
+    if buckets:
+        out += ["", "**Novelty edge** (does forward-ness pay? high should beat low if the reframe works):"]
+        for b in ("high", "med", "low"):
+            if b in buckets:
+                h, n = buckets[b]
+                out.append(f"- {b} novelty: {round(h / n, 3)} hit-rate over {n}")
+    out.append("")
+    return out

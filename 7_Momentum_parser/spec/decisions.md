@@ -4,6 +4,36 @@
 
 ---
 
+## M22 — Tier-2 leading inputs: short interest + options-implied (v0.5) (2026-07-01) — BUILT · OPT-IN
+Adds positioning signals to the leading block (squeeze fuel + implied move). `clients/short_options.py`
+(provider-isolated, fail-open, lazy yfinance): `fetch_short_stats` (Ticker.info: short_pct_float / days_to_cover
+/ shares_short vs prior — **STALE ~2x/month**) + `fetch_options_iv` (Ticker.option_chain nearest expiry ≥
+horizon: ATM straddle implied_move + atm_iv + OTM put−call skew — **DELAYED**). Pure `microstructure.
+short_features` (squeeze_setup∈[0,1] from short-%-float × days-to-cover; short_building vs prior) +
+`options_features` (implied_move/atm_iv/skew). Harvested in `stage2_harvest` **OPT-IN** (`sources.short_options`
+false by default; injectable clients), stored as `evidence` dims short/options; `rubric._leading` folds them into
+the leading block; prompt LEADING SETUP cites squeeze_setup/skew (→ high squeeze_setup + short_building = a
+squeeze forward_driver). Config `short_options:` block. **ToS/staleness caveats surfaced everywhere; swap to a
+licensed short/options feed before relying on it** (data_provider_switch). **175 tests** (+4). No schema change
+(reuses evidence). Explainer `spec/M22_short_options_inputs_explained.md`. Tier-2 done; Tier-3 (borrow/live-flow)
+= paid, OUT. NEXT: couple driver-type/novelty skill (M21) into conviction once the ledger makes it significant.
+
+## M21 — Driver-type feedback learning (v0.5) (2026-07-01) — BUILT
+Closes the forward loop + VALIDATES whether the M19/M20 forward machinery adds edge. Rubric self-tags each
+`forward_driver` with a `type` enum (squeeze/breakout/sympathy/narrative/macro/flow/mean_reversion/
+catalyst_drift/other). Store **v10**: `driver_outcomes` (settled per-driver: pred_dir=sign(expected_impact),
+realized_return, hit) + `driver_stats` (learned per-type skill). `feedback.learn_drivers`: for each settled
+ledger row, joins the SAME run's score (`store.score_for`) → forward_drivers → hit vs realized → aggregate per
+TYPE (skill = shrunk hit-rate, reuses `signal_skill`) AND per NOVELTY bucket (low/med/high) → the key
+validation: does higher forward_novelty → better realized hit-rate? Wired into `feedback.run` (daily settle +
+--settle). `validation.build_report` gains a "Forward drivers — which TYPES precede moves" table + a
+"Novelty edge" block (high should beat low if the reframe works). Recomputes from full settled history each
+run (idempotent, like M16). **171 tests** (+5). Live DB migrated 9→10. Explainer
+`spec/M21_driver_feedback_learning_explained.md`. This is the empirical test of the whole v0.5 forward thesis —
+until the ledger fills (n≥~100 drivers) it's INDICATIVE; a persistent high>low novelty edge would confirm the
+forward-generation earns its keep. NEXT (deferred): Tier-2 short/options inputs; per-type weighting could
+feed back into conviction once skill is significant.
+
 ## M20 — Leading microstructure signals (v0.5, Tier-1 forward inputs) (2026-07-01) — BUILT
 The deferred "leading INPUT signals" lever, Tier-1 slice: give the M19 forward-driver rubric real *forward*
 data (it had the mandate to reason forward but a backward input set). Feasibility scoped: Tier-1 = OHLCV-only

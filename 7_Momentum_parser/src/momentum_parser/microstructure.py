@@ -92,6 +92,38 @@ def breakout_pressure(bars: Sequence[Bar], window: int) -> float:
     return round(pos * vconf, 4)
 
 
+def short_features(raw: dict, cfg: dict) -> dict:
+    """Squeeze-fuel read from short interest (M22, Tier-2). ``squeeze_setup`` in [0,1] = high short-%-float ×
+    high days-to-cover; ``short_building`` = short interest rising vs the prior settlement. Absent → no_data."""
+    if not raw:
+        return {"no_data": True}
+    spf = raw.get("short_pct_float")
+    dtc = raw.get("days_to_cover")
+    hi_spf = float(cfg.get("squeeze_pct_float", 0.20))
+    hi_dtc = float(cfg.get("squeeze_days_cover", 5.0))
+    parts = []
+    if spf is not None:
+        parts.append(min(1.0, spf / hi_spf) if hi_spf else 0.0)
+    if dtc is not None:
+        parts.append(min(1.0, dtc / hi_dtc) if hi_dtc else 0.0)
+    setup = round(sum(parts) / len(parts), 4) if parts else None
+    building = None
+    s, sp = raw.get("shares_short"), raw.get("shares_short_prior")
+    if s is not None and sp:
+        building = round(s / sp - 1.0, 4)
+    return {k: v for k, v in {"short_pct_float": spf, "days_to_cover": dtc,
+                              "squeeze_setup": setup, "short_building": building}.items() if v is not None}
+
+
+def options_features(raw: dict, cfg: dict) -> dict:
+    """Options positioning read (M22, Tier-2): implied_move (expected move to expiry), atm_iv, and skew
+    (positive = downside-hedging/put demand; negative = call demand / bullish positioning). Absent → no_data."""
+    if not raw:
+        return {"no_data": True}
+    return {k: v for k, v in {"implied_move_pct": raw.get("implied_move_pct"),
+                              "atm_iv": raw.get("atm_iv"), "skew": raw.get("skew")}.items() if v is not None}
+
+
 def relative_strength(closes: Sequence[float], bench_closes: Sequence[float], window: int):
     """RS of the ticker vs a benchmark (e.g. SPY): momentum of the RS line + a leading INFLECTION (its slope
     turning up). None if data is short. RS-momentum > 0 = outperforming; inflection anticipates a leadership

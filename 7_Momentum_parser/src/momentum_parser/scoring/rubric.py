@@ -18,16 +18,21 @@ PROMPT_VERSION = "m19-2026-07-01"
 # we clamp in code). `additionalProperties: false` + `required` on every object, per the claude-api skill.
 # v0.5/M19: the PRIMARY output is now GENERATED forward drivers — conviction is gated by forward_novelty so a
 # thesis built on past/scheduled milestones or a run-up recap earns ~0 (Decision M). v0.4 variant fields kept.
+# driver categories — the rubric self-tags each driver so the M21 loop can learn which TYPES precede moves.
+DRIVER_TYPES = ["squeeze", "breakout", "sympathy", "narrative", "macro", "flow",
+                "mean_reversion", "catalyst_drift", "other"]
+
 _DRIVER_SCHEMA = {
     "type": "object",
     "properties": {
         "driver": {"type": "string"},           # the specific thing that will move it in the next 5d
+        "type": {"type": "string", "enum": DRIVER_TYPES},   # category (for driver-type feedback learning)
         "unpriced_why": {"type": "string"},     # why consensus is NOT positioned for it
         "probability": {"type": "number"},      # 0..1 P(this driver acts inside the window)
         "expected_impact": {"type": "number"},  # signed fractional impact if it acts
         "novelty": {"type": "number"},          # 0..1: 0 = known/scheduled/past milestone or run-up recap
     },
-    "required": ["driver", "unpriced_why", "probability", "expected_impact", "novelty"],
+    "required": ["driver", "type", "unpriced_why", "probability", "expected_impact", "novelty"],
     "additionalProperties": False,
 }
 
@@ -79,7 +84,8 @@ YOUR PRIMARY JOB IS TO GENERATE FORWARD DRIVERS, NOT TO EVALUATE KNOWN CATALYSTS
 that consensus is NOT positioned for. A driver NEED NOT be a scheduled event — it can be an emergent \
 narrative or theme, a positioning/flow or short-squeeze unwind, a sympathy move off a peer/sector, a \
 technical break with follow-through, or a second-order effect of an anticipated macro move. For each driver \
-give: `driver` (the specific mechanism), `unpriced_why` (why the market isn't positioned for it), \
+give: `driver` (the specific mechanism), `type` (one of: squeeze, breakout, sympathy, narrative, macro, flow, \
+mean_reversion, catalyst_drift, other), `unpriced_why` (why the market isn't positioned for it), \
 `probability` (0..1 it acts inside the window), `expected_impact` (signed fractional move if it acts), and \
 `novelty` (0..1).
 
@@ -98,9 +104,11 @@ already reacted to those. Never invent a source, headline, or number.
 
 LEADING SETUP: the bundle's `leading` block is pre-move MICROSTRUCTURE (coil = volatility compression / \
 energy; accumulation_cmf = quiet buying vs selling pressure; bullish_divergence = accumulating while price \
-drifts down; breakout_pressure = pressing the range high on volume). These ANTICIPATE a move before any \
-catalyst — use them to GENERATE forward_drivers (e.g. a tight coil + positive accumulation with NO known \
-catalyst is a high-novelty pre-breakout driver). This is leading, not a run-up recap.
+drifts down; breakout_pressure = pressing the range high on volume; rs_inflection = leadership vs the market \
+turning up). It may also carry positioning: `short` (squeeze_setup / days_to_cover / short_building) and \
+`options` (implied_move_pct / skew — positive skew = downside hedging). These ANTICIPATE a move before any \
+catalyst — use them to GENERATE forward_drivers (e.g. tight coil + accumulation = pre-breakout; high \
+squeeze_setup + short_building = a squeeze driver). This is leading, not a run-up recap.
 
 TOP-DOWN CONTEXT: the bundle's `topdown` block lists the anticipated market-moving events in the window \
 (regime, rates, rotation, scheduled macro data) and THIS name's exposures (betas). Weigh them — a high-beta \
@@ -170,13 +178,14 @@ def build_bundle(store, ticker: str, asof: str, cfg: dict) -> dict:
         "catalyst": dims.get("catalyst"),
         "next_catalyst": {"date": nxt["event_date"], "kind": nxt["kind"]} if nxt else None,
         "topdown": _topdown_context(store, ticker),        # v0.4/M14: anticipated macro + this name's exposures
-        "leading": _leading(store, bars, cfg),             # v0.5/M20: pre-move microstructure setup (forward)
+        "leading": _leading(store, ticker, asof, bars, cfg),   # v0.5/M20+M22: pre-move setup + positioning
     }
 
 
-def _leading(store, bars, cfg: dict) -> Optional[dict]:
-    """Pre-move microstructure setup (coil / accumulation / breakout / RS inflection) for the rubric.
-    RS uses the cached benchmark bars (M20) when present — omitted (not bearish) if the benchmark isn't cached."""
+def _leading(store, ticker: str, asof: str, bars, cfg: dict) -> Optional[dict]:
+    """Pre-move setup for the rubric: OHLCV microstructure (coil / accumulation / breakout / RS inflection,
+    M20) + cached positioning (short-squeeze fuel, options-implied move, M22). Each piece is omitted (not
+    bearish) when absent — RS needs a cached benchmark, positioning needs the opt-in Tier-2 harvest."""
     from ..microstructure import leading_features
     from ..stage1_prices import benchmark_ticker
     if not bars:
@@ -186,6 +195,12 @@ def _leading(store, bars, cfg: dict) -> Optional[dict]:
     if bb:
         bench = [b.close for b in bb]
     feats, _ = leading_features(bars, cfg.get("leading", {}), bench_closes=bench)
+    if store is not None:                                   # fold in cached short/options positioning (M22)
+        ev = {r["dimension"]: json.loads(r["features_json"] or "{}") for r in store.get_evidence(ticker, asof)}
+        for dim in ("short", "options"):
+            d = ev.get(dim)
+            if d and not d.get("no_data"):
+                feats[dim] = d
     return feats
 
 

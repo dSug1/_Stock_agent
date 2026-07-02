@@ -16,7 +16,7 @@ from typing import Iterable, Optional
 
 from .models import Bar, Prediction, Signal
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class Store:
@@ -207,6 +207,24 @@ class Store:
             )
             self.conn.execute("PRAGMA user_version=9")
             self.conn.commit()
+        if v < 10:
+            # v0.5 M21: driver-type feedback learning — settle the rubric's GENERATED forward drivers vs
+            # realized outcome; learn which driver TYPES (and novelty levels) actually precede moves.
+            self.conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS driver_outcomes (
+                    ticker TEXT NOT NULL, asof TEXT NOT NULL, run_id TEXT NOT NULL, idx INTEGER NOT NULL,
+                    driver_type TEXT, novelty REAL, pred_dir INTEGER, realized_return REAL,
+                    hit INTEGER, settled_at TEXT,
+                    PRIMARY KEY (ticker, asof, run_id, idx)
+                );
+                CREATE TABLE IF NOT EXISTS driver_stats (
+                    driver_type TEXT PRIMARY KEY, n INTEGER, hits INTEGER, skill REAL, updated_at TEXT
+                );
+                """
+            )
+            self.conn.execute("PRAGMA user_version=10")
+            self.conn.commit()
 
     # ------------------------------------------------------------------ bars
     def upsert_bars(self, ticker: str, bars: Iterable[Bar]) -> int:
@@ -360,6 +378,12 @@ class Store:
         """The most-recent Claude score for a ticker/asof (the `p_claude` leg for the blend)."""
         return self.conn.execute(
             "SELECT * FROM scores WHERE ticker=? AND asof=? ORDER BY rowid DESC LIMIT 1", (ticker, asof)
+        ).fetchone()
+
+    def score_for(self, ticker: str, asof: str, run_id: str):
+        """The exact score for a (ticker, asof, run) — used to settle THAT run's forward drivers (M21)."""
+        return self.conn.execute(
+            "SELECT * FROM scores WHERE ticker=? AND asof=? AND run_id=?", (ticker, asof, run_id)
         ).fetchone()
 
     def has_fresh_score(self, ticker: str, asof: str, config_hash: str, evidence_fingerprint: str) -> bool:
@@ -577,6 +601,38 @@ class Store:
         return self.conn.execute(
             "SELECT * FROM attribution WHERE run_id=? ORDER BY ticker", (run_id,)
         ).fetchall()
+
+    # ------------------------------------------------------------------ driver outcomes/stats (M21)
+    def upsert_driver_outcome(self, ticker: str, asof: str, run_id: str, idx: int, driver_type: str,
+                              novelty, pred_dir: int, realized_return: float, hit: int,
+                              settled_at: str) -> None:
+        """A settled forward-driver: its predicted direction vs the realized move (idempotent per driver)."""
+        self.conn.execute(
+            "INSERT INTO driver_outcomes(ticker,asof,run_id,idx,driver_type,novelty,pred_dir,"
+            "realized_return,hit,settled_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(ticker,asof,run_id,idx) DO UPDATE SET driver_type=excluded.driver_type,"
+            "novelty=excluded.novelty,pred_dir=excluded.pred_dir,realized_return=excluded.realized_return,"
+            "hit=excluded.hit,settled_at=excluded.settled_at",
+            (ticker, asof, run_id, idx, driver_type, novelty, pred_dir, realized_return, hit, settled_at),
+        )
+        self.conn.commit()
+
+    def upsert_driver_stats(self, driver_type: str, n: int, hits: int, skill: float,
+                            updated_at: str) -> None:
+        """Learned reliability of a driver TYPE (hit-rate skill), the M21 loop's output."""
+        self.conn.execute(
+            "INSERT INTO driver_stats(driver_type,n,hits,skill,updated_at) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(driver_type) DO UPDATE SET n=excluded.n,hits=excluded.hits,"
+            "skill=excluded.skill,updated_at=excluded.updated_at",
+            (driver_type, n, hits, skill, updated_at),
+        )
+        self.conn.commit()
+
+    def driver_stats(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM driver_stats ORDER BY skill DESC").fetchall()
+
+    def driver_outcomes(self) -> list[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM driver_outcomes ORDER BY asof").fetchall()
 
     def close(self) -> None:
         self.conn.close()

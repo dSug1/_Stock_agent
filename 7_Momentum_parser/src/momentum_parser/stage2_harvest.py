@@ -33,8 +33,13 @@ def run(store: Store, tickers: list[str], cfg: dict, asof: str | None = None,
         news_c = news_client
     search_c = clients.get("search", search_client)
     cat_c = clients.get("catalysts", catalysts_client)
+    # Tier-2 leading inputs (M22) — OPT-IN (yfinance short/options are stale/delayed, ToS-gray). Injectable.
+    so_enabled = cfg.get("sources", {}).get("short_options", False)
+    short_c = clients.get("short") or (_short_options() if so_enabled else None)
+    opt_c = clients.get("options") or (_short_options() if so_enabled else None)
+    so_cfg = cfg.get("short_options", {})
 
-    n_media = n_search = n_cat = skipped = 0
+    n_media = n_search = n_cat = n_pos = skipped = 0
     for t in tickers:
         a = asof or store.latest_bar_date(t)
         if not a:
@@ -76,7 +81,24 @@ def run(store: Store, tickers: list[str], cfg: dict, asof: str | None = None,
             store.upsert_evidence(t, a, "catalyst", c_score, c_feats)
             c_days = c_feats.get("days_to_catalyst")
 
+        # --- positioning (Tier-2, opt-in): short-squeeze fuel + options-implied move (M22) ----------
+        if short_c is not None or opt_c is not None:
+            from . import microstructure
+            if short_c is not None:
+                sf = microstructure.short_features(short_c.fetch_short_stats(t), so_cfg)
+                store.upsert_evidence(t, a, "short", sf.get("squeeze_setup"), sf)
+            if opt_c is not None:
+                of = microstructure.options_features(
+                    opt_c.fetch_options_iv(t, int(so_cfg.get("horizon_days", horizon))), so_cfg)
+                store.upsert_evidence(t, a, "options", of.get("implied_move_pct"), of)
+            n_pos += 1
+
         log(f"  [harvest] {t}@{a}: media={len(counts)} search={len(interest)} catalyst_days={c_days}")
 
     return {"tickers": len(tickers), "media": n_media, "search": n_search,
-            "catalysts": n_cat, "skipped": skipped}
+            "catalysts": n_cat, "positioning": n_pos, "skipped": skipped}
+
+
+def _short_options():
+    from .clients import short_options
+    return short_options
