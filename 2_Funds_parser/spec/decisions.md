@@ -1769,6 +1769,24 @@ No schema change. No caller-side change. `_latest_periods_per_concept` already p
 
 ---
 
+### D61 — `run_2_Funds_parser.bat` rewritten to goto-flow (crash fix) (2026-07-04)
+
+**Symptom.** Running the driver crashed immediately after `=== Module 2 complete. ===` with `: was unexpected at this time.` — before the user could answer the Module 3 gate. Module 2's Python (`2_ingest_13f.py`, `2_build_report.py`) ran fine; the failure was pure cmd.exe batch syntax.
+
+**Root cause.** Everything from the Module 3 gate to end-of-file (old lines 59–185) was one giant nested `if /i "%RUN_M3%"=="y" ( … )` block. cmd parses an entire parenthesised block up front, and unescaped `)` characters inside `REM` comments and `set /p` prompt strings within that block (e.g. `REM … harmless (M5 emits packs without`, prompts like `(hard filters + snapshot fetch)`, and the nested `for /f … python -c "…'context_packs.db'…"` at old line 173) closed the block early, misparsing the remainder. The crash fired regardless of what the user typed.
+
+**Second, latent bug behind it.** Inside that block the later gates read `%RUN_M4A%` / `%RUN_M4B%` / `%RUN_M5%` / `%RUN_M6%` / `%RUN_M6_EST%` with percent-expansion, which cmd resolves at block-parse time — *before* those `set /p` prompts execute — so every gate below M3 would have been silently skipped even if the parse had succeeded.
+
+**Fix.** Rewrote [run_2_Funds_parser.bat](../run_2_Funds_parser.bat) with `goto`-label flow and zero multi-line parenthesised blocks:
+- Each gate is a flat `set /p` + `if /i not "!VAR!"=="y" goto :done` (or `:after_*`), reading answers with delayed `!VAR!` expansion so prompts fire in order.
+- Fatal steps jump to dedicated `:fail_*` labels (each `echo [FATAL] … ` + `exit /b 1`); non-fatal steps (M4c, M7, ingest) stay `[WARN]`-and-continue as before.
+- Bracketed `[…]` replaces `(…)` in prompt text to avoid re-introducing stray parens.
+- The quarter-lookup `for /f` switched to `usebackq` + backticks so the embedded single-quoted Python (`r'context_packs.db'`, `'SELECT …'`) no longer collides with the command delimiter; guarded by `if not defined M6_QUARTER goto :fail_quarter`.
+
+No pipeline logic, step order, gate semantics, or Python changed — only the driver's control-flow encoding. Verified: answering `n` at M3 exits cleanly; answering `y` runs M3 and correctly advances to the M4a gate (previously unreachable).
+
+---
+
 ## Cross-cutting decisions
 
 - **Python module naming carve-out.** Top-level dirs and scripts may start with `2_` (e.g., `2_ingest_13f.py`). Python packages and modules under `src/` cannot (Python rejects leading digits). Import paths: `from layer_1.edgar_13f import …`, `from module_1.config import load_config`.
