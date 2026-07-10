@@ -334,6 +334,23 @@ class Store:
         self.conn.commit()
         return below
 
+    def entities_needing_lei(self, limit: int | None = None) -> list[Entity]:
+        """Live entities with no LEI, highest-value first (M6 tier, then non-US, then the rest).
+
+        The M6 priority tier and international names benefit most from an LEI (their cross-market
+        literature/patent joins in Phase 2 key on it), so they lead the work-list."""
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND (lei IS NULL OR lei='') "
+               "ORDER BY in_existing_universe DESC, (jurisdiction='US') ASC, entity_id")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [self._row_to_entity(r) for r in self.conn.execute(sql)]
+
+    def set_lei(self, entity_id: str, lei: str) -> None:
+        """Backfill an LEI only if the entity currently has none (never overwrite a known LEI)."""
+        self.conn.execute(
+            "UPDATE entity SET lei=? WHERE entity_id=? AND (lei IS NULL OR lei='')", (lei, entity_id))
+        self.conn.commit()
+
     def recompute_floors(self, floor_usd: float) -> int:
         """Set ``below_floor`` for every entity with a known cap (used after a floor-config change).
 

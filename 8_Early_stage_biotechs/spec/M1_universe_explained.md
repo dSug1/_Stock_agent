@@ -96,6 +96,19 @@ gate on is a simple predicate: `is_live=1 AND below_floor=0 AND mktcap_unknown=0
 **local-only** (ToS) — swap for a licensed provider before any public deploy. `--recompute-floor`
 re-derives `below_floor` from stored caps after a floor-config change without re-fetching.
 
+### GLEIF LEI backfill (M6) — the cross-market join key, done carefully
+Later phases join literature/patent/trial signals across markets on the LEI (spec §2.3, LEI-first). But
+LEI is also Module-8's **strongest identity key**, so a wrong LEI would silently merge two companies on
+the next build. The GLEIF enrich (`clients/gleif.py` + `enrich.enrich_lei`, `scripts/8_enrich.py --lei`)
+is therefore **high-precision, low-recall**: for each LEI-less entity it fulltext-searches GLEIF
+(free, no key) filtered by country, then `pick_lei` accepts a result **only if exactly one candidate's
+normalized legal name equals the entity's** (ISSUED-status tiebreak). Everything else is a miss (LEI
+stays null). Two safety rails: `set_lei` never overwrites an existing LEI, and a picked LEI already
+held by a *different* entity is **not set** — it queues a `gleif_lei_collision` review row (usually a
+real store duplicate), so we never create two rows sharing one LEI. Work-list is ordered M6-tier +
+international first (they benefit most). Live spot-check confirmed it matches `Genmab→GENMAB A/S` and
+`Zealand→ZEALAND PHARMA A/S` while rejecting fuzzy fulltext noise for `Acumen`.
+
 ### Security (inherited, free)
 `clients/_net.py` is copied from M6: 64 MiB capped reads, the repo `USER_AGENT` on every request,
 `defusedxml`, per-host rate limiting, hard-coded public endpoints (no SSRF surface). SQL is
@@ -118,6 +131,10 @@ PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_universe.py --dry-run   # n
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py --limit 25    # smoke a batch
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py               # full pass (resumable)
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py --recompute-floor
+
+# LEI backfill (GLEIF, free) — high-precision cross-market join key:
+PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py --lei --limit 20   # smoke
+PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py --lei              # full pass
 ```
 `--stats` prints the funnel: live entities, priority-tier count, unknown-cap count, reconciliation-queue
 depth, and breakdowns by sector and country.
@@ -129,6 +146,6 @@ depth, and breakdowns by sector and country.
 - EU/Nordic/JP/KR universe — Phases 4–5 (they arrive via M6's seed today, but not yet enumerated
   natively by Module 8).
 - SEDAR+/SEDI Canada scraping — only EDGAR-visible Canadian dual-listers are covered.
-- GLEIF LEI enrichment, two-way export back to M6, FTS5 ad-hoc index — deferred.
+- ~~GLEIF LEI enrichment~~ **done (M6, high-precision).** Two-way export back to M6, FTS5 ad-hoc index — deferred.
 - ~~Per-CIK market caps~~ **done (M5 enrich)** — yfinance fills unknown caps, `below_floor` computed.
   Full-dilution / pre-funded-warrant caps stay basic (shares×price), a deferred refinement from M6.

@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .clients import market
+from .clients import gleif, market
 from .config import Config
 from .fx import FXConverter
+from .models import ReconRow
 from .store import Store, now_iso
 
 log = logging.getLogger(__name__)
@@ -83,4 +85,64 @@ def enrich_caps(store: Store, cfg: Config, *, limit: int | None = None, per_sec:
 
     log.info("enrich done: filled=%d below_floor=%d misses=%d by_ccy=%s",
              res.filled, res.below_floor, res.misses, res.by_ccy)
+    return res
+
+
+@dataclass
+class LeiResult:
+    attempted: int = 0
+    filled: int = 0
+    misses: int = 0            # no confident match
+    collisions: int = 0        # LEI already held by a different entity → queued, not set
+
+
+def enrich_lei(store: Store, cfg: Config, *, limit: int | None = None, concurrency: int = 8,
+               search: Callable[..., list[dict]] | None = None,
+               progress_every: int = 50) -> LeiResult:
+    """Backfill LEIs (GLEIF) for entities that lack one. HIGH-PRECISION: only a unique exact
+    normalized-name match is accepted (``gleif.pick_lei``). Persists per entity; fail-open.
+
+    **Concurrency**: GLEIF searches run in a thread pool (``concurrency`` workers) — GLEIF is a
+    network-bound public API that tolerates bursts and 429-retries internally (``gleif._get``), so
+    ~8 workers ≈ 12/s vs ~2/s sequential. **Persistence stays on the main thread** as results arrive
+    in order (SQLite connection is single-threaded), so per-entity crash-safety is preserved.
+
+    Collision guard: if the picked LEI is already held by a *different* entity, we do NOT set it (that
+    would create two rows with one LEI, and LEI is the top merge key) — instead we queue a review row,
+    because it usually means the two rows are the same company (a store duplicate to reconcile by hand).
+    """
+    search = search or gleif.search_lei
+    todo = store.entities_needing_lei(limit=limit)
+    res = LeiResult(attempted=len(todo))
+    log.info("lei-enrich: %d entities need an LEI (concurrency=%d)", len(todo), concurrency)
+
+    def _fetch(ent):
+        return ent, (search(ent.legal_name, country=ent.jurisdiction) or [])
+
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+        for i, (ent, candidates) in enumerate(ex.map(_fetch, todo), 1):
+            lei = gleif.pick_lei(ent.legal_name, candidates)
+            if not lei:
+                res.misses += 1
+            else:
+                holder = store.find_entity_by_key(lei=lei)
+                if holder is not None and holder.entity_id != ent.entity_id:
+                    res.collisions += 1
+                    store.queue_recon(ReconRow(
+                        candidate={"entity_id": ent.entity_id, "name": ent.legal_name, "lei": lei,
+                                   "collides_with": holder.entity_id},
+                        reason="gleif_lei_collision", added_at=now_iso()))
+                    store.log(stage="lei_enrich", action="queued", entity_id=ent.entity_id,
+                              reason="gleif_lei_collision", detail={"lei": lei, "holder": holder.entity_id})
+                else:
+                    store.set_lei(ent.entity_id, lei)
+                    res.filled += 1
+                    store.log(stage="lei_enrich", action="flagged", entity_id=ent.entity_id,
+                              reason="lei_backfilled", detail={"lei": lei})
+            if progress_every and i % progress_every == 0:
+                log.info("lei-enrich: %d/%d (filled=%d misses=%d collisions=%d)",
+                         i, len(todo), res.filled, res.misses, res.collisions)
+
+    log.info("lei-enrich done: filled=%d misses=%d collisions=%d",
+             res.filled, res.misses, res.collisions)
     return res

@@ -6,6 +6,20 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D5 — GLEIF LEI backfill is high-precision (exact-name), never overwrites, collisions → review queue
+**Spec ref:** §2.3 (LEI-first join), phase1 §3.4/§8 Q1. **Decision:** backfill the Legal Entity
+Identifier from GLEIF (free, no key) for entities lacking one — but **LEI is Module-8's strongest
+identity key**, so a wrong LEI would cause a false merge on the next universe build. Therefore matching
+is deliberately **high-precision / low-recall**: `gleif.pick_lei` accepts an LEI only when exactly one
+candidate's *normalized* legal name equals the entity's (ISSUED-status tiebreak); zero/ambiguous → no
+LEI. `set_lei` **never overwrites** an existing LEI. If the picked LEI is already held by a *different*
+stored entity, it is **not set** — a `gleif_lei_collision` row is queued instead (it usually means the
+two rows are the same company, a store duplicate to reconcile by hand), so we never create two rows
+sharing one LEI. Live-validated: cleanly matches `Genmab→GENMAB A/S`, `Zealand→ZEALAND PHARMA A/S`;
+correctly rejects fuzzy fulltext garbage (`Acumen`→PotNetwork/Rexam). Recall is conservative by design;
+improve later (fuzzy-completions endpoint / country-less fallback) only if precision holds. **Status:**
+built 2026-07-10; `scripts/8_enrich.py --lei`, opt-in, re-runnable (only touches LEI-less rows).
+
 ## D4 — Market-cap enrich via yfinance; the floor is a queryable `below_floor` flag, not a delete
 **Spec ref:** phase1 §5, §8 Q2. **Decision:** `company_tickers.json` carries no market cap, so the
 universe build leaves EDGAR-discovered names `mktcap_unknown`. A separate **enrich stage**
