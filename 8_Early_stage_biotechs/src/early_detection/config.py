@@ -51,6 +51,15 @@ class Config:
         "S-1", "S-3", "424B5", "424B3",                # registration / shelf / ATM raises
     )
     signal_lookback_days: int = 180                   # only ingest filings this recent
+    # Specialist healthcare/biotech fund watchlist (spec §3.5) — a 5%+ crossing (SC 13D/G) by one of
+    # these is the headline capital-markets signal. Queried against EDGAR full-text (efts). Names are
+    # matched case/normalization-insensitively against filing display_names.
+    specialist_funds: tuple[str, ...] = (
+        "Baker Bros", "RA Capital", "OrbiMed", "Perceptive Advisors", "BVF Partners",
+        "Cormorant Asset Management", "EcoR1 Capital", "Deep Track Capital", "Avoro Capital",
+        "Vivo Capital", "Redmile Group", "Venrock", "Sofinnova", "Forbion", "Andera Partners",
+        "HealthCap", "Bain Capital Life Sciences", "Foresite Capital", "Logos Capital",
+    )
 
     @property
     def sic_codes(self) -> set[str]:
@@ -78,6 +87,7 @@ def load_config(config_path: Path | None = None) -> Config:
 
     defaults = Config()
     material_forms = tuple(raw.get("material_forms") or defaults.material_forms)
+    specialist_funds = tuple(raw.get("specialist_funds") or defaults.specialist_funds)
 
     return Config(
         db_path=db_path,
@@ -89,4 +99,5 @@ def load_config(config_path: Path | None = None) -> Config:
         user_agent=str(raw.get("user_agent", "")),
         material_forms=material_forms,
         signal_lookback_days=int(raw.get("signal_lookback_days", defaults.signal_lookback_days)),
+        specialist_funds=specialist_funds,
     )

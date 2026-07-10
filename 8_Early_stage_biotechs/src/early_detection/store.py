@@ -449,6 +449,16 @@ class Store:
             sql += f" LIMIT {int(limit)}"
         return [self._row_to_entity(r) for r in self.conn.execute(sql)]
 
+    def cik_to_entity_id(self, active_only: bool = True) -> dict[str, str]:
+        """{zero-padded-CIK: entity_id} for matching efts filing CIKs back to the universe.
+
+        ``active_only`` restricts to the active universe (live, above floor) — the scope ownership
+        signals target."""
+        sql = "SELECT cik, entity_id FROM entity WHERE cik IS NOT NULL AND is_live=1"
+        if active_only:
+            sql += " AND below_floor=0"
+        return {_norm_cik(r["cik"]): r["entity_id"] for r in self.conn.execute(sql) if r["cik"]}
+
     def count_signals(self, signal_type: str | None = None) -> int:
         if signal_type:
             return self.conn.execute("SELECT COUNT(*) FROM signal WHERE signal_type=?",

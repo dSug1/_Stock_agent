@@ -6,6 +6,26 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D7 — Ownership-crossing signal via EDGAR full-text (efts), fund-first; the M7 13D/G gap closed
+**Spec ref:** §3.5 headline. **Decision:** the specialist-fund 5%+ crossings that M7 structurally
+couldn't get (13D/G index under the *investor's* CIK, not the subject's) are captured via the EDGAR
+**full-text** API (`efts.sec.gov`), whose hits carry *all* associated CIKs. **Fund-first**: search per
+watchlist fund (~19 queries, not one per company) for SC/SCHEDULE 13D/G in the lookback window, then
+match each filing's CIKs back to our universe (a fund isn't a biotech, so it never self-matches). Two
+precision rails: the fund must appear in the filing's `display_names` (not a stray body mention), and
+only universe CIKs are emitted. `signal_type="ownership_crossing"`, `source="edgar_fts"`; idempotent
+(hash(entity, adsh, fund)); per-fund commit; in-run dedup for efts pagination overlap.
+
+**KEY FINDING (empirical, 2026-07-10):** SEC **relabeled the forms** in its 2024–25 EDGAR
+modernization — the old `SC 13D`/`SC 13G` labels return **zero** hits for 2026 (they match only
+pre-~2025 filings); recent filings are `SCHEDULE 13D`/`SCHEDULE 13G`. We query **both** old+new labels
+(`edgar_fts.OWNERSHIP_FORMS`) so the window spans the transition. Also: efts intermittently 500s under
+load → `edgar_fts._get_json` retries 429/5xx (a dropped fund = a whole fund's crossings lost, e.g. Baker
+Bros). **Live result:** 19 funds → 278 crossings on our universe in 180d (RA Capital 69, Perceptive 36,
+Deep Track 33, OrbiMed 26, Baker Bros 18, …). **Status:** built 2026-07-10 (`clients/edgar_fts.py`,
+`signals/ownership.py`, `8_signals.py --ownership`). **Deferred:** classify 13D (active) vs 13G
+(passive) and new-position vs amendment (/A); fund watchlist is US-focused — add EU/JP/KR specialists.
+
 ## D6 — Phase 2 starts with the capital-markets signal (EDGAR), zero-LLM, keyed on CIK
 **Spec ref:** §3.5, §8 Phase 2. **Decision:** the first signal ingester is **capital-markets** —
 "your highest-value, most reliable structured source" (§3.5) and fully free/zero-LLM, so no spend and

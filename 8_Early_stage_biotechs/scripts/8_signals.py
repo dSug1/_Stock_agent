@@ -24,12 +24,14 @@ for _stream in (sys.stdout, sys.stderr):
 
 from early_detection.config import load_config
 from early_detection.signals.capital_markets import ingest_capital_markets
+from early_detection.signals.ownership import ingest_ownership
 from early_detection.store import Store
 
 
 def _print_stats(store: Store) -> None:
     total = store.count_signals()
     cap = store.count_signals("capital_markets")
+    own = store.count_signals("ownership_crossing")
     with_sig = store.conn.execute(
         "SELECT COUNT(DISTINCT entity_id) FROM signal WHERE entity_id IS NOT NULL").fetchone()[0]
     by_form = store.conn.execute(
@@ -37,6 +39,7 @@ def _print_stats(store: Store) -> None:
         "WHERE signal_type='capital_markets' GROUP BY f ORDER BY 2 DESC").fetchall()
     print(f"\n  signals total:          {total}")
     print(f"  capital_markets:        {cap}")
+    print(f"  ownership_crossing:     {own}")
     print(f"  entities with a signal: {with_sig}")
     if by_form:
         print("  by form: " + ", ".join(f"{f}={n}" for f, n in by_form))
@@ -45,6 +48,8 @@ def _print_stats(store: Store) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Module 8 Phase-2 signal ingestion.")
     ap.add_argument("--capital-markets", action="store_true", help="ingest EDGAR capital-markets signals")
+    ap.add_argument("--ownership", action="store_true",
+                    help="ingest specialist-fund 5%%+ ownership crossings (EDGAR full-text)")
     ap.add_argument("--stats", action="store_true", help="print signal stats and exit")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of entities this run")
     ap.add_argument("--concurrency", type=int, default=6, help="EDGAR fetch workers (default 6)")
@@ -57,7 +62,21 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
 
-    if args.stats and not args.capital_markets:
+    if args.stats and not (args.capital_markets or args.ownership):
+        _print_stats(store)
+        store.close()
+        return 0
+
+    if args.ownership:
+        print(f"Ingesting ownership-crossing signals → {cfg.db_path}  "
+              f"({len(cfg.specialist_funds)} funds, lookback {cfg.signal_lookback_days}d, EDGAR full-text)")
+        r = ingest_ownership(store, cfg)
+        print(f"\n  funds queried:      {r.funds}")
+        print(f"  filings seen:       {r.filings_seen}")
+        print(f"  matched to universe:{r.matched}")
+        print(f"  signals written:    {r.signals}")
+        if r.by_fund:
+            print("  by fund: " + ", ".join(f"{k}={v}" for k, v in sorted(r.by_fund.items(), key=lambda x: -x[1])))
         _print_stats(store)
         store.close()
         return 0
