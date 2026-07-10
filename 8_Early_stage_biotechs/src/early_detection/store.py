@@ -1,0 +1,381 @@
+"""SQLite universe store + DAO (Phase-1 §2).
+
+Single durable store at ``data/early_detection.db``. Schema evolves via ordered additive migrations
+tracked by ``PRAGMA user_version`` (repo convention — same idiom as ``platform_discoverer/store.py``
+and ``hype_parser/db.py``). Schema v1 creates six tables: ``entity`` · ``listing`` · ``signal`` ·
+``reconciliation_queue`` · ``audit_log`` · ``run_meta``.
+
+Design posture (inherited repo discipline): parameterized SQL only; missing data is KEPT + flagged,
+never silently dropped; possible duplicates that no hard key resolves go to ``reconciliation_queue``
+rather than being force-merged (spec §2.3). Decision D1: SQLite, not Postgres.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Optional
+
+from .models import AuditEntry, Entity, ReconRow, SignalRecord
+
+log = logging.getLogger(__name__)
+
+SCHEMA_VERSION = 1
+
+
+def now_iso() -> str:
+    """UTC timestamp to the second (repo datetime discipline)."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def today_iso() -> str:
+    """UTC calendar date."""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _norm_cik(cik: Optional[str]) -> Optional[str]:
+    """Zero-pad a CIK to 10 digits (SEC canonical form) so lookups match stored values.
+
+    Duplicated here (rather than imported from ``identity``) to avoid a store↔identity import cycle.
+    """
+    if not cik:
+        return None
+    import re
+    digits = re.sub(r"\D", "", str(cik))
+    return digits.zfill(10) if digits else None
+
+
+def _dumps(obj: Any) -> Optional[str]:
+    """JSON-encode a list/dict column value; ``None`` passes through as SQL NULL."""
+    if obj is None:
+        return None
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def _loads(text: Optional[str], default: Any) -> Any:
+    if text is None or text == "":
+        return default
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+# ── Migrations ──────────────────────────────────────────────────────────────────
+
+def _migration_1(conn: sqlite3.Connection) -> None:
+    """Schema v1 — the Phase-1 universe tables (phase1 build spec §2)."""
+    conn.executescript(
+        """
+        CREATE TABLE entity (
+            entity_id               TEXT PRIMARY KEY,   -- deterministic: lei:/isin:/cik:/tkx: (§4)
+            legal_name              TEXT NOT NULL,
+            common_name             TEXT,
+            ticker_primary          TEXT,
+            exchange_primary        TEXT,
+            isin                    TEXT,
+            lei                     TEXT,
+            cik                     TEXT,               -- SEC CIK, zero-padded 10 (the join key M6 lacks)
+            jurisdiction            TEXT,
+            filer_type              TEXT,               -- domestic | FPI | other
+            sector_code_raw         TEXT,               -- source-native (SIC / GICS)
+            sector_code_normalized  TEXT,               -- therapeutics|diagnostics|tools_platform|devices|agbio|other
+            market_cap_usd          REAL,
+            mktcap_unknown          INTEGER NOT NULL DEFAULT 0,
+            in_existing_universe    INTEGER NOT NULL DEFAULT 0,  -- §2.4 priority tier (seeded from M6)
+            is_live                 INTEGER NOT NULL DEFAULT 1,
+            source_provenance       TEXT,               -- JSON array of provider ids
+            first_seen              TEXT,
+            last_seen               TEXT
+        );
+        CREATE INDEX ix_entity_cik ON entity(cik);
+        CREATE INDEX ix_entity_lei ON entity(lei);
+        CREATE INDEX ix_entity_isin ON entity(isin);
+        CREATE INDEX ix_entity_ticker ON entity(ticker_primary);
+
+        CREATE TABLE listing (
+            listing_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_id   TEXT NOT NULL,
+            ticker      TEXT,
+            exchange    TEXT,
+            country     TEXT,
+            isin        TEXT,
+            mic         TEXT,
+            is_primary  INTEGER NOT NULL DEFAULT 0,
+            provenance  TEXT,                            -- JSON array
+            UNIQUE (entity_id, ticker, exchange)
+        );
+        CREATE INDEX ix_listing_entity ON listing(entity_id);
+
+        -- Spec §3 shared signals table: created now, unused until Phase 2 (pure insert, no migration).
+        CREATE TABLE signal (
+            signal_id       TEXT PRIMARY KEY,
+            entity_id       TEXT,                        -- nullable: signal may precede entity match
+            signal_type     TEXT NOT NULL,
+            source          TEXT NOT NULL,
+            raw_payload_json TEXT,
+            detected_at     TEXT,
+            event_date      TEXT,
+            language        TEXT
+        );
+        CREATE INDEX ix_signal_entity ON signal(entity_id);
+        CREATE INDEX ix_signal_type ON signal(signal_type);
+
+        -- Unmatched / ambiguous entities for manual review — never force-merge (§2.3).
+        CREATE TABLE reconciliation_queue (
+            row_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_json  TEXT NOT NULL,
+            reason          TEXT NOT NULL,               -- no_key_match|ambiguous_multi_match|conflicting_lei
+            added_at        TEXT,
+            resolved        INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL,
+            run_id      TEXT,
+            entity_id   TEXT,
+            stage       TEXT NOT NULL,
+            action      TEXT NOT NULL,                   -- admitted|merged|flagged|queued|refreshed
+            reason      TEXT,
+            detail_json TEXT
+        );
+        CREATE INDEX ix_audit_entity ON audit_log(entity_id);
+
+        CREATE TABLE run_meta (
+            run_id       TEXT PRIMARY KEY,
+            started      TEXT,
+            finished     TEXT,
+            market       TEXT,
+            counts_json  TEXT,
+            config_hash  TEXT
+        );
+        """
+    )
+
+
+# Ordered list of migrations; index+1 == target user_version after applying.
+_MIGRATIONS = [_migration_1]
+
+
+class Store:
+    """DAO over ``data/early_detection.db``. Opens WAL, applies pending migrations on init."""
+
+    def __init__(self, db_path: Path | str):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self._migrate()
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+    def _migrate(self) -> None:
+        cur_version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        for i in range(cur_version, len(_MIGRATIONS)):
+            log.info("applying migration %d → user_version %d", i + 1, i + 1)
+            _MIGRATIONS[i](self.conn)
+            self.conn.execute(f"PRAGMA user_version = {i + 1}")
+            self.conn.commit()
+
+    @property
+    def user_version(self) -> int:
+        return self.conn.execute("PRAGMA user_version").fetchone()[0]
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def __enter__(self) -> "Store":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    # ── entity ───────────────────────────────────────────────────────────────
+    def upsert_entity(self, e: Entity) -> None:
+        """Insert or update an entity by ``entity_id``. Preserves ``first_seen`` on update; refreshes
+        ``last_seen``. In-place union of ``source_provenance`` so provider provenance accumulates."""
+        existing = self.get_entity(e.entity_id)
+        first_seen = existing.first_seen if existing and existing.first_seen else (e.first_seen or now_iso())
+        last_seen = e.last_seen or now_iso()
+
+        prov = list(dict.fromkeys((existing.source_provenance if existing else []) + list(e.source_provenance)))
+        # Once flagged in the existing universe, stay flagged (M6 seed is authoritative for the tier).
+        in_universe = int(e.in_existing_universe or (existing.in_existing_universe if existing else False))
+
+        self.conn.execute(
+            """
+            INSERT INTO entity (entity_id, legal_name, common_name, ticker_primary, exchange_primary,
+                isin, lei, cik, jurisdiction, filer_type, sector_code_raw, sector_code_normalized,
+                market_cap_usd, mktcap_unknown, in_existing_universe, is_live, source_provenance,
+                first_seen, last_seen)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(entity_id) DO UPDATE SET
+                legal_name=excluded.legal_name,
+                common_name=COALESCE(excluded.common_name, entity.common_name),
+                ticker_primary=COALESCE(excluded.ticker_primary, entity.ticker_primary),
+                exchange_primary=COALESCE(excluded.exchange_primary, entity.exchange_primary),
+                isin=COALESCE(excluded.isin, entity.isin),
+                lei=COALESCE(excluded.lei, entity.lei),
+                cik=COALESCE(excluded.cik, entity.cik),
+                jurisdiction=COALESCE(excluded.jurisdiction, entity.jurisdiction),
+                filer_type=COALESCE(excluded.filer_type, entity.filer_type),
+                sector_code_raw=COALESCE(excluded.sector_code_raw, entity.sector_code_raw),
+                sector_code_normalized=COALESCE(excluded.sector_code_normalized, entity.sector_code_normalized),
+                market_cap_usd=COALESCE(excluded.market_cap_usd, entity.market_cap_usd),
+                mktcap_unknown=excluded.mktcap_unknown,
+                in_existing_universe=excluded.in_existing_universe,
+                is_live=excluded.is_live,
+                source_provenance=excluded.source_provenance,
+                last_seen=excluded.last_seen
+            """,
+            (
+                e.entity_id, e.legal_name, e.common_name, e.ticker_primary, e.exchange_primary,
+                e.isin, e.lei, e.cik, e.jurisdiction, e.filer_type, e.sector_code_raw,
+                e.sector_code_normalized, e.market_cap_usd, int(e.mktcap_unknown), in_universe,
+                int(e.is_live), _dumps(prov), first_seen, last_seen,
+            ),
+        )
+        self.conn.commit()
+
+    def get_entity(self, entity_id: str) -> Optional[Entity]:
+        row = self.conn.execute("SELECT * FROM entity WHERE entity_id=?", (entity_id,)).fetchone()
+        return self._row_to_entity(row) if row else None
+
+    def find_entity_by_key(self, *, lei: str | None = None, isin: str | None = None,
+                           cik: str | None = None, ticker: str | None = None,
+                           exchange: str | None = None) -> Optional[Entity]:
+        """Look up an existing entity by a hard key, in cascade order (§4). Used by reconciliation."""
+        if lei:
+            row = self.conn.execute("SELECT * FROM entity WHERE lei=?", (lei,)).fetchone()
+            if row:
+                return self._row_to_entity(row)
+        if isin:
+            row = self.conn.execute("SELECT * FROM entity WHERE isin=?", (isin,)).fetchone()
+            if row:
+                return self._row_to_entity(row)
+        cik_norm = _norm_cik(cik)
+        if cik_norm:
+            row = self.conn.execute("SELECT * FROM entity WHERE cik=?", (cik_norm,)).fetchone()
+            if row:
+                return self._row_to_entity(row)
+        if ticker and exchange:
+            row = self.conn.execute(
+                "SELECT * FROM entity WHERE ticker_primary=? AND exchange_primary=?", (ticker, exchange)
+            ).fetchone()
+            if row:
+                return self._row_to_entity(row)
+        return None
+
+    def all_entities(self, live_only: bool = True) -> list[Entity]:
+        sql = "SELECT * FROM entity"
+        if live_only:
+            sql += " WHERE is_live=1"
+        return [self._row_to_entity(r) for r in self.conn.execute(sql)]
+
+    def count_entities(self, live_only: bool = True) -> int:
+        sql = "SELECT COUNT(*) FROM entity" + (" WHERE is_live=1" if live_only else "")
+        return self.conn.execute(sql).fetchone()[0]
+
+    @staticmethod
+    def _row_to_entity(row: sqlite3.Row) -> Entity:
+        return Entity(
+            entity_id=row["entity_id"], legal_name=row["legal_name"], common_name=row["common_name"],
+            ticker_primary=row["ticker_primary"], exchange_primary=row["exchange_primary"],
+            isin=row["isin"], lei=row["lei"], cik=row["cik"], jurisdiction=row["jurisdiction"],
+            filer_type=row["filer_type"], sector_code_raw=row["sector_code_raw"],
+            sector_code_normalized=row["sector_code_normalized"], market_cap_usd=row["market_cap_usd"],
+            mktcap_unknown=bool(row["mktcap_unknown"]),
+            in_existing_universe=bool(row["in_existing_universe"]), is_live=bool(row["is_live"]),
+            source_provenance=_loads(row["source_provenance"], []),
+            first_seen=row["first_seen"], last_seen=row["last_seen"],
+        )
+
+    # ── listing ──────────────────────────────────────────────────────────────
+    def add_listing(self, entity_id: str, *, ticker: str | None, exchange: str | None,
+                    country: str | None = None, isin: str | None = None, mic: str | None = None,
+                    is_primary: bool = False, provenance: list[str] | None = None) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO listing (entity_id, ticker, exchange, country, isin, mic, is_primary, provenance)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(entity_id, ticker, exchange) DO UPDATE SET
+                country=COALESCE(excluded.country, listing.country),
+                isin=COALESCE(excluded.isin, listing.isin),
+                mic=COALESCE(excluded.mic, listing.mic),
+                is_primary=excluded.is_primary,
+                provenance=excluded.provenance
+            """,
+            (entity_id, ticker, exchange, country, isin, mic, int(is_primary),
+             _dumps(provenance or [])),
+        )
+        self.conn.commit()
+
+    def listings_for(self, entity_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM listing WHERE entity_id=?", (entity_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── reconciliation queue ───────────────────────────────────────────────────
+    def queue_recon(self, row: ReconRow) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO reconciliation_queue (candidate_json, reason, added_at, resolved) VALUES (?,?,?,?)",
+            (_dumps(row.candidate), row.reason, row.added_at or now_iso(), int(row.resolved)),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def recon_queue(self, unresolved_only: bool = True) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM reconciliation_queue"
+        if unresolved_only:
+            sql += " WHERE resolved=0"
+        return [
+            {**dict(r), "candidate": _loads(r["candidate_json"], None)}
+            for r in self.conn.execute(sql)
+        ]
+
+    def count_recon(self, unresolved_only: bool = True) -> int:
+        sql = "SELECT COUNT(*) FROM reconciliation_queue" + (" WHERE resolved=0" if unresolved_only else "")
+        return self.conn.execute(sql).fetchone()[0]
+
+    # ── signal (Phase 2 use; DAO ready in v1) ──────────────────────────────────
+    def insert_signal(self, s: SignalRecord) -> None:
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO signal (signal_id, entity_id, signal_type, source,
+                raw_payload_json, detected_at, event_date, language)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (s.signal_id, s.entity_id, s.signal_type, s.source, _dumps(s.raw_payload),
+             s.detected_at, s.event_date, s.language),
+        )
+        self.conn.commit()
+
+    # ── audit ──────────────────────────────────────────────────────────────────
+    def audit(self, entry: AuditEntry) -> None:
+        self.conn.execute(
+            "INSERT INTO audit_log (ts, run_id, entity_id, stage, action, reason, detail_json) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (entry.ts or now_iso(), entry.run_id, entry.entity_id, entry.stage, entry.action,
+             entry.reason, _dumps(entry.detail)),
+        )
+        self.conn.commit()
+
+    def log(self, *, stage: str, action: str, run_id: str | None = None,
+            entity_id: str | None = None, reason: str | None = None, detail: Any = None) -> None:
+        """Convenience audit writer."""
+        self.audit(AuditEntry(ts=now_iso(), stage=stage, action=action, run_id=run_id,
+                              entity_id=entity_id, reason=reason, detail=detail))
+
+    # ── run_meta ───────────────────────────────────────────────────────────────
+    def record_run(self, *, run_id: str, started: str, finished: str, market: str,
+                   counts: dict[str, Any], config_hash: str | None = None) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO run_meta (run_id, started, finished, market, counts_json, config_hash) "
+            "VALUES (?,?,?,?,?,?)",
+            (run_id, started, finished, market, _dumps(counts), config_hash),
+        )
+        self.conn.commit()

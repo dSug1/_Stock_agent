@@ -1,0 +1,23 @@
+# Module 8 — Phase 1 universe config. All keys optional; omitted keys fall back to code defaults
+# (see src/early_detection/config.py). yaml.safe_load only (repo security discipline).
+
+# Market-cap floor in USD. Below-floor names are FLAGGED + audited, never deleted (recall-safe).
+mktcap_floor_usd: 10000000        # $10M (operator decision)
+
+# Phase-1 markets. Signals + other markets (EU/Nordic/JP/KR) arrive in later phases.
+markets: [US, CA]
+
+# SEC SIC allow-map: code -> normalized sector (spec §2.2 sector filter).
+sic_allow:
+  "2834": therapeutics      # pharmaceutical preparations
+  "2836": therapeutics      # biological products (except diagnostic)
+  "8731": tools_platform    # commercial physical & biological research
+  "3826": tools_platform    # laboratory analytical instruments
+  "3841": devices           # surgical & medical instruments
+
+# Best-effort GLEIF LEI enrichment (phase1 §8 Q1). Off in Phase 1; wire in a later pass.
+gleif_enrich: false
+
+# Module-6 store, read READ-ONLY as the existing-universe priority tier (decision D2). Omit to use
+# the default relative path (../6_Biotech_platform_discoverer/data/store.db).
+# m6_store_path: ../6_Biotech_platform_discoverer/data/store.db
