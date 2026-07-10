@@ -1,7 +1,7 @@
-# Phase 1 — Universe module, explained (M1–M4)
+# Phase 1 — Universe module, explained (M1–M5)
 
 *House-style milestone note: what was built, why, how it works, how to run/verify. Companion to
-`phase1_universe_build_spec.md` (the target) and `decisions.md` (D1–D3). Covers milestones M1–M4 —
+`phase1_universe_build_spec.md` (the target) and `decisions.md` (D1–D3). Covers milestones M1–M5 —
 the whole Phase-1 universe layer.*
 
 ---
@@ -71,10 +71,30 @@ merge is worse than a duplicate row. A component with conflicting LEIs is kept m
 key links it) but records a `conflicting_lei` review row.
 
 ### Cap floor — a flag, not a delete
-The $10M floor (operator decision) is applied as an **audit flag**, never a deletion: a known cap
-below $10M gets a `below_cap_floor` audit row but stays `is_live`; an **unknown** cap is kept +
-flagged `mktcap_unknown` and is *not* treated as below-floor (missing data ≠ small). This mirrors the
+The $10M floor (operator decision) is applied as a **flag**, never a deletion: a known cap below $10M
+sets `below_floor=1` (schema v2) but the entity stays `is_live`; an **unknown** cap is kept + flagged
+`mktcap_unknown` and is *not* treated as below-floor (missing data ≠ small). This mirrors the
 repo-wide recall-safe posture (M6's cardinal rule).
+
+### Market-cap enrich (M5) — making the floor actually bite
+The universe build alone can't apply the floor to EDGAR-discovered names: `company_tickers.json`
+carries **no market cap**, so those names enter `mktcap_unknown` and the floor has nothing to filter
+(the first full build showed `below_floor: 0` with 561 unknown caps). The **enrich stage**
+(`enrich.py` + `scripts/8_enrich.py`) closes that gap: for every live entity with a ticker but no USD
+cap, it fetches the cap via **yfinance** (`clients/market.py`), converts to USD (`fx.py`, static
+illustrative rates incl. CAD), and persists `market_cap_usd` + `below_floor` + `mktcap_ccy` + `ipo_date`.
+
+Two disciplines matter here:
+- **Persist each ticker immediately** (repo rule for long external-API loops) — a mid-batch crash must
+  not discard fetched work. `store.apply_cap` commits per ticker; the pass is resumable (it only picks
+  up entities that still lack a cap) and interruptible.
+- **A miss is kept, not dropped** — a dead/dataless ticker stays `mktcap_unknown` (never below-floor,
+  never deleted) with `enriched_at` stamped so it isn't retried every run.
+
+`below_floor` is a **queryable column**, not just an audit row, so the *active universe* Phase-2 jobs
+gate on is a simple predicate: `is_live=1 AND below_floor=0 AND mktcap_unknown=0`. yfinance is
+**local-only** (ToS) — swap for a licensed provider before any public deploy. `--recompute-floor`
+re-derives `below_floor` from stored caps after a floor-config change without re-fetching.
 
 ### Security (inherited, free)
 `clients/_net.py` is copied from M6: 64 MiB capped reads, the repo `USER_AGENT` on every request,
@@ -84,7 +104,7 @@ parameterized throughout; config is `yaml.safe_load` only.
 ## How to run / verify
 ```
 cd 8_Early_stage_biotechs
-# offline unit tests (no network) — 36 passing across store/identity/providers/universe
+# offline unit tests (no network) — 43 passing across store/identity/providers/universe/enrich
 PYTHONPATH=src ..\.venv\Scripts\python.exe -m pytest tests\ -q
 
 # full build (needs USER_AGENT w/ email in repo-root .env for SEC):
@@ -93,6 +113,11 @@ run_8_Early_stage_biotechs.bat
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_universe.py --no-ca --max-pages 5 --verbose
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_universe.py --stats
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_universe.py --dry-run   # no DB writes
+
+# market-cap enrich (yfinance, local-only) — makes the $10M floor bite:
+PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py --limit 25    # smoke a batch
+PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py               # full pass (resumable)
+PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_enrich.py --recompute-floor
 ```
 `--stats` prints the funnel: live entities, priority-tier count, unknown-cap count, reconciliation-queue
 depth, and breakdowns by sector and country.
@@ -105,6 +130,5 @@ depth, and breakdowns by sector and country.
   natively by Module 8).
 - SEDAR+/SEDI Canada scraping — only EDGAR-visible Canadian dual-listers are covered.
 - GLEIF LEI enrichment, two-way export back to M6, FTS5 ad-hoc index — deferred.
-- Per-CIK market caps: `company_tickers.json` carries no cap, so US names currently enter with
-  `mktcap_unknown` unless the M6 seed supplied a cap; a later enrich pass fills them and applies the
-  floor lazily.
+- ~~Per-CIK market caps~~ **done (M5 enrich)** — yfinance fills unknown caps, `below_floor` computed.
+  Full-dilution / pre-funded-warrant caps stay basic (shares×price), a deferred refinement from M6.

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from . import identity
@@ -84,7 +84,7 @@ def build_universe(store: Store, cfg: Config, *, provider_listings: dict[str, li
             below_floor += 1
         if dry_run:
             continue
-        store.upsert_entity(ent)
+        store.upsert_entity(replace(ent, below_floor=floored))
         # record each contributing listing as a listing row
         for lst in result.listings.get(eid, []):
             store.add_listing(eid, ticker=lst.ticker, exchange=lst.exchange, country=lst.country,

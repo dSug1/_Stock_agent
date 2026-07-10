@@ -26,17 +26,56 @@ def _entity(**kw) -> Entity:
 
 
 def test_migration_sets_schema_version_and_tables(store):
-    assert store.user_version == SCHEMA_VERSION == 1
+    assert store.user_version == SCHEMA_VERSION == 2
     names = {r[0] for r in store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"entity", "listing", "signal", "reconciliation_queue", "audit_log", "run_meta"} <= names
+    cols = {r[1] for r in store.conn.execute("PRAGMA table_info(entity)")}
+    assert {"below_floor", "mktcap_ccy", "ipo_date", "enriched_at"} <= cols   # migration 2
 
 
 def test_migration_is_idempotent(tmp_path):
     p = tmp_path / "t.db"
     Store(p).close()
     s2 = Store(p)          # reopening applies no migrations, does not error
-    assert s2.user_version == 1
+    assert s2.user_version == 2
     s2.close()
+
+
+def test_apply_cap_sets_floor_and_clears_unknown(store):
+    store.upsert_entity(_entity(mktcap_unknown=True))
+    below = store.apply_cap("cik:0001", market_cap_usd=5e6, currency="USD", floor_usd=1e7)
+    assert below is True
+    got = store.get_entity("cik:0001")
+    assert got.market_cap_usd == 5e6 and got.mktcap_unknown is False and got.below_floor is True
+    assert got.enriched_at is not None
+
+
+def test_apply_cap_miss_keeps_unknown_and_not_floored(store):
+    store.upsert_entity(_entity(mktcap_unknown=True))
+    below = store.apply_cap("cik:0001", market_cap_usd=None, currency=None, floor_usd=1e7)
+    assert below is None
+    got = store.get_entity("cik:0001")
+    assert got.mktcap_unknown is True and got.below_floor is False   # missing ≠ small
+    assert got.enriched_at is not None                                # stamped so we don't retry forever
+
+
+def test_recompute_floors(store):
+    store.upsert_entity(_entity(entity_id="cik:0001", market_cap_usd=5e6))
+    store.upsert_entity(_entity(entity_id="cik:0002", market_cap_usd=5e8))
+    store.upsert_entity(_entity(entity_id="cik:0003", mktcap_unknown=True))
+    n = store.recompute_floors(1e7)
+    assert n == 1                                              # only the $5M one
+    assert store.get_entity("cik:0001").below_floor is True
+    assert store.get_entity("cik:0002").below_floor is False
+    assert store.get_entity("cik:0003").below_floor is False  # unknown cap not floored
+
+
+def test_entities_needing_cap(store):
+    store.upsert_entity(_entity(entity_id="cik:0001", ticker_primary="A", mktcap_unknown=True))
+    store.upsert_entity(_entity(entity_id="cik:0002", ticker_primary="B", market_cap_usd=5e8))
+    store.upsert_entity(_entity(entity_id="cik:0003", ticker_primary=None, mktcap_unknown=True))
+    need = {e.entity_id for e in store.entities_needing_cap()}
+    assert need == {"cik:0001"}   # known-cap B excluded; tickerless C excluded
 
 
 def test_upsert_and_get_roundtrip(store):

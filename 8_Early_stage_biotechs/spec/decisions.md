@@ -6,6 +6,19 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D4 — Market-cap enrich via yfinance; the floor is a queryable `below_floor` flag, not a delete
+**Spec ref:** phase1 §5, §8 Q2. **Decision:** `company_tickers.json` carries no market cap, so the
+universe build leaves EDGAR-discovered names `mktcap_unknown`. A separate **enrich stage**
+(`enrich.py` + `scripts/8_enrich.py`) fetches each unknown-cap entity's cap via **yfinance**
+(LOCAL-ONLY ToS — swap for a licensed provider before public deploy, [[project_data_provider_switch]]),
+converts to USD (`fx.py`, static illustrative rates incl. CAD for TSX names), and persists
+`market_cap_usd` + a new **`below_floor`** column (schema **v2**, migration 2). The floor is now a
+*queryable flag* (active universe = `is_live=1 AND below_floor=0 AND mktcap_unknown=0`), not merely an
+audit row — so Phase-2 signal jobs can gate on it. Each ticker is **persisted immediately** (repo rule
+for long API loops, [[feedback_persist_during_long_api_batches]]); a miss stays KEPT + `mktcap_unknown`
+(missing ≠ small ≠ delete) with `enriched_at` stamped so it isn't retried every run. **Status:** built
+2026-07-10; enrich is opt-in (`scripts/8_enrich.py`), re-runnable, resumable.
+
 ## D3 — Scoring framework: define the "stack-convergence" rubric fresh inside Module 8
 **Spec ref:** §1, §5.4 ("feeds into … the existing `stack-convergence-biotech-screen-spec.md` scoring
 framework"). **Decision:** that companion spec and the Satellos worked-example do **not** exist in this

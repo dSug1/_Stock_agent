@@ -23,7 +23,7 @@ from .models import AuditEntry, Entity, ReconRow, SignalRecord
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def now_iso() -> str:
@@ -157,8 +157,25 @@ def _migration_1(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_2(conn: sqlite3.Connection) -> None:
+    """Schema v2 — market-cap enrich columns so the cap floor becomes queryable (not just an audit row).
+
+    ``below_floor`` is the active-universe gate: a known cap below the configured floor sets it to 1
+    (the entity stays ``is_live`` — flag, not delete). Unknown cap leaves it 0 (missing ≠ small).
+    """
+    conn.executescript(
+        """
+        ALTER TABLE entity ADD COLUMN mktcap_ccy  TEXT;
+        ALTER TABLE entity ADD COLUMN below_floor  INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE entity ADD COLUMN ipo_date     TEXT;
+        ALTER TABLE entity ADD COLUMN enriched_at  TEXT;
+        CREATE INDEX ix_entity_below_floor ON entity(below_floor);
+        """
+    )
+
+
 # Ordered list of migrations; index+1 == target user_version after applying.
-_MIGRATIONS = [_migration_1]
+_MIGRATIONS = [_migration_1, _migration_2]
 
 
 class Store:
@@ -211,9 +228,9 @@ class Store:
             """
             INSERT INTO entity (entity_id, legal_name, common_name, ticker_primary, exchange_primary,
                 isin, lei, cik, jurisdiction, filer_type, sector_code_raw, sector_code_normalized,
-                market_cap_usd, mktcap_unknown, in_existing_universe, is_live, source_provenance,
-                first_seen, last_seen)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                market_cap_usd, mktcap_ccy, mktcap_unknown, below_floor, ipo_date, in_existing_universe,
+                is_live, source_provenance, first_seen, last_seen, enriched_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(entity_id) DO UPDATE SET
                 legal_name=excluded.legal_name,
                 common_name=COALESCE(excluded.common_name, entity.common_name),
@@ -227,17 +244,22 @@ class Store:
                 sector_code_raw=COALESCE(excluded.sector_code_raw, entity.sector_code_raw),
                 sector_code_normalized=COALESCE(excluded.sector_code_normalized, entity.sector_code_normalized),
                 market_cap_usd=COALESCE(excluded.market_cap_usd, entity.market_cap_usd),
+                mktcap_ccy=COALESCE(excluded.mktcap_ccy, entity.mktcap_ccy),
                 mktcap_unknown=excluded.mktcap_unknown,
+                below_floor=excluded.below_floor,
+                ipo_date=COALESCE(excluded.ipo_date, entity.ipo_date),
                 in_existing_universe=excluded.in_existing_universe,
                 is_live=excluded.is_live,
                 source_provenance=excluded.source_provenance,
-                last_seen=excluded.last_seen
+                last_seen=excluded.last_seen,
+                enriched_at=COALESCE(excluded.enriched_at, entity.enriched_at)
             """,
             (
                 e.entity_id, e.legal_name, e.common_name, e.ticker_primary, e.exchange_primary,
                 e.isin, e.lei, e.cik, e.jurisdiction, e.filer_type, e.sector_code_raw,
-                e.sector_code_normalized, e.market_cap_usd, int(e.mktcap_unknown), in_universe,
-                int(e.is_live), _dumps(prov), first_seen, last_seen,
+                e.sector_code_normalized, e.market_cap_usd, e.mktcap_ccy, int(e.mktcap_unknown),
+                int(e.below_floor), e.ipo_date, in_universe, int(e.is_live), _dumps(prov),
+                first_seen, last_seen, e.enriched_at,
             ),
         )
         self.conn.commit()
@@ -281,6 +303,49 @@ class Store:
         sql = "SELECT COUNT(*) FROM entity" + (" WHERE is_live=1" if live_only else "")
         return self.conn.execute(sql).fetchone()[0]
 
+    def entities_needing_cap(self, limit: int | None = None) -> list[Entity]:
+        """Live entities that have a ticker but no known USD market cap — the enrich work-list."""
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND ticker_primary IS NOT NULL "
+               "AND (market_cap_usd IS NULL OR mktcap_unknown=1) ORDER BY entity_id")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [self._row_to_entity(r) for r in self.conn.execute(sql)]
+
+    def apply_cap(self, entity_id: str, *, market_cap_usd: Optional[float], currency: Optional[str],
+                  floor_usd: float, ipo_date: Optional[str] = None,
+                  enriched_at: Optional[str] = None) -> Optional[bool]:
+        """Persist an enrich result for one entity. Returns ``below_floor`` (None if cap still unknown).
+
+        A known cap sets ``market_cap_usd`` + clears ``mktcap_unknown`` + computes ``below_floor``.
+        A miss (cap None) only stamps ``enriched_at`` so we don't retry it every run, and leaves the
+        entity KEPT + ``mktcap_unknown`` (missing data is never a delete)."""
+        ts = enriched_at or now_iso()
+        if market_cap_usd is None:
+            self.conn.execute("UPDATE entity SET enriched_at=?, ipo_date=COALESCE(?, ipo_date) "
+                              "WHERE entity_id=?", (ts, ipo_date, entity_id))
+            self.conn.commit()
+            return None
+        below = market_cap_usd < floor_usd
+        self.conn.execute(
+            "UPDATE entity SET market_cap_usd=?, mktcap_ccy=?, mktcap_unknown=0, below_floor=?, "
+            "ipo_date=COALESCE(?, ipo_date), enriched_at=? WHERE entity_id=?",
+            (market_cap_usd, currency, int(below), ipo_date, ts, entity_id),
+        )
+        self.conn.commit()
+        return below
+
+    def recompute_floors(self, floor_usd: float) -> int:
+        """Set ``below_floor`` for every entity with a known cap (used after a floor-config change).
+
+        Returns the number of entities now flagged below floor. Unknown-cap rows are left at 0."""
+        self.conn.execute(
+            "UPDATE entity SET below_floor = CASE WHEN market_cap_usd IS NOT NULL "
+            "AND market_cap_usd < ? THEN 1 ELSE 0 END",
+            (floor_usd,),
+        )
+        self.conn.commit()
+        return self.conn.execute("SELECT COUNT(*) FROM entity WHERE below_floor=1").fetchone()[0]
+
     @staticmethod
     def _row_to_entity(row: sqlite3.Row) -> Entity:
         return Entity(
@@ -289,10 +354,11 @@ class Store:
             isin=row["isin"], lei=row["lei"], cik=row["cik"], jurisdiction=row["jurisdiction"],
             filer_type=row["filer_type"], sector_code_raw=row["sector_code_raw"],
             sector_code_normalized=row["sector_code_normalized"], market_cap_usd=row["market_cap_usd"],
-            mktcap_unknown=bool(row["mktcap_unknown"]),
+            mktcap_ccy=row["mktcap_ccy"], mktcap_unknown=bool(row["mktcap_unknown"]),
+            below_floor=bool(row["below_floor"]), ipo_date=row["ipo_date"],
             in_existing_universe=bool(row["in_existing_universe"]), is_live=bool(row["is_live"]),
             source_provenance=_loads(row["source_provenance"], []),
-            first_seen=row["first_seen"], last_seen=row["last_seen"],
+            first_seen=row["first_seen"], last_seen=row["last_seen"], enriched_at=row["enriched_at"],
         )
 
     # ── listing ──────────────────────────────────────────────────────────────

@@ -66,12 +66,16 @@ class Entity:
     sector_code_raw: Optional[str] = None         # source-native (SIC / GICS)
     sector_code_normalized: Optional[str] = None  # one of SECTORS
     market_cap_usd: Optional[float] = None
+    mktcap_ccy: Optional[str] = None              # native currency of the cap before USD conversion
     mktcap_unknown: bool = False
+    below_floor: bool = False                     # known cap < floor → excluded from active universe (flag, not delete)
+    ipo_date: Optional[str] = None                # listing first-trade date (ISO); future age signal
     in_existing_universe: bool = False
     is_live: bool = True
     source_provenance: list[str] = field(default_factory=list)
     first_seen: Optional[str] = None
     last_seen: Optional[str] = None
+    enriched_at: Optional[str] = None             # when market data was last fetched
 
 
 @dataclass(frozen=True)
