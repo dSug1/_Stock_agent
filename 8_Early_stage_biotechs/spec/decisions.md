@@ -6,6 +6,28 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D6 — Phase 2 starts with the capital-markets signal (EDGAR), zero-LLM, keyed on CIK
+**Spec ref:** §3.5, §8 Phase 2. **Decision:** the first signal ingester is **capital-markets** —
+"your highest-value, most reliable structured source" (§3.5) and fully free/zero-LLM, so no spend and
+no prompt-injection surface. It reads each active-universe entity's recent SEC filings (submissions
+API, one call per CIK) and writes a `signal` row per **material form** within a lookback window (default
+180d): SC 13D/G (5%+ ownership crossings), Form-4 (insiders), 8-K (material events), S-1/S-3/424B5/424B3
+(registration/shelf/ATM raises). **Scope = active universe** (`is_live=1 AND below_floor=0 AND cik NOT
+NULL`) — includes unknown-cap names (a fresh 13D on an unpriced micro-cap is exactly the signal), skips
+known-below-floor. Idempotent (signal_id = hash(entity, accession, form)); per-entity commit
+(crash-safe); bounded-concurrency fetch, main-thread persist.
+
+**KEY FINDING (full run, 880 entities → 17,645 signals):** by-form = Form-4 12,544 · 8-K 4,413 · 424B5
+311 · 424B3 185 · S-3 151 · S-1 41 — and **zero SC 13D/13G**. This is structural, not absence of events:
+a 13D/G is filed under the *investor's* CIK (the fund), not the subject company's, so the submissions
+API for a company never returns 13D/G *about* it. Form-4 (insider) IS indexed under the issuer CIK, so
+those come through. **Consequence:** M7 captures insider activity, material 8-Ks, and capital raises —
+but the §3.5 headline signal (specialist-fund 5%+ ownership crossings) requires the **EDGAR full-text
+search API** (`efts.sec.gov`) keyed by subject + fund watchlist, which is now the top Phase-2 refinement
+(not optional). SC 13D/G stay in `material_forms` (harmless; they'll match once efts is added).
+Secondary: Form-4 volume is high (~14/entity/180d) → needs clustering before scoring.
+**Status:** built 2026-07-10 (`signals/capital_markets.py`, `scripts/8_signals.py`); efts 13D/G = next.
+
 ## D5 — GLEIF LEI backfill is high-precision (exact-name), never overwrites, collisions → review queue
 **Spec ref:** §2.3 (LEI-first join), phase1 §3.4/§8 Q1. **Decision:** backfill the Legal Entity
 Identifier from GLEIF (free, no key) for entities lacking one — but **LEI is Module-8's strongest

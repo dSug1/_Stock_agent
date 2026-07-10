@@ -424,8 +424,8 @@ class Store:
         sql = "SELECT COUNT(*) FROM reconciliation_queue" + (" WHERE resolved=0" if unresolved_only else "")
         return self.conn.execute(sql).fetchone()[0]
 
-    # ── signal (Phase 2 use; DAO ready in v1) ──────────────────────────────────
-    def insert_signal(self, s: SignalRecord) -> None:
+    # ── signal (Phase 2) ───────────────────────────────────────────────────────
+    def insert_signal(self, s: SignalRecord, *, commit: bool = True) -> None:
         self.conn.execute(
             """
             INSERT OR REPLACE INTO signal (signal_id, entity_id, signal_type, source,
@@ -435,7 +435,30 @@ class Store:
             (s.signal_id, s.entity_id, s.signal_type, s.source, _dumps(s.raw_payload),
              s.detected_at, s.event_date, s.language),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
+
+    def entities_for_signals(self, limit: int | None = None) -> list[Entity]:
+        """Active-universe entities eligible for signal ingestion: live, above floor, with a CIK.
+
+        Includes unknown-cap names (missing ≠ small) — a fresh 13D on an unpriced micro-cap is exactly
+        the early signal — but excludes known-below-floor ones."""
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 AND cik IS NOT NULL "
+               "ORDER BY in_existing_universe DESC, entity_id")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [self._row_to_entity(r) for r in self.conn.execute(sql)]
+
+    def count_signals(self, signal_type: str | None = None) -> int:
+        if signal_type:
+            return self.conn.execute("SELECT COUNT(*) FROM signal WHERE signal_type=?",
+                                     (signal_type,)).fetchone()[0]
+        return self.conn.execute("SELECT COUNT(*) FROM signal").fetchone()[0]
+
+    def signals_for(self, entity_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM signal WHERE entity_id=? ORDER BY event_date DESC", (entity_id,)).fetchall()
+        return [{**dict(r), "raw_payload": _loads(r["raw_payload_json"], None)} for r in rows]
 
     # ── audit ──────────────────────────────────────────────────────────────────
     def audit(self, entry: AuditEntry) -> None:

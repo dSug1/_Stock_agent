@@ -43,6 +43,14 @@ class Config:
     markets: tuple[str, ...] = ("US", "CA")           # Phase 1 scope
     gleif_enrich: bool = False                        # best-effort LEI enrich (phase1 §8 Q1); off by default
     user_agent: str = ""                              # SEC requires a UA w/ email; read from env at client init
+    # Phase-2 capital-markets signal (spec §3.5): material EDGAR forms + lookback window.
+    material_forms: tuple[str, ...] = (
+        "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A",   # 5%+ ownership crossings
+        "4",                                           # insider transactions
+        "8-K",                                          # material events (designations, deals)
+        "S-1", "S-3", "424B5", "424B3",                # registration / shelf / ATM raises
+    )
+    signal_lookback_days: int = 180                   # only ingest filings this recent
 
     @property
     def sic_codes(self) -> set[str]:
@@ -68,6 +76,9 @@ def load_config(config_path: Path | None = None) -> Config:
     sic_allow = dict(raw.get("sic_allow") or DEFAULT_SIC_ALLOW)
     markets = tuple(raw.get("markets") or ("US", "CA"))
 
+    defaults = Config()
+    material_forms = tuple(raw.get("material_forms") or defaults.material_forms)
+
     return Config(
         db_path=db_path,
         m6_store_path=m6_path,
@@ -76,4 +87,6 @@ def load_config(config_path: Path | None = None) -> Config:
         markets=markets,
         gleif_enrich=bool(raw.get("gleif_enrich", False)),
         user_agent=str(raw.get("user_agent", "")),
+        material_forms=material_forms,
+        signal_lookback_days=int(raw.get("signal_lookback_days", defaults.signal_lookback_days)),
     )
