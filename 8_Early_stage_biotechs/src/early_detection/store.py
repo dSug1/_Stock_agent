@@ -23,7 +23,7 @@ from .models import AuditEntry, Entity, ReconRow, SignalRecord
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def now_iso() -> str:
@@ -213,8 +213,32 @@ def _migration_4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_5(conn: sqlite3.Connection) -> None:
+    """Schema v5 — the stack-convergence scoring layer (spec §5.4, decision D3). One score row per
+    (entity, prompt_version): the Claude conviction call that fuses literature + ownership +
+    capital-markets evidence into a routable flag. Skip-cache on prompt_version."""
+    conn.executescript(
+        """
+        CREATE TABLE score (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_id        TEXT NOT NULL,
+            run_id           TEXT,
+            model            TEXT,
+            conviction_flag  TEXT,               -- surveil | deep-dive-candidate | deprioritize
+            conviction_score REAL,               -- 0-100, for ranking the digest
+            json             TEXT,               -- full §5.4 structured output
+            prompt_version   TEXT,
+            scored_at        TEXT,
+            UNIQUE (entity_id, prompt_version)
+        );
+        CREATE INDEX ix_score_entity ON score(entity_id);
+        CREATE INDEX ix_score_flag ON score(conviction_flag);
+        """
+    )
+
+
 # Ordered list of migrations; index+1 == target user_version after applying.
-_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4]
+_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5]
 
 
 class Store:
@@ -582,6 +606,99 @@ class Store:
             (author_id, foundational_work_id, now_iso(), founder_id),
         )
         self.conn.commit()
+
+    # ── scoring (Phase 2, §5.4) ────────────────────────────────────────────────
+    def scoring_candidates(self, prompt_version: str, *, min_independent: int = 1,
+                           require_capital: bool = True, limit: int | None = None,
+                           force: bool = False) -> list[Entity]:
+        """Rules-based pre-filter (§5.5): active-universe entities with ≥``min_independent``
+        independent-lab citations AND (if ``require_capital``) at least one ownership/capital-markets
+        signal, and not already scored at ``prompt_version`` (unless ``force``). This bounds the
+        expensive scoring call to genuinely-cornered candidates."""
+        cap_clause = (
+            " AND EXISTS (SELECT 1 FROM signal s2 WHERE s2.entity_id=e.entity_id "
+            "AND s2.signal_type IN ('ownership_crossing','capital_markets'))" if require_capital else "")
+        scored_clause = "" if force else (
+            " AND NOT EXISTS (SELECT 1 FROM score sc WHERE sc.entity_id=e.entity_id "
+            "AND sc.prompt_version=?)")
+        sql = f"""
+            SELECT e.* FROM entity e
+            WHERE e.is_live=1 AND e.below_floor=0
+              AND (SELECT COUNT(*) FROM signal s WHERE s.entity_id=e.entity_id
+                   AND s.signal_type='literature'
+                   AND json_extract(s.raw_payload_json,'$.kind')='citation'
+                   AND json_extract(s.raw_payload_json,'$.independence')='independent') >= ?
+              {cap_clause}{scored_clause}
+            ORDER BY e.in_existing_universe DESC, e.entity_id
+        """
+        params: list = [min_independent] + ([] if force else [prompt_version])
+        if limit:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return [self._row_to_entity(r) for r in self.conn.execute(sql, params)]
+
+    def evidence_summary(self, entity_id: str) -> dict[str, Any]:
+        """Compact evidence packet for the scoring call — aggregates, not raw signal dumps (an entity
+        can have hundreds of Form-4s). Literature independence counts, crossing funds, capital forms."""
+        c = self.conn
+        lit = {r[0]: r[1] for r in c.execute(
+            "SELECT json_extract(raw_payload_json,'$.independence') ind, COUNT(*) FROM signal "
+            "WHERE entity_id=? AND signal_type='literature' "
+            "AND json_extract(raw_payload_json,'$.kind')='citation' GROUP BY ind", (entity_id,))}
+        pubs = c.execute(
+            "SELECT COUNT(*) FROM signal WHERE entity_id=? AND signal_type='literature' "
+            "AND json_extract(raw_payload_json,'$.kind')='publication'", (entity_id,)).fetchone()[0]
+        funds = [r[0] for r in c.execute(
+            "SELECT DISTINCT json_extract(raw_payload_json,'$.fund') FROM signal "
+            "WHERE entity_id=? AND signal_type='ownership_crossing'", (entity_id,)) if r[0]]
+        forms = {r[0]: r[1] for r in c.execute(
+            "SELECT json_extract(raw_payload_json,'$.form'), COUNT(*) FROM signal "
+            "WHERE entity_id=? AND signal_type='capital_markets' GROUP BY 1", (entity_id,))}
+        founders = [{k: f[k] for k in ("name", "role", "institution", "is_company_officer",
+                                        "openalex_author_id", "foundational_work_id")}
+                    for f in self.founders_for(entity_id)]
+        return {
+            "founders": founders,
+            "literature": {"independent_citations": lit.get("independent", 0),
+                           "same_institution_citations": lit.get("same_institution", 0),
+                           "self_citations": lit.get("self", 0),
+                           "recent_publications": pubs},
+            "specialist_fund_crossings": funds,
+            "capital_markets_forms": forms,
+        }
+
+    def save_score(self, *, entity_id: str, run_id: str, model: str, conviction_flag: Optional[str],
+                   conviction_score: Optional[float], data: dict, prompt_version: str) -> None:
+        self.conn.execute(
+            """INSERT INTO score (entity_id, run_id, model, conviction_flag, conviction_score, json,
+                   prompt_version, scored_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(entity_id, prompt_version) DO UPDATE SET
+                   run_id=excluded.run_id, model=excluded.model,
+                   conviction_flag=excluded.conviction_flag, conviction_score=excluded.conviction_score,
+                   json=excluded.json, scored_at=excluded.scored_at""",
+            (entity_id, run_id, model, conviction_flag, conviction_score, _dumps(data),
+             prompt_version, now_iso()),
+        )
+        self.conn.commit()
+
+    def top_scores(self, prompt_version: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Scored candidates ranked for the digest: deep-dive first, then by conviction_score."""
+        rows = self.conn.execute(
+            """SELECT s.*, e.legal_name, e.ticker_primary, e.jurisdiction, e.in_existing_universe,
+                      e.market_cap_usd
+               FROM score s JOIN entity e ON e.entity_id=s.entity_id
+               WHERE s.prompt_version=?
+               ORDER BY CASE s.conviction_flag WHEN 'deep-dive-candidate' THEN 0
+                        WHEN 'surveil' THEN 1 ELSE 2 END, s.conviction_score DESC
+               LIMIT ?""", (prompt_version, int(limit)))
+        return [{**dict(r), "json": _loads(r["json"], {})} for r in rows]
+
+    def count_scores(self, prompt_version: str | None = None) -> int:
+        if prompt_version:
+            return self.conn.execute("SELECT COUNT(*) FROM score WHERE prompt_version=?",
+                                     (prompt_version,)).fetchone()[0]
+        return self.conn.execute("SELECT COUNT(*) FROM score").fetchone()[0]
 
     # ── audit ──────────────────────────────────────────────────────────────────
     def audit(self, entry: AuditEntry) -> None:

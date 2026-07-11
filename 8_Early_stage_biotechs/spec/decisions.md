@@ -6,6 +6,28 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D10 — Stack-convergence scoring is the capstone; rules-pre-filter → Claude → ranked digest (§5.4/§7)
+**Spec ref:** §5.4, §5.5, §7; decision D3 (rubric defined fresh). **Decision:** the capstone fuses the
+assembled evidence per candidate into one routable conviction. It runs **only on candidates that clear
+a rules-based pre-filter** (§5.5) — active universe, ≥`prefilter_min_independent` independent-lab
+citations, AND ≥1 ownership/capital signal, not already scored — so the expensive full-model call is
+reserved for genuinely-cornered names, never the whole universe. The **stack-convergence rubric is
+defined fresh** (D3): five dimensions mapped to the evidence Module 8 produces — (1) independent
+scientific validation (the literature independent-citation signal), (2) capital-markets conviction
+(specialist-fund crossings + insiders), (3) academic pedigree/founder lineage, (4) mechanism novelty &
+translational stage, (5) base-rate discipline (conviction must come from **variant perception**, not one
+loud signal; absence ≠ negative evidence; [V]/[INF] tagging; never invent). Model = **`claude-sonnet-5`**
+(stronger than the Haiku extraction tier, §5.5); forced §5.4 schema + a `conviction_score` for ranking;
+reuses the M9 client (Batch default, `[y/N]` gate, `max_usd_per_run`, per-candidate persist, skip-cache
+on `scoring_prompt_version`, batch_id→file for `--resume`). Output: a ranked Markdown **digest** (§7,
+deep-dive first, `Outputs/digest.md`) — raw markdown (an HTML-render step must escape at that boundary).
+Schema **v5** adds the `score` table. **Live-validated (6 pre-filtered candidates, ~$0.03):** disciplined
+analyst-grade output — Tenax → deep-dive-candidate (71) on a clean 198:2:0 independent-citation ratio +
+Perceptive/Venrock holders; 5 → surveil, each correctly noting mechanism/stage gaps and that
+`in_existing_universe` names cut against the "under-recognized" premise. **Status:** built 2026-07-11
+(`scoring.py`, `scripts/8_score.py`). **Deferred:** §5.2 Claude independence refinement feeding the
+scorer; two-way export of deep-dive names back to the existing pipeline (§2.4); an HTML digest render.
+
 ## D9 — Literature/citation signal via OpenAlex, founder-keyed; independent-citation heuristic; zero-LLM
 **Spec ref:** §3.1 (the module's thesis signal). **Decision:** for each M9 founder, resolve the OpenAlex
 author (free, no key — the spec's recommended source for author + citation-network data) and emit

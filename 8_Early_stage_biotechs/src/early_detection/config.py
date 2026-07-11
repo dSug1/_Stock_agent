@@ -66,6 +66,11 @@ class Config:
     extraction_web_search_max_uses: int = 4           # bounded so the server tool loop finishes in one call
     max_usd_per_run: float = 5.0                       # hard guard on any single dispatch
     cost_calibration_factor: float = 0.10             # scales script-computed cost → actual invoice [[cost calib]]
+    # §5.4 stack-convergence scoring (the expensive, high-value call — full model, pre-filtered candidates)
+    scoring_model: str = "claude-sonnet-5"            # stronger tier than extraction (§5.5)
+    scoring_prompt_version: str = "v1"
+    scoring_max_output_tokens: int = 4000
+    prefilter_min_independent: int = 1                # ≥ this many independent-lab citations to qualify
 
     specialist_funds: tuple[str, ...] = (
         "Baker Bros", "RA Capital", "OrbiMed", "Perceptive Advisors", "BVF Partners",
@@ -109,6 +114,10 @@ def load_config(config_path: Path | None = None) -> Config:
         extraction_web_search_max_uses=int(raw.get("extraction_web_search_max_uses", defaults.extraction_web_search_max_uses)),
         max_usd_per_run=float(raw.get("max_usd_per_run", defaults.max_usd_per_run)),
         cost_calibration_factor=float(raw.get("cost_calibration_factor", defaults.cost_calibration_factor)),
+        scoring_model=str(raw.get("scoring_model", defaults.scoring_model)),
+        scoring_prompt_version=str(raw.get("scoring_prompt_version", defaults.scoring_prompt_version)),
+        scoring_max_output_tokens=int(raw.get("scoring_max_output_tokens", defaults.scoring_max_output_tokens)),
+        prefilter_min_independent=int(raw.get("prefilter_min_independent", defaults.prefilter_min_independent)),
     )
 
     return Config(
