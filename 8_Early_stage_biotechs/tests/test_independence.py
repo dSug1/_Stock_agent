@@ -109,6 +109,19 @@ def test_refine_reclassifies_and_scores(store, cfg):
     assert len(store.founders_for_independence()) == 0
 
 
+def test_throttled_fetch_leaves_founder_unstamped_for_retry(store, cfg):
+    # Regression: a 429 doesn't raise — the OpenAlex helpers swallow it and return empty. The refinement
+    # must NOT stamp such a founder (score 0), or only_missing skips it forever. Empty coauthors + empty
+    # citing (the throttle signature) ⇒ leave it for retry.
+    fid = _seed(store)
+    res = refine_independence(store, cfg, today_year=2025,
+                              coauthor_ids=lambda aid, **kw: set(),   # both empty = looks throttled
+                              citing_works=lambda wid, **kw: [])
+    assert res.refined == 0
+    assert store.founders_for("cik:1")[0]["independence_at"] is None   # unstamped → retryable
+    assert len(store.founders_for_independence()) == 1                 # still in the work-list
+
+
 def test_refine_only_resolved_founders(store, cfg):
     # a founder without a resolved author is not in the work-list
     store.upsert_entity(Entity(entity_id="cik:2", legal_name="NoAuthor Co", cik="0000000002", jurisdiction="US"))

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Optional
 
-from ..clients import _net, openalex
+from ..clients import openalex
 from ..config import Config
 from ..models import SignalRecord
 from ..store import Store, now_iso
@@ -31,7 +31,7 @@ from .literature import SIGNAL_TYPE, SOURCE, _norm, _sid
 
 log = logging.getLogger(__name__)
 
-_LIMITER = _net.RateLimiter(per_sec=8.0)
+_LIMITER = None      # OpenAlex pacing is owned by the client (shared 5/s limiter + Retry-After retry)
 _HALF_LIFE_YEARS = 5.0
 
 
@@ -90,8 +90,21 @@ def refine_independence(store: Store, cfg: Config, *, limit: int | None = None,
                                   from_year=year - cfg.literature_citation_years,
                                   max_results=cfg.literature_max_citing, limiter=_LIMITER) or []
         except Exception as exc:  # noqa: BLE001 — fail-soft per founder
-            log.warning("independence: fetch failed for %s: %s", f["name"], exc)
-            store.set_founder_independence(f["id"], 0.0)
+            # Do NOT stamp independence_at here: a transient OpenAlex 429 is not a result. Stamping it
+            # (the old bug) marked the founder "refined" with score 0, so only_missing skipped it
+            # forever — one throttled run permanently poisoned the refinement. Leave it for retry.
+            log.warning("independence: fetch failed for %s (left for retry, not stamped): %s",
+                        f["name"], exc)
+            continue
+
+        # A 429 doesn't raise — the OpenAlex helpers swallow it and return empty (safe_json→None→break).
+        # So "no coauthors AND no citing works" is almost certainly a throttled fetch, not a real zero
+        # (a founder that reached independence passed literature, i.e. HAS citations). Don't stamp it —
+        # leave it for retry — otherwise a throttled run silently records score 0 and only_missing skips
+        # it forever. A genuine-empty founder simply retries next run (harmless).
+        if not citing and not coauthors:
+            log.warning("independence: no OpenAlex data for %s (likely throttled) — left for retry",
+                        f["name"])
             continue
 
         score = 0.0

@@ -44,10 +44,16 @@ def _print_stats(store: Store) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Module 8 founder-lineage extraction (Claude, gated spend).")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of entities this run")
-    ap.add_argument("--realtime", action="store_true", help="use realtime fan-out instead of Batch API")
+    ap.add_argument("--realtime", action="store_true",
+                    help="use realtime fan-out instead of Batch API. NOT recommended — Batch is the "
+                         "project default (50%% cheaper token cost); realtime is ~2× and only for a "
+                         "tiny in-session smoke.")
     ap.add_argument("--concurrency", type=int, default=6, help="realtime workers (default 6)")
     ap.add_argument("--cold-first", action="store_true",
                     help="prioritize cold-discovery (non-M6) names — the under-recognized end")
+    ap.add_argument("--tickers", default=None,
+                    help="comma-separated tickers to PIN to the front of the work-list (guaranteed "
+                         "inside --limit), e.g. MSLE,ACRV,TCRX,SER")
     ap.add_argument("--resume", action="store_true", help="re-attach the last submitted batch and collect")
     ap.add_argument("--stats", action="store_true", help="print extraction stats and exit")
     ap.add_argument("--yes", action="store_true", help="skip the [y/N] gate (for automation)")
@@ -72,15 +78,18 @@ def main(argv: list[str] | None = None) -> int:
         resume_id = _BATCH_ID_FILE.read_text(encoding="utf-8").strip()
         print(f"Resuming batch {resume_id}")
 
+    tickers = [t.strip() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
     n = len(store.entities_for_extraction(cfg.extraction_prompt_version, limit=args.limit,
-                                          cold_first=args.cold_first))
+                                          cold_first=args.cold_first, tickers=tickers))
     if not resume_id:
-        est = estimate_usd(cfg, n)
+        est = estimate_usd(cfg, n, use_batch=not args.realtime)
+        if args.realtime:
+            print("  ⚠️  --realtime is ~2× Batch token cost; Batch is the project default. Proceeding as asked.")
         print(f"Founder extraction → {cfg.db_path}")
         print(f"  model={cfg.extraction_model}  prompt={cfg.extraction_prompt_version}  "
               f"mode={'realtime' if args.realtime else 'batch'}")
         print(f"  entities to extract: {n}")
-        print(f"  estimated cost:      ${est:,.2f}  (cap ${cfg.max_usd_per_run:,.2f}/run)")
+        print(f"  estimated cost:      ${est:,.2f}  (tokens + web-search fees; cap ${cfg.max_usd_per_run:,.2f}/run)")
         if n == 0:
             print("  nothing to do."); store.close(); return 0
         if not args.yes:
@@ -97,14 +106,14 @@ def main(argv: list[str] | None = None) -> int:
 
     res = extract_founders(store, cfg, client=client, limit=args.limit,
                            use_batch=not args.realtime, concurrency=args.concurrency,
-                           cold_first=args.cold_first, resume_batch_id=resume_id,
+                           cold_first=args.cold_first, tickers=tickers, resume_batch_id=resume_id,
                            on_batch_id=_save_batch_id)
 
     print(f"\n  attempted:      {res.attempted}")
     print(f"  extracted:      {res.extracted}")
     print(f"  with founders:  {res.with_founders}")
     print(f"  total founders: {res.total_founders}")
-    print(f"  spent (calibrated): ${res.spent_usd:,.2f}  ({client.web_searches} web searches)")
+    print(f"  spent (actual):     ${res.spent_usd:,.2f}  ({client.web_searches} web searches)")
     _print_stats(store)
     store.close()
     return 0

@@ -6,6 +6,72 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D14 — Batch is the project default; report ACTUAL spend (never calibrate an actual); base64url custom_ids
+**Trigger:** the first real founder-extraction run (50 biotechs incl. Satellos/Acrivon/TScan/Serina) was
+dispatched `--realtime` to finish in-session and **billed $4.36**, but the CLI displayed "$0.44". Three
+distinct problems, all now fixed:
+1. **Reporting bug — never scale a MEASURED actual by `cost_calibration_factor`.** `extraction.py`/
+   `scoring.py` computed `res.spent_usd = client.spent_usd * 0.10`. But `client.spent_usd` is the real
+   measured cost (correct token price + exact web-search fees), not an estimate. Multiplying it by the
+   0.10 factor (which only ever corrected a *token estimate* over-count) under-reported 10×. Fixed:
+   report `client.spent_usd` raw. The pre-dispatch **estimate** keeps a factor but now (a) never scales
+   the exact per-search fee and (b) models ~30k web_search-inflated input tokens/entity (the old ~1.5k
+   assumption was an order of magnitude low). Consistent with [[project_anthropic_cost_calibration]]
+   (realtime web_search runs ~at list, not 0.10).
+2. **Batch is the project default (operator directive).** Batch = 50% of realtime token cost; web-search
+   fees are identical, so batch is strictly cheaper and realtime doubled the bill for nothing. `--realtime`
+   now prints a "not recommended" warning; batch is the default path for `8_extract`/`8_score`.
+   [[feedback_project8_batch_always]].
+3. **Batch dispatch was BROKEN and never exercised.** Every prior run used `--realtime`, so no one hit
+   it: the Batch API requires `custom_id` to match `^[a-zA-Z0-9_-]{1,64}$`, but the code passed the raw
+   `entity_id` — which carries `:` and `|` (`cik:0001…`, `tkx:T|EX`). Fixed with base64url encode/decode
+   (`anthropic_client._enc_cid/_dec_cid`) — reversible with NO stored map, so submit→collect and
+   `--resume` round-trip cleanly. Regression test `test_anthropic_client.py`.
+
+**Also this session:** `8_extract --tickers MSLE,ACRV,…` PINS named companies to the front of the
+work-list (guaranteed inside `--limit`) — needed because default ordering buries non-M6 names (Serina)
+at the tail. And the §5.2 independence refinement had a **poisoning bug**: on an OpenAlex 429 it stamped
+`independence_at` with score 0, marking the founder "refined" so `only_missing` skipped it forever — one
+throttled run permanently blocked retry. Fixed: a transient fetch failure leaves the founder unstamped
+for retry. **Live run result:** 50 extracted (Batch after the fix), literature → 984 independent-lab
+citations, scoring (Batch, $0.10 actual) → **Acrivon deep-dive-candidate (68)** (Jesper Olsen /
+Copenhagen phosphoproteomics, RA Capital), **TScan surveil (58)** (Elledge/Harvard T-cell antigen
+discovery, 194 independent citations). Satellos/Serina didn't clear the pre-filter — Satellos has NO
+EDGAR capital signal (TSX-listed; real Canada-coverage gap), Serina's chemist founders didn't resolve to
+independent citations. §9 harness on the run: Acrivon = 1 true-positive (precision/recall 100% on n=1,
+correctly flagged INSUFFICIENT-DATA). **Status:** all fixed + 8 new tests (123 total, all offline).
+
+## D13 — §9 validation harness back-tests conviction vs a labeled set; zero-spend; two recalls kept separate
+**Spec ref:** §9 (the scoring/independence/novelty calls are "unverified against a labeled dataset" —
+back-test against known cases, Satellos included, before trusting a flag). **Decision:** build a
+**zero-spend** harness (`validation.py` + `scripts/8_validate.py`) that reads only what the pipeline
+has already scored — no Claude calls, no network — and joins a hand-labeled ground-truth set
+(`validation/known_cases.yaml`: positives that re-rated on an under-recognized mechanism vs
+controls that should NOT flag) against the store. It reports three things, deliberately un-conflated:
+- **Funnel / survivorship** — how far each case travelled (`not_in_universe → below_floor/above_ceiling
+  → in_universe → prefilter_cleared → scored`). Losses in early stages cap recall *upstream of the
+  model*; no scoring quality recovers them. This makes the §9 survivorship bias measurable.
+- **Classification** — precision/recall/F1/confusion **over the scored subset only** (the call's
+  discrimination given it saw the case), deep-dive-candidate ⇒ predicted-positive (or a
+  `conviction_score` threshold via `--rule score`).
+- **Threshold sweep** — precision/recall across score cutoffs (D3 ranks the digest on the score).
+
+**Two recalls are reported and must not be conflated:** `funnel_recall` (scored positives / *all*
+positives — end-to-end, includes survivorship loss) vs `model_recall` (TP/(TP+FN) over the scored
+subset). Undefined metrics render as `—`/`None`, never a fake 0; a `sufficient` flag (≥3 pos / ≥2 neg
+scored) gates whether the numbers are trustworthy and prints a loud INSUFFICIENT-DATA banner otherwise.
+Matching is highest-precision-first: CIK → ticker/alias (exchange-suffix tolerant) → suffix-normalized
+name (drops corporate forms like *Inc/Ltd*, KEEPS industry words like *therapeutics* to preserve
+precision). **Real finding from the first live run:** of 6 seed cases, Satellos (MSLE) matched and sits
+`in_universe` **unscored** (a concrete work-list item — run extract→literature→score on it), while
+Arcus/Cytokinetics are **`above_ceiling`** — already re-rated past the $3B small-cap ceiling. That
+exposes a structural limit for back-testing *known winners*: winners outgrow the active universe, so a
+faithful precision/recall needs **point-in-time (as-of) caps** in the labeled set, or a ceiling-relaxed
+validation mode — noted, not hacked into the live gate. **Label quality is operator-owned:**
+`verified: false` rows are marked ⚠︎ and excluded from trust; only Satellos ships verified (the spec's
+anchor). **Status:** built 2026-07-11 (`validation.py`, `scripts/8_validate.py`, `validation/known_cases.yaml`,
+store `entities_by_ticker`/`get_score`, `test_validation.py` ×11, `M15_validation_explained.md`). Zero new spend.
+
 ## D12 — §5.2 independence refinement is zero-LLM co-authorship-graph classification, not a Claude call
 **Spec ref:** §5.2. **Decision:** M10's string heuristic calls a citation "independent" whenever it's
 from a different institution — but a founder's former **co-authors/trainees** who moved elsewhere aren't

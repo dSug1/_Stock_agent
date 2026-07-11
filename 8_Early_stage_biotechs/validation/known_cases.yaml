@@ -1,0 +1,112 @@
+# §9 validation — labeled ground-truth set for back-testing conviction output.
+#
+# This is the OPERATOR-OWNED corpus that makes the pipeline's flags trustworthy rather than merely
+# plausible (overall spec §9). Each entry is a company whose *right answer is already known*:
+#   label: positive  → a genuine early-detection win — an independently-corroborated but
+#                      under-recognized mechanism that LATER re-rated the stock (the thing the
+#                      pipeline exists to catch early, e.g. Satellos = MSLE).
+#   label: negative  → a control the pipeline should NOT flag deep-dive: hype without independent
+#                      mechanism corroboration, or a mechanism that did not corroborate / did not
+#                      re-rate.
+#
+# The harness (scripts/8_validate.py) joins these against the store by CIK → ticker/alias → name,
+# reports where each landed in the funnel (survivorship), and — over the SCORED subset — computes
+# precision/recall of the conviction call vs these labels.
+#
+# DISCIPLINE:
+#   * `verified: true` means YOU have fact-checked the label + mechanism + outcome against a source.
+#     Un-verified rows are marked ⚠︎ in the report and should not be trusted for calibration.
+#   * Fill `cik`/`ticker`/`aliases` so the case actually matches a stored entity. A case with no
+#     match is reported as `not_in_universe` — informative (survivorship / coverage gap), but it
+#     contributes nothing to precision/recall until it resolves.
+#   * Target ≥10–15 verified cases (spec §9). This seed is a STARTER — Satellos is the only anchor
+#     the spec names as verified; expand + verify the rest before relying on the metrics.
+
+cases:
+  # ── anchor case (the spec's named worked example) ──────────────────────────────
+  - name: Satellos Bioscience
+    ticker: MSLE
+    aliases: [Satellos, "MSLE.TO", "MSLE.V", MSLEF]
+    jurisdiction: CA
+    label: positive
+    rerated: true
+    expected_flag: deep-dive-candidate
+    mechanism: >-
+      Restoring asymmetric muscle stem-cell division (AAK1/BMI1 axis) to drive regenerative
+      myogenesis in Duchenne muscular dystrophy — a mechanism distinct from dystrophin restoration.
+    verified: true
+    source: "spec worked example (§9); Module 6 surfaced it at rank 20"
+
+  # ── further seeds (ILLUSTRATIVE — operator must verify label, mechanism, outcome, identifiers) ──
+  - name: Acrivon Therapeutics
+    ticker: ACRV
+    jurisdiction: US
+    label: positive
+    rerated: true
+    expected_flag: deep-dive-candidate
+    mechanism: >-
+      Proteomics-driven drug-response biomarker platform (OncoSignature); founding science traces to
+      Jesper V. Olsen's phosphoproteomics (Univ. Copenhagen), independently built on across the field.
+    verified: false
+    source: "named alongside Satellos as a known case in the project handoff; operator to verify outcome"
+
+  - name: Wave Life Sciences
+    ticker: WVE
+    jurisdiction: US
+    label: positive
+    rerated: true
+    expected_flag: deep-dive-candidate
+    mechanism: >-
+      Stereopure oligonucleotide chemistry + RNA base editing (ADAR recruitment); founder-lineage
+      to academic oligonucleotide chemistry independently built on by other labs.
+    verified: false
+    source: "operator to verify"
+
+  - name: Arcus Biosciences
+    ticker: RCUS
+    jurisdiction: US
+    label: positive
+    rerated: true
+    expected_flag: deep-dive-candidate
+    mechanism: >-
+      Adenosine-axis immuno-oncology (CD73 / A2aR / A2bR); mechanism independently corroborated
+      across the tumor-immunology literature before partnering re-rated it.
+    verified: false
+    source: "operator to verify"
+
+  - name: Cytokinetics
+    ticker: CYTK
+    jurisdiction: US
+    label: positive
+    rerated: true
+    expected_flag: deep-dive-candidate
+    mechanism: >-
+      Sarcomere-directed muscle activators/inhibitors (cardiac myosin modulation); long academic
+      muscle-biology lineage, independently validated well before the aficamten re-rate.
+    verified: false
+    source: "operator to verify"
+
+  # ── controls / negatives (should NOT earn a deep-dive flag) ────────────────────
+  - name: Cassava Sciences
+    ticker: SAVA
+    jurisdiction: US
+    label: negative
+    rerated: false
+    expected_flag: deprioritize
+    mechanism: >-
+      Filamin-A / simufilam Alzheimer mechanism whose supporting science drew independent-replication
+      and data-integrity challenges — an example of a loud signal WITHOUT independent corroboration.
+    verified: false
+    source: "operator to verify"
+
+  - name: Ocugen
+    ticker: OCGN
+    jurisdiction: US
+    label: negative
+    rerated: false
+    expected_flag: deprioritize
+    mechanism: >-
+      Retail-hype-driven attention (COVID vaccine partnership) rather than an under-recognized,
+      independently-corroborated founding mechanism — a coverage/attention false-positive control.
+    verified: false
+    source: "operator to verify"

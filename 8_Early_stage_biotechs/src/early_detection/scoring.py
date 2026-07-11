@@ -99,11 +99,15 @@ def _validate(data: dict) -> dict:
     return data
 
 
-def estimate_usd(cfg: Config, n: int) -> float:
-    """Pre-dispatch estimate (batch, calibrated). Packet ~1.2k in + ~0.9k out per candidate."""
+def estimate_usd(cfg: Config, n: int, *, use_batch: bool = True) -> float:
+    """Pre-dispatch estimate. Packet ~1.2k in + ~0.9k out per candidate; NO web_search, so cost is
+    token-only and small. ``use_batch`` halves it (Batch API = 50%). The ``cost_calibration_factor`` is
+    NOT applied — it deflated a real spend 10× (see extraction.estimate_usd); actual is reported from
+    ``client.spent_usd`` after the run."""
     from .clients.anthropic_client import _price
     p = _price(cfg.scoring_model)
-    return n * (1200 * p["in"] + 900 * p["out"]) / 1_000_000 * 0.5 * cfg.cost_calibration_factor
+    factor = 0.5 if use_batch else 1.0
+    return n * (1200 * p["in"] + 900 * p["out"]) / 1_000_000 * factor
 
 
 def _run_id() -> str:
@@ -118,7 +122,7 @@ def score_candidates(store: Store, cfg: Config, *, client: AnthropicClient, limi
     run_id = _run_id()
     todo = store.scoring_candidates(pv, min_independent=cfg.prefilter_min_independent,
                                     limit=limit, force=force)
-    res = ScoreResult(candidates=len(todo), est_usd=estimate_usd(cfg, len(todo)))
+    res = ScoreResult(candidates=len(todo), est_usd=estimate_usd(cfg, len(todo), use_batch=use_batch))
     log.info("score: %d candidates cleared the pre-filter at prompt %s", len(todo), pv)
     by_id = {e.entity_id: e for e in todo}
 
@@ -150,8 +154,10 @@ def score_candidates(store: Store, cfg: Config, *, client: AnthropicClient, limi
                                  cfg.scoring_max_output_tokens, validate=_validate,
                                  concurrency=concurrency, on_result=_persist)
 
-    res.spent_usd = client.spent_usd * cfg.cost_calibration_factor
-    log.info("score done: scored=%d deep_dive=%d flags=%s spent≈$%.2f",
+    # Report ACTUAL measured spend (see extraction.py note) — never scale a measured actual by the
+    # calibration factor. Scoring has no web_search, so its cost is token-only and small.
+    res.spent_usd = client.spent_usd
+    log.info("score done: scored=%d deep_dive=%d flags=%s spent=$%.2f",
              res.scored, res.deep_dive, res.flags, res.spent_usd)
     return res
 

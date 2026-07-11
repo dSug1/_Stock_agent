@@ -35,7 +35,9 @@ _WATCHLIST = COMPONENT_ROOT / "Outputs" / "watchlist.csv"
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Module 8 stack-convergence scoring + digest (gated spend).")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of candidates this run")
-    ap.add_argument("--realtime", action="store_true", help="realtime fan-out instead of Batch API")
+    ap.add_argument("--realtime", action="store_true",
+                    help="realtime fan-out instead of Batch API. NOT recommended — Batch is the project "
+                         "default (50%% cheaper); realtime only for a tiny in-session run.")
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--force", action="store_true", help="re-score even entities already scored at this prompt")
     ap.add_argument("--resume", action="store_true", help="re-attach the last submitted batch and collect")
@@ -78,7 +80,8 @@ def main(argv: list[str] | None = None) -> int:
               f"mode={'realtime' if args.realtime else 'batch'}")
         print(f"  candidates cleared pre-filter (>= {cfg.prefilter_min_independent} independent citations "
               f"+ capital signal): {n}")
-        print(f"  estimated cost: ${estimate_usd(cfg, n):,.2f}  (cap ${cfg.max_usd_per_run:,.2f}/run)")
+        print(f"  estimated cost: ${estimate_usd(cfg, n, use_batch=not args.realtime):,.2f}  "
+              f"(token-only, no web_search; cap ${cfg.max_usd_per_run:,.2f}/run)")
         if n == 0:
             print("  nothing to score. (Run the founder + literature signals first.)")
             store.close(); return 0
@@ -98,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n  candidates: {res.candidates}")
     print(f"  scored:     {res.scored}")
     print(f"  flags:      {res.flags}")
-    print(f"  spent (calibrated): ${res.spent_usd:,.2f}")
+    print(f"  spent (actual):     ${res.spent_usd:,.2f}")
 
     nrows = write_digest(store, cfg, _DIGEST)
     wrows = write_watchlist(store, cfg, _WATCHLIST)

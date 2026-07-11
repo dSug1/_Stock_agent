@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Optional
 
-from ..clients import _net, openalex
+from ..clients import openalex
 from ..config import Config
 from ..models import SignalRecord
 from ..store import Store, now_iso
@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 SIGNAL_TYPE = "literature"
 SOURCE = "openalex"
-_LIMITER = _net.RateLimiter(per_sec=8.0)      # OpenAlex polite pool
+_LIMITER = None      # OpenAlex pacing is owned by the client (shared 5/s limiter + Retry-After retry)
 _NONALNUM = re.compile(r"[^a-z0-9 ]+")
 
 

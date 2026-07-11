@@ -26,6 +26,13 @@ log = logging.getLogger(__name__)
 BASE = "https://api.openalex.org"
 _NONALNUM = re.compile(r"[^a-z0-9 ]+")
 
+# One shared pacer for ALL OpenAlex calls, regardless of which signal drives them. OpenAlex's polite
+# pool (with mailto) documents ~10 req/s, but it 429s under sustained load well below that — the
+# literature→independence back-to-back sweep on 2026-07-11 got hard-throttled at 8/s. Pace conservatively
+# at 5/s here AND retry with Retry-After/backoff in ``_get`` (belt-and-suspenders): the limiter avoids
+# most 429s, the retry recovers the rest so no citation signal is silently dropped.
+_LIMITER = _net.RateLimiter(per_sec=5.0)
+
 
 def _short_id(url: Optional[str]) -> Optional[str]:
     if not url:
@@ -45,7 +52,9 @@ def _mailto(mailto: str) -> str:
 
 
 def _get(url: str, *, limiter: Optional[_net.RateLimiter] = None) -> Optional[dict]:
-    return _net.safe_json(url, limiter=limiter, accept="application/json")
+    """Fetch OpenAlex JSON through the shared pacer + Retry-After/backoff retry. A caller-supplied
+    ``limiter`` overrides the module default (kept for tests); production always shares ``_LIMITER``."""
+    return _net.safe_json_retry(url, limiter=limiter or _LIMITER, accept="application/json")
 
 
 # ── authors ──────────────────────────────────────────────────────────────────

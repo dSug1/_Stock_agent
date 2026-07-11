@@ -111,28 +111,36 @@ def _validate(data: dict) -> dict:
     return data
 
 
-def estimate_usd(cfg: Config, n: int) -> float:
-    """Rough pre-dispatch estimate for the [y/N] gate, scaled by the cost-calibration factor.
-
-    Per-entity assumption [INF]: ~1.5k input (cached system amortized) + ~0.8k output + ~3 web searches.
-    Batch halves token cost; web-search fee is per-search regardless."""
+def estimate_usd(cfg: Config, n: int, *, use_batch: bool = True) -> float:
+    """Pre-dispatch cost estimate for the [y/N] gate (a guide, not a promise). Two components, treated
+    differently — this is the fix for the run that billed $4.36 but displayed "$0.44":
+      - TOKENS: web_search injects large result contexts into input, so the old ~1.5k-input model was
+        an order of magnitude low. Empirically (50-entity Haiku realtime run) it's ~30k input + ~2.5k
+        output per entity. The ``cost_calibration_factor`` is deliberately NOT applied — that factor was
+        derived for a NON-web-search token workload and understated THIS one ~10×.
+      - WEB SEARCH: billed EXACTLY per search (``web_search_cost_per_search``); never calibrated.
+    ``use_batch`` halves the token cost (Batch API = 50%); the per-search fee is the same either way.
+    Actual spend is always reported from ``client.spent_usd`` after the run, never this estimate."""
     from .clients.anthropic_client import _price
     p = _price(cfg.extraction_model)
-    tok = (1500 * p["in"] + 800 * p["out"]) / 1_000_000 * 0.5   # batch = 50%
-    search = 3 * 0.01
-    return n * (tok + search) * cfg.cost_calibration_factor
+    factor = 0.5 if use_batch else 1.0
+    tok = (30_000 * p["in"] + 2_500 * p["out"]) / 1_000_000 * factor   # web_search-inflated input [INF]
+    search = cfg.extraction_web_search_max_uses * 0.01                  # exact per-search fee
+    return n * (tok + search)
 
 
 def extract_founders(store: Store, cfg: Config, *, client: AnthropicClient, limit: int | None = None,
                      use_batch: bool = True, concurrency: int = 6, cold_first: bool = False,
+                     tickers: Optional[list[str]] = None,
                      resume_batch_id: Optional[str] = None,
                      on_batch_id=None) -> ExtractResult:
     """Extract founder lineage for entities not yet done at this prompt version. ``client`` is injected
     (real ``AnthropicClient`` in the CLI; a fake in tests). Persists per entity as results arrive.
-    ``cold_first`` prioritizes cold-discovery (non-M6) names."""
+    ``cold_first`` prioritizes cold-discovery (non-M6) names; ``tickers`` pins named companies to the
+    front of the work-list so they land inside ``limit``."""
     pv = cfg.extraction_prompt_version
-    todo = store.entities_for_extraction(pv, limit=limit, cold_first=cold_first)
-    res = ExtractResult(attempted=len(todo), est_usd=estimate_usd(cfg, len(todo)))
+    todo = store.entities_for_extraction(pv, limit=limit, cold_first=cold_first, tickers=tickers)
+    res = ExtractResult(attempted=len(todo), est_usd=estimate_usd(cfg, len(todo), use_batch=use_batch))
     log.info("extract: %d entities need founder lineage at prompt %s", len(todo), pv)
 
     by_id = {e.entity_id: e for e in todo}
@@ -168,7 +176,11 @@ def extract_founders(store: Store, cfg: Config, *, client: AnthropicClient, limi
                                  cfg.extraction_max_output_tokens, validate=_validate, tools=tools,
                                  concurrency=concurrency, on_result=_persist)
 
-    res.spent_usd = client.spent_usd * cfg.cost_calibration_factor
-    log.info("extract done: extracted=%d with_founders=%d founders=%d spent≈$%.2f",
-             res.extracted, res.with_founders, res.total_founders, res.spent_usd)
+    # Report the ACTUAL measured spend — client.spent_usd already sums real token cost (at the correct
+    # batch/realtime price) + exact web-search fees. Do NOT scale it by cost_calibration_factor: that
+    # factor corrects a pre-dispatch *token estimate* (see estimate_usd), not a measured actual. Scaling
+    # an actual is how a real $4.36 web-search-heavy realtime run got mis-displayed as "$0.44".
+    res.spent_usd = client.spent_usd
+    log.info("extract done: extracted=%d with_founders=%d founders=%d spent=$%.2f (%d web searches)",
+             res.extracted, res.with_founders, res.total_founders, res.spent_usd, client.web_searches)
     return res

@@ -382,6 +382,15 @@ class Store:
         sql = "SELECT COUNT(*) FROM entity" + (" WHERE is_live=1" if live_only else "")
         return self.conn.execute(sql).fetchone()[0]
 
+    def entities_by_ticker(self, ticker: str | None) -> list[Entity]:
+        """All entities whose primary ticker matches ``ticker`` case-insensitively. Used by the §9
+        validation harness to resolve a labeled case to a stored entity (ticker is the common join key)."""
+        if not ticker:
+            return []
+        rows = self.conn.execute(
+            "SELECT * FROM entity WHERE UPPER(ticker_primary)=UPPER(?)", (ticker.strip(),))
+        return [self._row_to_entity(r) for r in rows]
+
     def entities_needing_cap(self, limit: int | None = None) -> list[Entity]:
         """Live entities that have a ticker but no known USD market cap — the enrich work-list."""
         sql = ("SELECT * FROM entity WHERE is_live=1 AND ticker_primary IS NOT NULL "
@@ -560,23 +569,42 @@ class Store:
 
     # ── founder-lineage extraction (Phase 2, §5.1) ─────────────────────────────
     def entities_for_extraction(self, prompt_version: str, limit: int | None = None,
-                                cold_first: bool = False) -> list[Entity]:
+                                cold_first: bool = False,
+                                tickers: "list[str] | None" = None) -> list[Entity]:
         """Active-universe entities not yet founder-extracted at ``prompt_version`` (identity/prompt-
         version skip-cache — a prompt bump re-opens everyone). Default order prioritizes the M6 tier;
         ``cold_first`` flips it to prioritize **cold-discovery** (non-M6) names — the under-recognized
-        end where the thesis has the most edge (the M6-tier names are already covered elsewhere)."""
+        end where the thesis has the most edge (the M6-tier names are already covered elsewhere).
+
+        ``tickers`` PINS specific names to the front of the work-list (still active-universe + still
+        needing extraction), so an operator can say "run on these 4 *plus* fill to N" — the named ones
+        are guaranteed to land inside ``limit`` regardless of the default ordering (which would bury a
+        non-M6 name like a cold-discovery pick at the tail)."""
+        active = "is_live=1 AND below_floor=0 AND above_ceiling=0"
+        need = "(founder_prompt_version IS NULL OR founder_prompt_version != ?)"
+        picked: list[Entity] = []
+        seen: set[str] = set()
+        for tk in tickers or []:
+            for e in self.entities_by_ticker(tk):
+                if e.entity_id in seen:
+                    continue
+                if self.conn.execute(
+                        f"SELECT 1 FROM entity WHERE entity_id=? AND {active} AND {need}",
+                        (e.entity_id, prompt_version)).fetchone():
+                    picked.append(e)
+                    seen.add(e.entity_id)
         # cold_first prioritizes cold-discovery names AND the small-cap end (smallest known cap first)
         # — the actual thesis; ordering by entity_id alone surfaced mega-caps (Pfizer/Lilly).
         order = ("in_existing_universe ASC, (market_cap_usd IS NULL), market_cap_usd ASC"
                  if cold_first else "in_existing_universe DESC")
-        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 AND above_ceiling=0 "
-               "AND (founder_prompt_version IS NULL OR founder_prompt_version != ?) "
-               f"ORDER BY {order}, entity_id")
-        params: tuple = (prompt_version,)
-        if limit:
-            sql += " LIMIT ?"
-            params = (prompt_version, int(limit))
-        return [self._row_to_entity(r) for r in self.conn.execute(sql, params)]
+        sql = f"SELECT * FROM entity WHERE {active} AND {need} ORDER BY {order}, entity_id"
+        for r in self.conn.execute(sql, (prompt_version,)):
+            e = self._row_to_entity(r)
+            if e.entity_id in seen:
+                continue
+            picked.append(e)
+            seen.add(e.entity_id)
+        return picked[:limit] if limit else picked
 
     def save_founders(self, entity_id: str, *, founders: list[dict], affiliations: list[str],
                       prompt_version: str, source: str = "claude:web_search") -> None:
@@ -748,6 +776,14 @@ class Store:
                         WHEN 'surveil' THEN 1 ELSE 2 END, s.conviction_score DESC
                LIMIT ?""", (prompt_version, int(limit)))
         return [{**dict(r), "json": _loads(r["json"], {})} for r in rows]
+
+    def get_score(self, entity_id: str, prompt_version: str) -> Optional[dict[str, Any]]:
+        """The stored conviction for one entity at ``prompt_version`` (parsed ``json``), or None if
+        unscored. Read-only surface for the §9 validation harness."""
+        row = self.conn.execute(
+            "SELECT * FROM score WHERE entity_id=? AND prompt_version=?",
+            (entity_id, prompt_version)).fetchone()
+        return {**dict(row), "json": _loads(row["json"], {})} if row else None
 
     def count_scores(self, prompt_version: str | None = None) -> int:
         if prompt_version:

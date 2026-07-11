@@ -108,6 +108,44 @@ def get_text(url: str, **kw: Any) -> str:
     return get_bytes(url, **kw).decode("utf-8", "replace")
 
 
+# ── retrying JSON GET (transient 429/5xx with Retry-After + backoff) ─────────
+
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+
+def get_json_retry(url: str, *, accept: str = "application/json", timeout: float = 30,
+                   limiter: Optional[RateLimiter] = None, retries: int = 4,
+                   retry_statuses: tuple = RETRY_STATUSES, max_delay: float = 30.0,
+                   extra_headers: Optional[dict] = None) -> Any:
+    """GET JSON, retrying transient ``retry_statuses`` (429 rate-limit, 5xx) with backoff that HONORS the
+    server's ``Retry-After`` header. Raises on a non-retryable status or once ``retries`` is exhausted.
+
+    This is the reusable version of the per-client retry ``edgar_fts._get_json`` already relies on — a
+    bare 429 with no retry silently becomes "no results" (see ``safe_json``), which for OpenAlex dropped
+    a whole founder's citation signal and (worse) let the independence refinement stamp it as score-0."""
+    for attempt in range(retries + 1):
+        if limiter is not None:
+            limiter.wait()
+        try:
+            headers = {"User-Agent": user_agent(), "Accept": accept, "Accept-Encoding": "identity"}
+            if extra_headers:
+                headers.update(extra_headers)
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(capped_read(resp))
+        except urllib.error.HTTPError as e:
+            if e.code in retry_statuses and attempt < retries:
+                ra = (e.headers.get("Retry-After") if e.headers else None)
+                # Retry-After may be seconds (int) or an HTTP-date; use it when numeric, else backoff.
+                delay = float(ra) if (ra and str(ra).strip().replace(".", "", 1).isdigit()) \
+                    else 1.5 ** (attempt + 1)
+                log.debug("HTTP %s for %s; retry %d in %.1fs", e.code, url, attempt + 1, delay)
+                time.sleep(min(delay, max_delay))
+                continue
+            raise
+    raise RuntimeError(f"get_json_retry exhausted retries for {url}")  # pragma: no cover
+
+
 # ── fail-open wrappers ──────────────────────────────────────────────────────
 
 def safe_json(url: str, **kw: Any) -> Optional[Any]:
@@ -115,6 +153,16 @@ def safe_json(url: str, **kw: Any) -> Optional[Any]:
         return get_json(url, **kw)
     except Exception as exc:  # noqa: BLE001 — fail-open by design
         log.warning("safe_json failed for %s: %s", url, exc)
+        return None
+
+
+def safe_json_retry(url: str, **kw: Any) -> Optional[Any]:
+    """Fail-open wrapper over :func:`get_json_retry` — returns None only after retries are exhausted, so
+    a transient 429/5xx is recovered rather than silently dropped on the first hit."""
+    try:
+        return get_json_retry(url, **kw)
+    except Exception as exc:  # noqa: BLE001 — fail-open after retries
+        log.warning("safe_json_retry gave up for %s: %s", url, exc)
         return None
 
 

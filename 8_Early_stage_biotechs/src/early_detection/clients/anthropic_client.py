@@ -19,6 +19,7 @@ Calls happen ONLY on explicit dispatch behind the CLI's ``[y/N]`` cost gate.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -45,6 +46,21 @@ def _price(model: str) -> dict:
 
 class BudgetExceeded(RuntimeError):
     """Raised when a call would push spend past ``max_usd`` (hard stop)."""
+
+
+# Batch API requires custom_id to match ^[a-zA-Z0-9_-]{1,64}$ — but our entity_ids carry ':' and '|'
+# ('cik:0001…', 'tkx:TICKER|EXCHANGE'). base64url encodes to exactly that charset and is reversible
+# WITHOUT a stored map, so the submit→collect (and --resume) round-trip needs no side table.
+def _enc_cid(entity_id: str) -> str:
+    cid = base64.urlsafe_b64encode(entity_id.encode("utf-8")).decode("ascii").rstrip("=")
+    if len(cid) > 64:  # ids are short (< 32 chars); guard loudly rather than silently truncate
+        raise ValueError(f"custom_id too long for batch: {entity_id!r} → {len(cid)} chars")
+    return cid
+
+
+def _dec_cid(custom_id: str) -> str:
+    pad = "=" * (-len(custom_id) % 4)
+    return base64.urlsafe_b64decode(custom_id + pad).decode("utf-8")
 
 
 def web_search_tool(max_uses: int = 4, allowed_domains: Optional[list] = None) -> dict:
@@ -214,7 +230,7 @@ class AnthropicClient:
         self._guard()
         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
         from anthropic.types.messages.batch_create_params import Request
-        requests = [Request(custom_id=cid,
+        requests = [Request(custom_id=_enc_cid(cid),      # entity_id has ':'/'|'; batch needs [A-Za-z0-9_-]
                             params=MessageCreateParamsNonStreaming(
                                 **self._params(model, system, schema, b, max_tokens, tools)))
                     for cid, b in bundles.items()]
@@ -237,8 +253,9 @@ class AnthropicClient:
 
         out: dict[str, dict] = {}
         for result in client.messages.batches.results(batch_id):
+            eid = _dec_cid(result.custom_id)              # decode base64url back to the entity_id
             if result.result.type != "succeeded":
-                log.warning("batch item %s: %s", result.custom_id, result.result.type)
+                log.warning("batch item %s: %s", eid, result.result.type)
                 continue
             self._track(result.result.message.usage, model, batch=True)
             self._track_searches(result.result.message)
@@ -246,9 +263,9 @@ class AnthropicClient:
                 data = self._extract(result.result.message)
                 data = validate(data) if validate else data
             except Exception as exc:  # noqa: BLE001
-                log.warning("batch item %s invalid: %s", result.custom_id, exc)
+                log.warning("batch item %s invalid: %s", eid, exc)
                 continue
-            out[result.custom_id] = data
+            out[eid] = data
             if on_result is not None:
-                on_result(result.custom_id, data)
+                on_result(eid, data)
         return out

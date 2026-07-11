@@ -137,11 +137,38 @@ def test_realtime_mode(store, cfg):
     assert res.extracted == 2 and res.total_founders == 1
 
 
-def test_estimate_scales_with_calibration(cfg):
-    hi = extraction.estimate_usd(Config(cost_calibration_factor=1.0, extraction_model="claude-haiku-4-5"), 100)
-    lo = extraction.estimate_usd(Config(cost_calibration_factor=0.1, extraction_model="claude-haiku-4-5"), 100)
-    assert lo == pytest.approx(hi * 0.1)
+def test_estimate_is_batch_aware_and_not_calibration_deflated():
+    # Regression for the $4.36-billed-but-"$0.44"-displayed bug: the estimate must NOT be scaled by
+    # cost_calibration_factor (that deflated a real web-search-heavy spend 10×), and batch must be
+    # cheaper than realtime (Batch API = 50% token cost; the per-search fee is identical either way).
+    c = Config(extraction_model="claude-haiku-4-5", extraction_web_search_max_uses=4)
+    batch = extraction.estimate_usd(c, 50, use_batch=True)
+    realtime = extraction.estimate_usd(c, 50, use_batch=False)
+    assert batch < realtime                                  # batch strictly cheaper
+    # calibration factor is ignored now — changing it does not move the estimate
+    hi = extraction.estimate_usd(Config(cost_calibration_factor=1.0, extraction_model="claude-haiku-4-5"), 50)
+    lo = extraction.estimate_usd(Config(cost_calibration_factor=0.1, extraction_model="claude-haiku-4-5"), 50)
+    assert hi == lo
+    # per-search fee (exact) is present and not deflated: 50 entities × 4 searches × $0.01 = $2.00 floor
+    assert realtime > 50 * 4 * 0.01
 
 
 def test_system_prompt_has_no_invent_discipline():
     assert "NEVER invent" in SYSTEM_PROMPT and "web_search" in SYSTEM_PROMPT
+
+
+def test_tickers_pin_named_entities_to_front_within_limit(store):
+    # 10 M6 entities (default order buries a specific one deep) + one non-M6 name that sorts last.
+    for i in range(10):
+        store.upsert_entity(Entity(entity_id=f"cik:{i:03d}", legal_name=f"M6 Co {i}",
+                                   ticker_primary=f"AAA{i}", jurisdiction="US", in_existing_universe=True))
+    store.upsert_entity(Entity(entity_id="cik:cold", legal_name="Serina Therapeutics",
+                               ticker_primary="SER", jurisdiction="US", in_existing_universe=False))
+    # limit=3, pin the cold non-M6 name + one buried M6 name → both guaranteed inside the limit
+    picked = store.entities_for_extraction("v1", limit=3, tickers=["SER", "AAA7"])
+    ids = [e.entity_id for e in picked]
+    assert ids[:2] == ["cik:cold", "cik:007"]        # pinned, in the order given
+    assert len(ids) == 3
+    # without pinning, the cold non-M6 name would NOT be in the first 3 (M6 tier sorts first)
+    unpinned = [e.entity_id for e in store.entities_for_extraction("v1", limit=3)]
+    assert "cik:cold" not in unpinned
