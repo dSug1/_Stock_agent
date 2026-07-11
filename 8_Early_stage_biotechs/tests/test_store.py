@@ -26,7 +26,7 @@ def _entity(**kw) -> Entity:
 
 
 def test_migration_sets_schema_version_and_tables(store):
-    assert store.user_version == SCHEMA_VERSION == 6
+    assert store.user_version == SCHEMA_VERSION == 7
     names = {r[0] for r in store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"entity", "listing", "signal", "reconciliation_queue", "audit_log", "run_meta"} <= names
     cols = {r[1] for r in store.conn.execute("PRAGMA table_info(entity)")}
@@ -37,7 +37,7 @@ def test_migration_is_idempotent(tmp_path):
     p = tmp_path / "t.db"
     Store(p).close()
     s2 = Store(p)          # reopening applies no migrations, does not error
-    assert s2.user_version == 6
+    assert s2.user_version == 7
     s2.close()
 
 

@@ -116,17 +116,24 @@ def pick_author(name: str, hints: list[str], candidates: list[dict]) -> Optional
 # ── works ────────────────────────────────────────────────────────────────────
 
 def parse_works(payload: dict) -> list[dict]:
-    """works response → [{id, title, year, date, cited_by_count, doi, institutions[], author_names[]}]."""
+    """works response → [{id, title, year, date, cited_by_count, doi, institutions[], author_names[],
+    author_ids[], institution_types[]}]. author_ids + institution_types power the §5.2 co-authorship /
+    industry-authored independence classification."""
     out = []
     for w in (payload or {}).get("results", []) or []:
-        insts, authors = [], []
+        insts, authors, aids, itypes = [], [], [], []
         for au in w.get("authorships") or []:
-            nm = (au.get("author") or {}).get("display_name")
-            if nm:
-                authors.append(nm)
+            a = au.get("author") or {}
+            if a.get("display_name"):
+                authors.append(a["display_name"])
+            aid = _short_id(a.get("id"))
+            if aid:
+                aids.append(aid)
             for inst in au.get("institutions") or []:
                 if inst.get("display_name"):
                     insts.append(inst["display_name"])
+                if inst.get("type"):
+                    itypes.append(inst["type"])
         out.append({
             "id": _short_id(w.get("id")),
             "title": w.get("title") or w.get("display_name"),
@@ -136,8 +143,37 @@ def parse_works(payload: dict) -> list[dict]:
             "doi": w.get("doi"),
             "institutions": insts,
             "author_names": authors,
+            "author_ids": aids,
+            "institution_types": itypes,
         })
     return out
+
+
+def coauthor_ids(author_id: str, *, mailto: str = "", max_works: int = 200,
+                 limiter: Optional[_net.RateLimiter] = None) -> set:
+    """The set of OpenAlex author IDs who have co-published with ``author_id`` (excluding the author).
+
+    This is the founder's collaboration/lineage network — a citing author in this set is NOT an
+    independent validator even at a different institution (former co-author, trainee, collaborator)."""
+    ids: set = set()
+    fetched = 0
+    page, per = 1, 100
+    while fetched < max_works:
+        url = (f"{BASE}/works?filter=author.id:{author_id}&per-page={per}&page={page}"
+               f"&select=authorships{_mailto(mailto)}")
+        payload = _get(url, limiter=limiter)
+        if not payload:
+            break
+        for w in payload.get("results", []) or []:
+            for au in w.get("authorships") or []:
+                aid = _short_id((au.get("author") or {}).get("id"))
+                if aid and aid != author_id:
+                    ids.add(aid)
+            fetched += 1
+        if len(payload.get("results", []) or []) < per:
+            break
+        page += 1
+    return ids
 
 
 def author_works(author_id: str, *, mailto: str = "", from_year: Optional[int] = None,

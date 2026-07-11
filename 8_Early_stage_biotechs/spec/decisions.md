@@ -6,6 +6,26 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D12 — §5.2 independence refinement is zero-LLM co-authorship-graph classification, not a Claude call
+**Spec ref:** §5.2. **Decision:** M10's string heuristic calls a citation "independent" whenever it's
+from a different institution — but a founder's former **co-authors/trainees** who moved elsewhere aren't
+independent validators. The refinement uses the **OpenAlex co-authorship graph** (free) rather than a
+Claude judgment — because "has this citing author ever co-published with the founder?" is a graph FACT,
+more reliable (and cheaper) than an LLM guess. `signals/independence.py` reclassifies each citation of a
+founder's foundational paper into **self · collaborator · same_institution · industry · independent**
+(precedence in that order; `industry` = a citing institution of OpenAlex type `company`), and computes a
+recency-decayed `independence_score = Σ 0.5^(age/5yr)` over the genuinely-independent citations. The
+refined `independence` **overwrites** the coarse M10 tag on the same signal_id, so `evidence_summary`'s
+`independent_citations` (and thus the scoring pre-filter + packet) automatically tighten to the TRUE
+count. Schema **v7** adds `founder.{independence_score, independence_at}`. Zero-LLM; per-founder persist;
+idempotent. **Live result (13 founders, 1,780 citations, free, 71s):** 193 collaborator + 124 industry
+citations that M10 had counted as "independent" were downgraded (~18%); e.g. **Tenax 198→133 independent
+(53 were ex-co-authors)**, while CSBR (182 indep, 1 collab) and cold-discovery Vistagen (191 indep,
+score 124.8) proved cleaner. **NOTE:** existing conviction scores were computed on the coarse counts —
+re-score with `8_score.py --force` to fold the refined evidence into conviction. **Status:** built
+2026-07-11 (`8_signals.py --independence`). **Deferred:** advisor/grant-network relationships (a Claude
+§5.2 call could add these on top); patents via **free PatentsView** (no subscription needed).
+
 ## D11 — Upper cap ceiling ($3B) + cold-discovery targeting + two-way export (§2.4); surfaced by a real run
 **Spec ref:** §2.1 (small/micro-cap), §2.4 (two-way sync), §9 (survivorship). **Trigger:** the first
 cold-first sweep (`in_existing_universe ASC` ordered by `entity_id`) surfaced **mega-caps** — Pfizer,

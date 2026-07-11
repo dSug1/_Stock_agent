@@ -23,7 +23,7 @@ from .models import AuditEntry, Entity, ReconRow, SignalRecord
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def now_iso() -> str:
@@ -213,6 +213,14 @@ def _migration_4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_7(conn: sqlite3.Connection) -> None:
+    """Schema v7 — §5.2 independence refinement. ``independence_score`` = recency-decayed count of
+    genuinely independent-lab citations (after excluding self / co-author / same-institution / industry)."""
+    conn.executescript(
+        "ALTER TABLE founder ADD COLUMN independence_score REAL;"
+        "ALTER TABLE founder ADD COLUMN independence_at TEXT;")
+
+
 def _migration_6(conn: sqlite3.Connection) -> None:
     """Schema v6 — upper market-cap ceiling. The thesis is small/micro-cap, but Phase 1 had only a
     floor, so mega-caps (Pfizer/Lilly-sized) sat in the active universe. ``above_ceiling`` flags them
@@ -245,7 +253,8 @@ def _migration_5(conn: sqlite3.Connection) -> None:
 
 
 # Ordered list of migrations; index+1 == target user_version after applying.
-_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5, _migration_6]
+_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5, _migration_6,
+               _migration_7]
 
 
 class Store:
@@ -627,6 +636,26 @@ class Store:
         )
         self.conn.commit()
 
+    def founders_for_independence(self, limit: int | None = None,
+                                  only_missing: bool = True) -> list[dict[str, Any]]:
+        """Founders (with entity + institution context) resolved to an OpenAlex author + foundational
+        paper, for the §5.2 co-authorship independence refinement. Default: only those not yet refined."""
+        sql = ("SELECT f.*, e.legal_name AS company_name FROM founder f "
+               "JOIN entity e ON e.entity_id=f.entity_id "
+               "WHERE e.is_live=1 AND e.below_floor=0 AND e.above_ceiling=0 "
+               "AND f.openalex_author_id IS NOT NULL AND f.foundational_work_id IS NOT NULL")
+        if only_missing:
+            sql += " AND f.independence_at IS NULL"
+        sql += " ORDER BY e.in_existing_universe DESC, f.id"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [dict(r) for r in self.conn.execute(sql)]
+
+    def set_founder_independence(self, founder_id: int, score: float) -> None:
+        self.conn.execute("UPDATE founder SET independence_score=?, independence_at=? WHERE id=?",
+                          (score, now_iso(), founder_id))
+        self.conn.commit()
+
     # ── scoring (Phase 2, §5.4) ────────────────────────────────────────────────
     def scoring_candidates(self, prompt_version: str, *, min_independent: int = 1,
                            require_capital: bool = True, limit: int | None = None,
@@ -675,14 +704,20 @@ class Store:
             "SELECT json_extract(raw_payload_json,'$.form'), COUNT(*) FROM signal "
             "WHERE entity_id=? AND signal_type='capital_markets' GROUP BY 1", (entity_id,))}
         founders = [{k: f[k] for k in ("name", "role", "institution", "is_company_officer",
-                                        "openalex_author_id", "foundational_work_id")}
+                                        "openalex_author_id", "foundational_work_id",
+                                        "independence_score")}
                     for f in self.founders_for(entity_id)]
+        # best (max) recency-decayed independence score across the entity's founders (§5.2), if refined
+        scores = [f["independence_score"] for f in founders if f.get("independence_score") is not None]
         return {
             "founders": founders,
             "literature": {"independent_citations": lit.get("independent", 0),
+                           "collaborator_citations": lit.get("collaborator", 0),
                            "same_institution_citations": lit.get("same_institution", 0),
+                           "industry_citations": lit.get("industry", 0),
                            "self_citations": lit.get("self", 0),
-                           "recent_publications": pubs},
+                           "recent_publications": pubs,
+                           "independence_score": round(max(scores), 1) if scores else None},
             "specialist_fund_crossings": funds,
             "capital_markets_forms": forms,
         }

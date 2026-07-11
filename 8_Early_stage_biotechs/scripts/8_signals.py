@@ -24,6 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from early_detection.config import load_config
 from early_detection.signals.capital_markets import ingest_capital_markets
+from early_detection.signals.independence import refine_independence
 from early_detection.signals.literature import ingest_literature
 from early_detection.signals.ownership import ingest_ownership
 from early_detection.store import Store
@@ -55,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="ingest specialist-fund 5%%+ ownership crossings (EDGAR full-text)")
     ap.add_argument("--literature", action="store_true",
                     help="ingest founder publications + independent-citation signals (OpenAlex)")
+    ap.add_argument("--independence", action="store_true",
+                    help="§5.2 refinement: reclassify citations via co-authorship graph (self/collaborator/"
+                         "same-institution/industry/independent) + independence_score (OpenAlex)")
     ap.add_argument("--stats", action="store_true", help="print signal stats and exit")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of entities/founders this run")
     ap.add_argument("--concurrency", type=int, default=6, help="EDGAR fetch workers (default 6)")
@@ -67,7 +71,17 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
 
-    if args.stats and not (args.capital_markets or args.ownership or args.literature):
+    if args.stats and not (args.capital_markets or args.ownership or args.literature or args.independence):
+        _print_stats(store)
+        store.close()
+        return 0
+
+    if args.independence:
+        print(f"§5.2 independence refinement (co-authorship graph) → {cfg.db_path}")
+        r = refine_independence(store, cfg, limit=args.limit)
+        print(f"\n  founders refined:   {r.refined}")
+        print(f"  citations classified: {r.citations}")
+        print(f"  by relationship:    {r.by_relationship}")
         _print_stats(store)
         store.close()
         return 0
