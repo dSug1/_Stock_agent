@@ -23,7 +23,7 @@ from .models import AuditEntry, Entity, ReconRow, SignalRecord
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def now_iso() -> str:
@@ -174,8 +174,35 @@ def _migration_2(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_3(conn: sqlite3.Connection) -> None:
+    """Schema v3 — founder-lineage (spec §5.1 Claude extraction). The `founder` table is the per-person
+    join surface the literature signal (§3.1) queries by name; entity carries extraction bookkeeping so
+    a prompt-version bump re-opens everyone (identity/prompt-version skip-cache)."""
+    conn.executescript(
+        """
+        CREATE TABLE founder (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_id          TEXT NOT NULL,
+            name               TEXT NOT NULL,
+            role               TEXT,
+            institution        TEXT,
+            is_company_officer INTEGER NOT NULL DEFAULT 0,
+            source             TEXT,               -- e.g. "claude:web_search"
+            extracted_at       TEXT,
+            UNIQUE (entity_id, name)
+        );
+        CREATE INDEX ix_founder_entity ON founder(entity_id);
+        CREATE INDEX ix_founder_name ON founder(name);
+
+        ALTER TABLE entity ADD COLUMN academic_affiliations   TEXT;   -- JSON array
+        ALTER TABLE entity ADD COLUMN founder_extracted_at    TEXT;
+        ALTER TABLE entity ADD COLUMN founder_prompt_version  TEXT;
+        """
+    )
+
+
 # Ordered list of migrations; index+1 == target user_version after applying.
-_MIGRATIONS = [_migration_1, _migration_2]
+_MIGRATIONS = [_migration_1, _migration_2, _migration_3]
 
 
 class Store:
@@ -376,6 +403,9 @@ class Store:
             in_existing_universe=bool(row["in_existing_universe"]), is_live=bool(row["is_live"]),
             source_provenance=_loads(row["source_provenance"], []),
             first_seen=row["first_seen"], last_seen=row["last_seen"], enriched_at=row["enriched_at"],
+            academic_affiliations=_loads(row["academic_affiliations"], []),
+            founder_extracted_at=row["founder_extracted_at"],
+            founder_prompt_version=row["founder_prompt_version"],
         )
 
     # ── listing ──────────────────────────────────────────────────────────────
@@ -469,6 +499,54 @@ class Store:
         rows = self.conn.execute(
             "SELECT * FROM signal WHERE entity_id=? ORDER BY event_date DESC", (entity_id,)).fetchall()
         return [{**dict(r), "raw_payload": _loads(r["raw_payload_json"], None)} for r in rows]
+
+    # ── founder-lineage extraction (Phase 2, §5.1) ─────────────────────────────
+    def entities_for_extraction(self, prompt_version: str, limit: int | None = None) -> list[Entity]:
+        """Active-universe entities not yet founder-extracted at ``prompt_version`` (identity/prompt-
+        version skip-cache — a prompt bump re-opens everyone). Prioritizes the M6 tier + named cos."""
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 "
+               "AND (founder_prompt_version IS NULL OR founder_prompt_version != ?) "
+               "ORDER BY in_existing_universe DESC, entity_id")
+        params: tuple = (prompt_version,)
+        if limit:
+            sql += " LIMIT ?"
+            params = (prompt_version, int(limit))
+        return [self._row_to_entity(r) for r in self.conn.execute(sql, params)]
+
+    def save_founders(self, entity_id: str, *, founders: list[dict], affiliations: list[str],
+                      prompt_version: str, source: str = "claude:web_search") -> None:
+        """Persist an extraction result for one entity (idempotent upsert per founder). Stamps the
+        entity's ``founder_prompt_version`` so it isn't re-extracted at this prompt version."""
+        ts = now_iso()
+        for f in founders or []:
+            name = (f.get("name") or "").strip()
+            if not name:
+                continue
+            self.conn.execute(
+                """INSERT INTO founder (entity_id, name, role, institution, is_company_officer,
+                       source, extracted_at)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(entity_id, name) DO UPDATE SET
+                       role=COALESCE(excluded.role, founder.role),
+                       institution=COALESCE(excluded.institution, founder.institution),
+                       is_company_officer=excluded.is_company_officer,
+                       source=excluded.source, extracted_at=excluded.extracted_at""",
+                (entity_id, name, f.get("role"), f.get("institution"),
+                 int(bool(f.get("is_company_officer"))), source, ts),
+            )
+        self.conn.execute(
+            "UPDATE entity SET academic_affiliations=?, founder_extracted_at=?, founder_prompt_version=? "
+            "WHERE entity_id=?",
+            (_dumps(affiliations or []), ts, prompt_version, entity_id),
+        )
+        self.conn.commit()
+
+    def founders_for(self, entity_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM founder WHERE entity_id=?", (entity_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_founders(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM founder").fetchone()[0]
 
     # ── audit ──────────────────────────────────────────────────────────────────
     def audit(self, entry: AuditEntry) -> None:

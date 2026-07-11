@@ -6,6 +6,28 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D8 — Founder-lineage extraction is the first Claude spend; cheap Haiku tier, gated, lessons-applied
+**Spec ref:** §5.1, §5.5. **Decision:** the first Claude call in Module 8 is **founder-lineage
+extraction** — per active-universe entity, Claude researches the scientific founders / key inventors /
+SAB via web_search and returns a structured roster → the `founder` table (schema **v3**), the join
+surface the literature/independent-citation signal (§3.1/§5.2) will key on. Runs on the **cheap Haiku
+tier** (`claude-haiku-4-5`, §5.5) with the **basic `web_search_20250305`** variant — it honors
+`max_uses`, is ~10× faster than the dynamic `web_search_20260209`, and is the only web_search valid on
+Haiku ([[feedback_claude_web_search_variant_and_output_cap]]). All the ported dispatch lessons apply
+([[feedback_reuse_claude_dispatch_patterns]], [[feedback_persist_during_long_api_batches]]): forced
+structured output (json_schema) sized to full `max_output_tokens` so JSON isn't truncated→dropped;
+**Batch API default** (50%) with the batch_id persisted to `data/extract_batch_id.txt` before polling
+for `--resume`; realtime async fan-out for small runs; **per-entity persist**; **skip-cache on identity
++ prompt version** (`extraction_prompt_version` bump re-opens everyone); a mandatory `[y/N]` cost gate +
+`max_usd_per_run` hard guard; untrusted company text delimited as data (model output only writes the DB).
+Cost estimate scaled by `cost_calibration_factor=0.10` [[project_anthropic_cost_calibration]]. Model IDs
++ pricing are current API facts (claude-api skill). **Live-validated (2 entities, ~$0.01, 22s):** real,
+verifiable founders (Stuart Rich@Northwestern for Tenax; Michael Hays for NRC Health); where no
+institution was found it returned "Unknown" — the never-invent discipline held on a real call.
+**Status:** built 2026-07-11 (`clients/anthropic_client.py`, `extraction.py`, `scripts/8_extract.py`).
+**Deferred:** literature signal (§3.1 OpenAlex, keyed on these founders), independence classification
+(§5.2), the D3 stack-convergence scoring rubric (§5.4). Full sweep not yet run (~$0.10–0.50 at scale).
+
 ## D7 — Ownership-crossing signal via EDGAR full-text (efts), fund-first; the M7 13D/G gap closed
 **Spec ref:** §3.5 headline. **Decision:** the specialist-fund 5%+ crossings that M7 structurally
 couldn't get (13D/G index under the *investor's* CIK, not the subject's) are captured via the EDGAR

@@ -54,6 +54,14 @@ class Config:
     # Specialist healthcare/biotech fund watchlist (spec §3.5) — a 5%+ crossing (SC 13D/G) by one of
     # these is the headline capital-markets signal. Queried against EDGAR full-text (efts). Names are
     # matched case/normalization-insensitively against filing display_names.
+    # Phase-2 Claude founder-lineage extraction (spec §5.1) — cheap tier + hard spend cap.
+    extraction_model: str = "claude-haiku-4-5"        # cheap tier per §5.5 (basic web_search variant)
+    extraction_prompt_version: str = "v1"             # bump to re-open every entity (skip-cache key)
+    extraction_max_output_tokens: int = 6000          # full response — undersizing truncates JSON → dropped
+    extraction_web_search_max_uses: int = 4           # bounded so the server tool loop finishes in one call
+    max_usd_per_run: float = 5.0                       # hard guard on any single dispatch
+    cost_calibration_factor: float = 0.10             # scales script-computed cost → actual invoice [[cost calib]]
+
     specialist_funds: tuple[str, ...] = (
         "Baker Bros", "RA Capital", "OrbiMed", "Perceptive Advisors", "BVF Partners",
         "Cormorant Asset Management", "EcoR1 Capital", "Deep Track Capital", "Avoro Capital",
@@ -89,6 +97,15 @@ def load_config(config_path: Path | None = None) -> Config:
     material_forms = tuple(raw.get("material_forms") or defaults.material_forms)
     specialist_funds = tuple(raw.get("specialist_funds") or defaults.specialist_funds)
 
+    extraction_kwargs = dict(
+        extraction_model=str(raw.get("extraction_model", defaults.extraction_model)),
+        extraction_prompt_version=str(raw.get("extraction_prompt_version", defaults.extraction_prompt_version)),
+        extraction_max_output_tokens=int(raw.get("extraction_max_output_tokens", defaults.extraction_max_output_tokens)),
+        extraction_web_search_max_uses=int(raw.get("extraction_web_search_max_uses", defaults.extraction_web_search_max_uses)),
+        max_usd_per_run=float(raw.get("max_usd_per_run", defaults.max_usd_per_run)),
+        cost_calibration_factor=float(raw.get("cost_calibration_factor", defaults.cost_calibration_factor)),
+    )
+
     return Config(
         db_path=db_path,
         m6_store_path=m6_path,
@@ -100,4 +117,5 @@ def load_config(config_path: Path | None = None) -> Config:
         material_forms=material_forms,
         signal_lookback_days=int(raw.get("signal_lookback_days", defaults.signal_lookback_days)),
         specialist_funds=specialist_funds,
+        **extraction_kwargs,
     )

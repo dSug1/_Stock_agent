@@ -76,6 +76,9 @@ class Entity:
     first_seen: Optional[str] = None
     last_seen: Optional[str] = None
     enriched_at: Optional[str] = None             # when market data was last fetched
+    academic_affiliations: list[str] = field(default_factory=list)   # §5.1 Claude extraction output
+    founder_extracted_at: Optional[str] = None
+    founder_prompt_version: Optional[str] = None  # skip-cache key (a prompt bump re-opens the entity)
 
 
 @dataclass(frozen=True)
