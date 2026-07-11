@@ -124,13 +124,14 @@ def estimate_usd(cfg: Config, n: int) -> float:
 
 
 def extract_founders(store: Store, cfg: Config, *, client: AnthropicClient, limit: int | None = None,
-                     use_batch: bool = True, concurrency: int = 6,
+                     use_batch: bool = True, concurrency: int = 6, cold_first: bool = False,
                      resume_batch_id: Optional[str] = None,
                      on_batch_id=None) -> ExtractResult:
     """Extract founder lineage for entities not yet done at this prompt version. ``client`` is injected
-    (real ``AnthropicClient`` in the CLI; a fake in tests). Persists per entity as results arrive."""
+    (real ``AnthropicClient`` in the CLI; a fake in tests). Persists per entity as results arrive.
+    ``cold_first`` prioritizes cold-discovery (non-M6) names."""
     pv = cfg.extraction_prompt_version
-    todo = store.entities_for_extraction(pv, limit=limit)
+    todo = store.entities_for_extraction(pv, limit=limit, cold_first=cold_first)
     res = ExtractResult(attempted=len(todo), est_usd=estimate_usd(cfg, len(todo)))
     log.info("extract: %d entities need founder lineage at prompt %s", len(todo), pv)
 

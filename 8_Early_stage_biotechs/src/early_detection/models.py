@@ -69,6 +69,7 @@ class Entity:
     mktcap_ccy: Optional[str] = None              # native currency of the cap before USD conversion
     mktcap_unknown: bool = False
     below_floor: bool = False                     # known cap < floor → excluded from active universe (flag, not delete)
+    above_ceiling: bool = False                   # known cap > ceiling → excluded (thesis is small/micro-cap)
     ipo_date: Optional[str] = None                # listing first-trade date (ISO); future age signal
     in_existing_universe: bool = False
     is_live: bool = True

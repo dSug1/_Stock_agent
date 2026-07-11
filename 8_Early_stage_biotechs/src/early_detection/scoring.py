@@ -189,3 +189,35 @@ def write_digest(store: Store, cfg: Config, out_path) -> int:
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     Path(out_path).write_text("\n".join(lines), encoding="utf-8")
     return len(rows)
+
+
+# ── two-way export back to the existing pipeline (spec §2.4) ─────────────────────
+
+_EXPORT_FLAGS = ("deep-dive-candidate", "surveil")
+
+
+def write_watchlist(store: Store, cfg: Config, out_path,
+                    flags: tuple[str, ...] = _EXPORT_FLAGS) -> int:
+    """Export scored candidates as a flat CSV the existing universe pipeline can ingest (§2.4 two-way
+    sync — a discovered name that clears the bar flows back out, not just one-way in). Deep-dive first.
+
+    Columns: ticker, exchange, name, jurisdiction, conviction_flag, conviction_score,
+    in_existing_universe, independent_validation. CSV is written with the stdlib writer (proper quoting)."""
+    import csv
+    from pathlib import Path
+
+    rows = [r for r in store.top_scores(cfg.scoring_prompt_version, limit=1000)
+            if r["conviction_flag"] in flags]
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["ticker", "exchange", "name", "jurisdiction", "conviction_flag",
+                    "conviction_score", "in_existing_universe", "independent_validation"])
+        for r in rows:
+            ent = store.get_entity(r["entity_id"])
+            j = r["json"] or {}
+            w.writerow([r["ticker_primary"] or "", ent.exchange_primary if ent else "",
+                        r["legal_name"], r["jurisdiction"] or "", r["conviction_flag"],
+                        r["conviction_score"], int(bool(r["in_existing_universe"])),
+                        j.get("independent_validation_status", "")])
+    return len(rows)

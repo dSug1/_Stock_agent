@@ -24,11 +24,12 @@ for _stream in (sys.stdout, sys.stderr):
 
 from early_detection.clients.anthropic_client import AnthropicClient
 from early_detection.config import COMPONENT_ROOT, DATA_DIR, load_config
-from early_detection.scoring import estimate_usd, score_candidates, write_digest
+from early_detection.scoring import estimate_usd, score_candidates, write_digest, write_watchlist
 from early_detection.store import Store
 
 _BATCH_ID_FILE = DATA_DIR / "score_batch_id.txt"
 _DIGEST = COMPONENT_ROOT / "Outputs" / "digest.md"
+_WATCHLIST = COMPONENT_ROOT / "Outputs" / "watchlist.csv"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--force", action="store_true", help="re-score even entities already scored at this prompt")
     ap.add_argument("--resume", action="store_true", help="re-attach the last submitted batch and collect")
-    ap.add_argument("--digest", action="store_true", help="(re)write the ranked digest and exit (no spend)")
+    ap.add_argument("--digest", action="store_true",
+                    help="(re)write the ranked digest + watchlist export and exit (no spend)")
     ap.add_argument("--stats", action="store_true", help="print scoring stats and exit")
     ap.add_argument("--yes", action="store_true", help="skip the [y/N] gate")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -55,7 +57,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.digest:
         n = write_digest(store, cfg, _DIGEST)
-        print(f"Wrote digest ({n} candidates) → {_DIGEST}")
+        w = write_watchlist(store, cfg, _WATCHLIST)
+        print(f"Wrote digest ({n}) → {_DIGEST}")
+        print(f"Wrote watchlist ({w} deep-dive/surveil) → {_WATCHLIST}")
         store.close(); return 0
 
     resume_id = None
@@ -97,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  spent (calibrated): ${res.spent_usd:,.2f}")
 
     nrows = write_digest(store, cfg, _DIGEST)
-    print(f"\n  digest ({nrows} candidates) → {_DIGEST}")
+    wrows = write_watchlist(store, cfg, _WATCHLIST)
+    print(f"\n  digest ({nrows}) → {_DIGEST}")
+    print(f"  watchlist ({wrows} deep-dive/surveil) → {_WATCHLIST}  (§2.4 two-way export)")
     store.close()
     return 0
 

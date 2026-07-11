@@ -26,7 +26,7 @@ def _entity(**kw) -> Entity:
 
 
 def test_migration_sets_schema_version_and_tables(store):
-    assert store.user_version == SCHEMA_VERSION == 5
+    assert store.user_version == SCHEMA_VERSION == 6
     names = {r[0] for r in store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"entity", "listing", "signal", "reconciliation_queue", "audit_log", "run_meta"} <= names
     cols = {r[1] for r in store.conn.execute("PRAGMA table_info(entity)")}
@@ -37,7 +37,7 @@ def test_migration_is_idempotent(tmp_path):
     p = tmp_path / "t.db"
     Store(p).close()
     s2 = Store(p)          # reopening applies no migrations, does not error
-    assert s2.user_version == 5
+    assert s2.user_version == 6
     s2.close()
 
 
@@ -57,6 +57,27 @@ def test_apply_cap_miss_keeps_unknown_and_not_floored(store):
     got = store.get_entity("cik:0001")
     assert got.mktcap_unknown is True and got.below_floor is False   # missing ≠ small
     assert got.enriched_at is not None                                # stamped so we don't retry forever
+
+
+def test_apply_cap_flags_above_ceiling_and_excludes_from_active(store):
+    store.upsert_entity(_entity(entity_id="cik:0001", ticker_primary="MEGA", cik="0000000001", mktcap_unknown=True))
+    below = store.apply_cap("cik:0001", market_cap_usd=5e10, currency="USD", floor_usd=1e7, ceiling_usd=3e9)
+    assert below is False
+    got = store.get_entity("cik:0001")
+    assert got.above_ceiling is True and got.below_floor is False and got.is_live is True  # flag, not delete
+    # excluded from the active-universe signal work-list (mega-cap, thesis is small/micro)
+    assert "cik:0001" not in {e.entity_id for e in store.entities_for_signals()}
+
+
+def test_recompute_floors_sets_both_bands(store):
+    store.upsert_entity(_entity(entity_id="cik:m", ticker_primary="M", market_cap_usd=5e10))
+    store.upsert_entity(_entity(entity_id="cik:s", ticker_primary="S", market_cap_usd=5e6))
+    store.upsert_entity(_entity(entity_id="cik:ok", ticker_primary="OK", market_cap_usd=5e8))
+    n = store.recompute_floors(1e7, 3e9)
+    assert n == 2                                              # mega (above) + small (below)
+    assert store.get_entity("cik:m").above_ceiling is True
+    assert store.get_entity("cik:s").below_floor is True
+    assert store.get_entity("cik:ok").above_ceiling is False and store.get_entity("cik:ok").below_floor is False
 
 
 def test_recompute_floors(store):

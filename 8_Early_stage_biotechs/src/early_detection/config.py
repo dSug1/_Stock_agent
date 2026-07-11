@@ -39,6 +39,7 @@ class Config:
     db_path: Path = DEFAULT_DB_PATH
     m6_store_path: Path = DEFAULT_M6_STORE
     mktcap_floor_usd: float = 10_000_000.0            # operator decision: $10M floor
+    mktcap_ceiling_usd: float = 3_000_000_000.0       # $3B ceiling — the thesis is small/micro-cap (matches M6's band); flag, not delete
     sic_allow: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SIC_ALLOW))
     markets: tuple[str, ...] = ("US", "CA")           # Phase 1 scope
     gleif_enrich: bool = False                        # best-effort LEI enrich (phase1 §8 Q1); off by default
@@ -124,6 +125,7 @@ def load_config(config_path: Path | None = None) -> Config:
         db_path=db_path,
         m6_store_path=m6_path,
         mktcap_floor_usd=float(raw.get("mktcap_floor_usd", 10_000_000.0)),
+        mktcap_ceiling_usd=float(raw.get("mktcap_ceiling_usd", 3_000_000_000.0)),
         sic_allow=sic_allow,
         markets=markets,
         gleif_enrich=bool(raw.get("gleif_enrich", False)),

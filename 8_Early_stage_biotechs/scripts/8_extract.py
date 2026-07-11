@@ -46,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int, default=None, help="cap the number of entities this run")
     ap.add_argument("--realtime", action="store_true", help="use realtime fan-out instead of Batch API")
     ap.add_argument("--concurrency", type=int, default=6, help="realtime workers (default 6)")
+    ap.add_argument("--cold-first", action="store_true",
+                    help="prioritize cold-discovery (non-M6) names — the under-recognized end")
     ap.add_argument("--resume", action="store_true", help="re-attach the last submitted batch and collect")
     ap.add_argument("--stats", action="store_true", help="print extraction stats and exit")
     ap.add_argument("--yes", action="store_true", help="skip the [y/N] gate (for automation)")
@@ -70,7 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         resume_id = _BATCH_ID_FILE.read_text(encoding="utf-8").strip()
         print(f"Resuming batch {resume_id}")
 
-    n = len(store.entities_for_extraction(cfg.extraction_prompt_version, limit=args.limit))
+    n = len(store.entities_for_extraction(cfg.extraction_prompt_version, limit=args.limit,
+                                          cold_first=args.cold_first))
     if not resume_id:
         est = estimate_usd(cfg, n)
         print(f"Founder extraction → {cfg.db_path}")
@@ -94,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
 
     res = extract_founders(store, cfg, client=client, limit=args.limit,
                            use_batch=not args.realtime, concurrency=args.concurrency,
-                           resume_batch_id=resume_id, on_batch_id=_save_batch_id)
+                           cold_first=args.cold_first, resume_batch_id=resume_id,
+                           on_batch_id=_save_batch_id)
 
     print(f"\n  attempted:      {res.attempted}")
     print(f"  extracted:      {res.extracted}")

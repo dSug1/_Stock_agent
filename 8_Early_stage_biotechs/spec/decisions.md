@@ -6,6 +6,30 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D11 — Upper cap ceiling ($3B) + cold-discovery targeting + two-way export (§2.4); surfaced by a real run
+**Spec ref:** §2.1 (small/micro-cap), §2.4 (two-way sync), §9 (survivorship). **Trigger:** the first
+cold-first sweep (`in_existing_universe ASC` ordered by `entity_id`) surfaced **mega-caps** — Pfizer,
+Eli Lilly, BMY, Abbott — whose M9 founders were 19th-century industrialists (Eli Lilly the 1876
+apothecary) with no OpenAlex profile. Two root causes, both fixed:
+- **No upper ceiling.** Phase 1 had only the $10M floor, so 153 mega-caps (>$3B) sat in the active
+  universe — wrong for a small/micro-cap thesis (the scorer could surface Pfizer). Added
+  `mktcap_ceiling_usd = $3B` (matches M6's band) + an `above_ceiling` column (schema **v6**), set at
+  enrich/recompute. **Recall-safe: flag, not delete.** Active universe = `is_live=1 AND below_floor=0
+  AND above_ceiling=0`; added to every thesis work-list (signals/extract/literature/score/ownership).
+- **Cold-first now targets small caps.** `cold_first` orders `in_existing_universe ASC, market_cap ASC`
+  (smallest known cap first) — ordering by `entity_id` alone surfaced mega-caps.
+- **Two-way export (§2.4).** `write_watchlist` → `Outputs/watchlist.csv` (ticker/exchange/flag/score/…),
+  the deep-dive+surveil names in a format the existing pipeline can ingest — the module feeds back out,
+  not just one-way in. `8_score.py --digest`/run writes it.
+
+**Live result:** after applying the ceiling (153 mega excluded → 844 active) and re-running cold-first
+on the smallest names (Vistagen/Theriva/Jaguar/Kiora, all ~$10M), 4 micro-cap founders resolved → 386
+independent citations → **2 genuine cold-discovery candidates in the digest** (Theriva 52, Vistagen 42,
+both $10M, non-M6) alongside the existing-universe names. **§9 survivorship confirmed:** the module
+resolves founder-lineage names far better than no-academic-pedigree first-time founders — an honest,
+unfixed limitation. **Status:** built 2026-07-11 (`8_extract.py --cold-first`, ceiling in enrich,
+`8_score` watchlist). Cost note: the wasted ~$0.09 mega-cap extraction was the price of finding the bug.
+
 ## D10 — Stack-convergence scoring is the capstone; rules-pre-filter → Claude → ranked digest (§5.4/§7)
 **Spec ref:** §5.4, §5.5, §7; decision D3 (rubric defined fresh). **Decision:** the capstone fuses the
 assembled evidence per candidate into one routable conviction. It runs **only on candidates that clear

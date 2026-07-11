@@ -65,8 +65,8 @@ def enrich_caps(store: Store, cfg: Config, *, limit: int | None = None, per_sec:
         info = fetch(ent.ticker_primary) or {}
         usd = fx.to_usd(info.get("mktcap_native"), info.get("currency"))
         below = store.apply_cap(ent.entity_id, market_cap_usd=usd, currency=info.get("currency"),
-                                floor_usd=cfg.mktcap_floor_usd, ipo_date=info.get("ipo_date"),
-                                enriched_at=now_iso())
+                                floor_usd=cfg.mktcap_floor_usd, ceiling_usd=cfg.mktcap_ceiling_usd,
+                                ipo_date=info.get("ipo_date"), enriched_at=now_iso())
         if usd is None:
             res.misses += 1
             store.log(stage="enrich", action="flagged", entity_id=ent.entity_id,

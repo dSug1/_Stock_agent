@@ -23,7 +23,7 @@ from .models import AuditEntry, Entity, ReconRow, SignalRecord
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def now_iso() -> str:
@@ -213,6 +213,13 @@ def _migration_4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_6(conn: sqlite3.Connection) -> None:
+    """Schema v6 — upper market-cap ceiling. The thesis is small/micro-cap, but Phase 1 had only a
+    floor, so mega-caps (Pfizer/Lilly-sized) sat in the active universe. ``above_ceiling`` flags them
+    (recall-safe: flag, not delete). Active universe = below_floor=0 AND above_ceiling=0."""
+    conn.executescript("ALTER TABLE entity ADD COLUMN above_ceiling INTEGER NOT NULL DEFAULT 0;")
+
+
 def _migration_5(conn: sqlite3.Connection) -> None:
     """Schema v5 — the stack-convergence scoring layer (spec §5.4, decision D3). One score row per
     (entity, prompt_version): the Claude conviction call that fuses literature + ownership +
@@ -238,7 +245,7 @@ def _migration_5(conn: sqlite3.Connection) -> None:
 
 
 # Ordered list of migrations; index+1 == target user_version after applying.
-_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5]
+_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4, _migration_5, _migration_6]
 
 
 class Store:
@@ -375,13 +382,13 @@ class Store:
         return [self._row_to_entity(r) for r in self.conn.execute(sql)]
 
     def apply_cap(self, entity_id: str, *, market_cap_usd: Optional[float], currency: Optional[str],
-                  floor_usd: float, ipo_date: Optional[str] = None,
+                  floor_usd: float, ceiling_usd: Optional[float] = None, ipo_date: Optional[str] = None,
                   enriched_at: Optional[str] = None) -> Optional[bool]:
         """Persist an enrich result for one entity. Returns ``below_floor`` (None if cap still unknown).
 
-        A known cap sets ``market_cap_usd`` + clears ``mktcap_unknown`` + computes ``below_floor``.
-        A miss (cap None) only stamps ``enriched_at`` so we don't retry it every run, and leaves the
-        entity KEPT + ``mktcap_unknown`` (missing data is never a delete)."""
+        A known cap sets ``market_cap_usd`` + clears ``mktcap_unknown`` + computes ``below_floor`` and
+        (if ``ceiling_usd`` given) ``above_ceiling``. A miss (cap None) only stamps ``enriched_at`` and
+        leaves the entity KEPT + ``mktcap_unknown`` (missing data is never a delete)."""
         ts = enriched_at or now_iso()
         if market_cap_usd is None:
             self.conn.execute("UPDATE entity SET enriched_at=?, ipo_date=COALESCE(?, ipo_date) "
@@ -389,10 +396,11 @@ class Store:
             self.conn.commit()
             return None
         below = market_cap_usd < floor_usd
+        above = bool(ceiling_usd) and market_cap_usd > ceiling_usd
         self.conn.execute(
             "UPDATE entity SET market_cap_usd=?, mktcap_ccy=?, mktcap_unknown=0, below_floor=?, "
-            "ipo_date=COALESCE(?, ipo_date), enriched_at=? WHERE entity_id=?",
-            (market_cap_usd, currency, int(below), ipo_date, ts, entity_id),
+            "above_ceiling=?, ipo_date=COALESCE(?, ipo_date), enriched_at=? WHERE entity_id=?",
+            (market_cap_usd, currency, int(below), int(above), ipo_date, ts, entity_id),
         )
         self.conn.commit()
         return below
@@ -414,17 +422,21 @@ class Store:
             "UPDATE entity SET lei=? WHERE entity_id=? AND (lei IS NULL OR lei='')", (lei, entity_id))
         self.conn.commit()
 
-    def recompute_floors(self, floor_usd: float) -> int:
-        """Set ``below_floor`` for every entity with a known cap (used after a floor-config change).
-
-        Returns the number of entities now flagged below floor. Unknown-cap rows are left at 0."""
+    def recompute_floors(self, floor_usd: float, ceiling_usd: Optional[float] = None) -> int:
+        """Set ``below_floor`` (and ``above_ceiling`` if ``ceiling_usd`` given) for every known-cap
+        entity, after a band-config change. Returns the count now OUT of band. Unknown-cap rows → 0."""
         self.conn.execute(
             "UPDATE entity SET below_floor = CASE WHEN market_cap_usd IS NOT NULL "
             "AND market_cap_usd < ? THEN 1 ELSE 0 END",
             (floor_usd,),
         )
+        if ceiling_usd:
+            self.conn.execute(
+                "UPDATE entity SET above_ceiling = CASE WHEN market_cap_usd IS NOT NULL "
+                "AND market_cap_usd > ? THEN 1 ELSE 0 END", (ceiling_usd,))
         self.conn.commit()
-        return self.conn.execute("SELECT COUNT(*) FROM entity WHERE below_floor=1").fetchone()[0]
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM entity WHERE below_floor=1 OR above_ceiling=1").fetchone()[0]
 
     @staticmethod
     def _row_to_entity(row: sqlite3.Row) -> Entity:
@@ -435,7 +447,8 @@ class Store:
             filer_type=row["filer_type"], sector_code_raw=row["sector_code_raw"],
             sector_code_normalized=row["sector_code_normalized"], market_cap_usd=row["market_cap_usd"],
             mktcap_ccy=row["mktcap_ccy"], mktcap_unknown=bool(row["mktcap_unknown"]),
-            below_floor=bool(row["below_floor"]), ipo_date=row["ipo_date"],
+            below_floor=bool(row["below_floor"]), above_ceiling=bool(row["above_ceiling"]),
+            ipo_date=row["ipo_date"],
             in_existing_universe=bool(row["in_existing_universe"]), is_live=bool(row["is_live"]),
             source_provenance=_loads(row["source_provenance"], []),
             first_seen=row["first_seen"], last_seen=row["last_seen"], enriched_at=row["enriched_at"],
@@ -509,8 +522,8 @@ class Store:
 
         Includes unknown-cap names (missing ≠ small) — a fresh 13D on an unpriced micro-cap is exactly
         the early signal — but excludes known-below-floor ones."""
-        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 AND cik IS NOT NULL "
-               "ORDER BY in_existing_universe DESC, entity_id")
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 AND above_ceiling=0 "
+               "AND cik IS NOT NULL ORDER BY in_existing_universe DESC, entity_id")
         if limit:
             sql += f" LIMIT {int(limit)}"
         return [self._row_to_entity(r) for r in self.conn.execute(sql)]
@@ -522,7 +535,7 @@ class Store:
         signals target."""
         sql = "SELECT cik, entity_id FROM entity WHERE cik IS NOT NULL AND is_live=1"
         if active_only:
-            sql += " AND below_floor=0"
+            sql += " AND below_floor=0 AND above_ceiling=0"
         return {_norm_cik(r["cik"]): r["entity_id"] for r in self.conn.execute(sql) if r["cik"]}
 
     def count_signals(self, signal_type: str | None = None) -> int:
@@ -537,12 +550,19 @@ class Store:
         return [{**dict(r), "raw_payload": _loads(r["raw_payload_json"], None)} for r in rows]
 
     # ── founder-lineage extraction (Phase 2, §5.1) ─────────────────────────────
-    def entities_for_extraction(self, prompt_version: str, limit: int | None = None) -> list[Entity]:
+    def entities_for_extraction(self, prompt_version: str, limit: int | None = None,
+                                cold_first: bool = False) -> list[Entity]:
         """Active-universe entities not yet founder-extracted at ``prompt_version`` (identity/prompt-
-        version skip-cache — a prompt bump re-opens everyone). Prioritizes the M6 tier + named cos."""
-        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 "
+        version skip-cache — a prompt bump re-opens everyone). Default order prioritizes the M6 tier;
+        ``cold_first`` flips it to prioritize **cold-discovery** (non-M6) names — the under-recognized
+        end where the thesis has the most edge (the M6-tier names are already covered elsewhere)."""
+        # cold_first prioritizes cold-discovery names AND the small-cap end (smallest known cap first)
+        # — the actual thesis; ordering by entity_id alone surfaced mega-caps (Pfizer/Lilly).
+        order = ("in_existing_universe ASC, (market_cap_usd IS NULL), market_cap_usd ASC"
+                 if cold_first else "in_existing_universe DESC")
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND below_floor=0 AND above_ceiling=0 "
                "AND (founder_prompt_version IS NULL OR founder_prompt_version != ?) "
-               "ORDER BY in_existing_universe DESC, entity_id")
+               f"ORDER BY {order}, entity_id")
         params: tuple = (prompt_version,)
         if limit:
             sql += " LIMIT ?"
@@ -591,7 +611,7 @@ class Store:
         only those not yet resolved (``literature_at`` NULL); prioritizes the M6 priority tier."""
         sql = ("SELECT f.*, e.legal_name AS company_name, e.in_existing_universe AS in_universe "
                "FROM founder f JOIN entity e ON e.entity_id=f.entity_id "
-               "WHERE e.is_live=1 AND e.below_floor=0")
+               "WHERE e.is_live=1 AND e.below_floor=0 AND e.above_ceiling=0")
         if only_missing:
             sql += " AND f.literature_at IS NULL"
         sql += " ORDER BY e.in_existing_universe DESC, f.id"
@@ -623,7 +643,7 @@ class Store:
             "AND sc.prompt_version=?)")
         sql = f"""
             SELECT e.* FROM entity e
-            WHERE e.is_live=1 AND e.below_floor=0
+            WHERE e.is_live=1 AND e.below_floor=0 AND e.above_ceiling=0
               AND (SELECT COUNT(*) FROM signal s WHERE s.entity_id=e.entity_id
                    AND s.signal_type='literature'
                    AND json_extract(s.raw_payload_json,'$.kind')='citation'

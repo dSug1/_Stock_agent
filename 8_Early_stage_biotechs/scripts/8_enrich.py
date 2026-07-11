@@ -59,8 +59,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.recompute_floor:
-        n = store.recompute_floors(cfg.mktcap_floor_usd)
-        print(f"recomputed below_floor at ${cfg.mktcap_floor_usd:,.0f}: {n} entities below floor")
+        n = store.recompute_floors(cfg.mktcap_floor_usd, cfg.mktcap_ceiling_usd)
+        print(f"recomputed bands (floor ${cfg.mktcap_floor_usd:,.0f} / ceiling "
+              f"${cfg.mktcap_ceiling_usd:,.0f}): {n} entities out of band")
         store.close()
         return 0
 
