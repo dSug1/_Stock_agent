@@ -23,7 +23,7 @@ from .models import AuditEntry, Entity, ReconRow, SignalRecord
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def now_iso() -> str:
@@ -201,8 +201,20 @@ def _migration_3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_4(conn: sqlite3.Connection) -> None:
+    """Schema v4 — literature/citation resolution (spec §3.1). Each founder resolves to an OpenAlex
+    author + a foundational paper whose independent citations (§5.2) are the module's thesis signal."""
+    conn.executescript(
+        """
+        ALTER TABLE founder ADD COLUMN openalex_author_id  TEXT;
+        ALTER TABLE founder ADD COLUMN foundational_work_id TEXT;
+        ALTER TABLE founder ADD COLUMN literature_at        TEXT;
+        """
+    )
+
+
 # Ordered list of migrations; index+1 == target user_version after applying.
-_MIGRATIONS = [_migration_1, _migration_2, _migration_3]
+_MIGRATIONS = [_migration_1, _migration_2, _migration_3, _migration_4]
 
 
 class Store:
@@ -547,6 +559,29 @@ class Store:
 
     def count_founders(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM founder").fetchone()[0]
+
+    # ── literature/citation resolution (Phase 2, §3.1) ─────────────────────────
+    def founders_for_literature(self, limit: int | None = None,
+                                only_missing: bool = True) -> list[dict[str, Any]]:
+        """Founders (with entity + institution context) to run the literature signal for. By default
+        only those not yet resolved (``literature_at`` NULL); prioritizes the M6 priority tier."""
+        sql = ("SELECT f.*, e.legal_name AS company_name, e.in_existing_universe AS in_universe "
+               "FROM founder f JOIN entity e ON e.entity_id=f.entity_id "
+               "WHERE e.is_live=1 AND e.below_floor=0")
+        if only_missing:
+            sql += " AND f.literature_at IS NULL"
+        sql += " ORDER BY e.in_existing_universe DESC, f.id"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [dict(r) for r in self.conn.execute(sql)]
+
+    def set_founder_literature(self, founder_id: int, *, author_id: Optional[str],
+                               foundational_work_id: Optional[str]) -> None:
+        self.conn.execute(
+            "UPDATE founder SET openalex_author_id=?, foundational_work_id=?, literature_at=? WHERE id=?",
+            (author_id, foundational_work_id, now_iso(), founder_id),
+        )
+        self.conn.commit()
 
     # ── audit ──────────────────────────────────────────────────────────────────
     def audit(self, entry: AuditEntry) -> None:

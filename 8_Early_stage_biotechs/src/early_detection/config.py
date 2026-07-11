@@ -51,6 +51,11 @@ class Config:
         "S-1", "S-3", "424B5", "424B3",                # registration / shelf / ATM raises
     )
     signal_lookback_days: int = 180                   # only ingest filings this recent
+    # Phase-2 literature/citation signal (spec §3.1, OpenAlex). mailto → polite pool (better rate limit).
+    openalex_mailto: str = ""                          # a contact email; falls back to the .env USER_AGENT email
+    literature_pub_years: int = 4                      # recent-publication window
+    literature_citation_years: int = 6                 # window for citations of the foundational paper
+    literature_max_citing: int = 200                   # cap citing-works fetched per foundational paper
     # Specialist healthcare/biotech fund watchlist (spec §3.5) — a 5%+ crossing (SC 13D/G) by one of
     # these is the headline capital-markets signal. Queried against EDGAR full-text (efts). Names are
     # matched case/normalization-insensitively against filing display_names.
@@ -117,5 +122,9 @@ def load_config(config_path: Path | None = None) -> Config:
         material_forms=material_forms,
         signal_lookback_days=int(raw.get("signal_lookback_days", defaults.signal_lookback_days)),
         specialist_funds=specialist_funds,
+        openalex_mailto=str(raw.get("openalex_mailto", defaults.openalex_mailto)),
+        literature_pub_years=int(raw.get("literature_pub_years", defaults.literature_pub_years)),
+        literature_citation_years=int(raw.get("literature_citation_years", defaults.literature_citation_years)),
+        literature_max_citing=int(raw.get("literature_max_citing", defaults.literature_max_citing)),
         **extraction_kwargs,
     )

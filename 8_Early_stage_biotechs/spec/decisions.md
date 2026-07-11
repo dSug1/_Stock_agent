@@ -6,6 +6,27 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D9 — Literature/citation signal via OpenAlex, founder-keyed; independent-citation heuristic; zero-LLM
+**Spec ref:** §3.1 (the module's thesis signal). **Decision:** for each M9 founder, resolve the OpenAlex
+author (free, no key — the spec's recommended source for author + citation-network data) and emit
+`literature` signals: recent **publications** by the founder + **citations of the founder's foundational
+paper**, each tagged by a cheap independence heuristic (self / same_institution / independent). The
+**independent** citations are what the module exists to surface (an independent lab building on a
+founder's science = under-recognized corroboration). Zero-LLM; Claude's §5.2 classification refines the
+heuristic later. **Re: M6's D9 OpenAlex dismissal** — that was for *company→institution* matching (thin
+small-biotech coverage); Module 8 uses *author→works→citations*, OpenAlex's forte, disambiguated on the
+founder's institution — the dismissal doesn't transfer. The rate-limit lesson does: polite pool
+(`mailto`), shared limiter, fail-open. **Author disambiguation is high-precision** (`pick_author`:
+name-token match + institution/company hint; unique or most-cited, else skip) — a wrong author →
+wrong papers → wrong signal. Foundational paper = the author's most-cited work; citing works pulled via
+`cites:` (capped `literature_max_citing`). Idempotent, per-founder persist, skip already-resolved
+(`literature_at`). Schema **v4** adds `founder.{openalex_author_id, foundational_work_id, literature_at}`.
+**Live-validated:** Stuart Rich (Tenax) resolved → foundational 1991 paper (3,507 cites) → **198
+independent-lab citations** + 11 recent pubs, 12s. The 2 founders with "Unknown" institution correctly
+skipped (recall conservative by design). **Status:** built 2026-07-11 (`clients/openalex.py`,
+`signals/literature.py`, `8_signals.py --literature`). **Deferred:** §5.2 Claude independence refinement;
+the full sweep depends on the full M9 founder sweep first.
+
 ## D8 — Founder-lineage extraction is the first Claude spend; cheap Haiku tier, gated, lessons-applied
 **Spec ref:** §5.1, §5.5. **Decision:** the first Claude call in Module 8 is **founder-lineage
 extraction** — per active-universe entity, Claude researches the scientific founders / key inventors /

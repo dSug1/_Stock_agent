@@ -24,6 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from early_detection.config import load_config
 from early_detection.signals.capital_markets import ingest_capital_markets
+from early_detection.signals.literature import ingest_literature
 from early_detection.signals.ownership import ingest_ownership
 from early_detection.store import Store
 
@@ -32,6 +33,7 @@ def _print_stats(store: Store) -> None:
     total = store.count_signals()
     cap = store.count_signals("capital_markets")
     own = store.count_signals("ownership_crossing")
+    lit = store.count_signals("literature")
     with_sig = store.conn.execute(
         "SELECT COUNT(DISTINCT entity_id) FROM signal WHERE entity_id IS NOT NULL").fetchone()[0]
     by_form = store.conn.execute(
@@ -40,6 +42,7 @@ def _print_stats(store: Store) -> None:
     print(f"\n  signals total:          {total}")
     print(f"  capital_markets:        {cap}")
     print(f"  ownership_crossing:     {own}")
+    print(f"  literature:             {lit}")
     print(f"  entities with a signal: {with_sig}")
     if by_form:
         print("  by form: " + ", ".join(f"{f}={n}" for f, n in by_form))
@@ -50,8 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--capital-markets", action="store_true", help="ingest EDGAR capital-markets signals")
     ap.add_argument("--ownership", action="store_true",
                     help="ingest specialist-fund 5%%+ ownership crossings (EDGAR full-text)")
+    ap.add_argument("--literature", action="store_true",
+                    help="ingest founder publications + independent-citation signals (OpenAlex)")
     ap.add_argument("--stats", action="store_true", help="print signal stats and exit")
-    ap.add_argument("--limit", type=int, default=None, help="cap the number of entities this run")
+    ap.add_argument("--limit", type=int, default=None, help="cap the number of entities/founders this run")
     ap.add_argument("--concurrency", type=int, default=6, help="EDGAR fetch workers (default 6)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
@@ -62,7 +67,20 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
     store = Store(cfg.db_path)
 
-    if args.stats and not (args.capital_markets or args.ownership):
+    if args.stats and not (args.capital_markets or args.ownership or args.literature):
+        _print_stats(store)
+        store.close()
+        return 0
+
+    if args.literature:
+        print(f"Ingesting literature/citation signals → {cfg.db_path}  (OpenAlex, founder-keyed)")
+        r = ingest_literature(store, cfg, limit=args.limit)
+        print(f"\n  founders scanned:      {r.founders}")
+        print(f"  authors resolved:      {r.authors_resolved}")
+        print(f"  publications:          {r.publications}")
+        print(f"  citations:             {r.citations}")
+        print(f"  independent citations: {r.independent_citations}")
+        print(f"  by independence:       {r.by_independence}")
         _print_stats(store)
         store.close()
         return 0
