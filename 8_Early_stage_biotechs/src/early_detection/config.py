@@ -44,12 +44,21 @@ class Config:
     markets: tuple[str, ...] = ("US", "CA")           # Phase 1 scope
     gleif_enrich: bool = False                        # best-effort LEI enrich (phase1 §8 Q1); off by default
     user_agent: str = ""                              # SEC requires a UA w/ email; read from env at client init
-    # Phase-2 capital-markets signal (spec §3.5): material EDGAR forms + lookback window.
+    # Phase-2 capital-markets signal (spec §3.5): material EDGAR forms + lookback window. Includes
+    # foreign-private-issuer (FPI) forms so cross-listed non-US names (e.g. TSX-listed Satellos, which
+    # files 6-K/Form-D/F-10/SCHEDULE-13G with the SEC) get a capital signal — they were invisible when
+    # only US-domestic forms were listed. Routine FPI annuals (40-F/20-F) are DELIBERATELY excluded:
+    # every FPI files one, so they'd satisfy the pre-filter's capital gate trivially without conviction.
     material_forms: tuple[str, ...] = (
-        "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A",   # 5%+ ownership crossings
+        # 5%+ ownership crossings — BOTH the legacy and the 2024-25 modernized labels (SEC relabeled
+        # SC 13x → SCHEDULE 13x; the old labels return nothing for recent filings — the M8 finding).
+        "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A",
+        "SCHEDULE 13D", "SCHEDULE 13D/A", "SCHEDULE 13G", "SCHEDULE 13G/A",
         "4",                                           # insider transactions
-        "8-K",                                          # material events (designations, deals)
-        "S-1", "S-3", "424B5", "424B3",                # registration / shelf / ATM raises
+        "8-K", "6-K",                                  # material events (6-K = FPI equivalent of 8-K)
+        "S-1", "S-3", "424B5", "424B3",                # US registration / shelf / ATM raises
+        "F-1", "F-3", "F-10", "F-10/A",                # FPI registration / shelf / offering
+        "D", "D/A",                                    # Reg D private placements / financings
     )
     signal_lookback_days: int = 180                   # only ingest filings this recent
     # Phase-2 literature/citation signal (spec §3.1, OpenAlex). mailto → polite pool (better rate limit).
@@ -72,6 +81,26 @@ class Config:
     scoring_prompt_version: str = "v1"
     scoring_max_output_tokens: int = 4000
     prefilter_min_independent: int = 1                # ≥ this many independent-lab citations to qualify
+    # §3.2 clinical-trials signal (ClinicalTrials.gov v2, free, no key). Clinical stage is an INDEPENDENT
+    # convergence dimension that doesn't depend on the OpenAlex author-resolution trail.
+    clinical_max_studies: int = 100                   # cap studies fetched per company (paginated)
+    # §3.4 regulatory-designation signal (FDA + cross-listed foreign): phrase-first EDGAR full-text.
+    # A designation is durable (doesn't expire like a 13D), so the lookback is years, not days.
+    designation_lookback_days: int = 1460             # ~4 years
+    designation_forms: str = "8-K,6-K,424B5,424B4,S-1,F-1"   # material-event + prospectus disclosures
+    # phrase → normalized designation type. Exact-phrase full-text match (efts phrase-quotes it).
+    designation_phrases: dict = field(default_factory=lambda: {
+        "Breakthrough Therapy Designation": "breakthrough",
+        "Fast Track designation": "fast_track",
+        "Orphan Drug Designation": "orphan",
+        "Regenerative Medicine Advanced Therapy": "rmat",
+        "Rare Pediatric Disease Designation": "rare_pediatric",
+    })
+    # Optional pre-filter widening: when > 0, a candidate ALSO clears the pre-filter if it has a
+    # company-led trial at ≥ this phase (1..4) + a capital signal — even without an independent citation.
+    # Default 0 = OFF (behavior unchanged: independent-citation gate only). Set e.g. 2 to admit
+    # clinical-stage names the literature trail misses.
+    prefilter_clinical_min_phase: int = 0
 
     specialist_funds: tuple[str, ...] = (
         "Baker Bros", "RA Capital", "OrbiMed", "Perceptive Advisors", "BVF Partners",
@@ -119,6 +148,11 @@ def load_config(config_path: Path | None = None) -> Config:
         scoring_prompt_version=str(raw.get("scoring_prompt_version", defaults.scoring_prompt_version)),
         scoring_max_output_tokens=int(raw.get("scoring_max_output_tokens", defaults.scoring_max_output_tokens)),
         prefilter_min_independent=int(raw.get("prefilter_min_independent", defaults.prefilter_min_independent)),
+        clinical_max_studies=int(raw.get("clinical_max_studies", defaults.clinical_max_studies)),
+        prefilter_clinical_min_phase=int(raw.get("prefilter_clinical_min_phase", defaults.prefilter_clinical_min_phase)),
+        designation_lookback_days=int(raw.get("designation_lookback_days", defaults.designation_lookback_days)),
+        designation_forms=str(raw.get("designation_forms", defaults.designation_forms)),
+        designation_phrases=dict(raw.get("designation_phrases") or defaults.designation_phrases),
     )
 
     return Config(

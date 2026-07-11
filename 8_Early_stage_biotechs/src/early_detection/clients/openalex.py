@@ -83,11 +83,17 @@ def parse_authors(payload: dict) -> list[dict]:
 
 
 def search_authors(name: str, *, mailto: str = "", per_page: int = 10,
-                   limiter: Optional[_net.RateLimiter] = None) -> list[dict]:
+                   limiter: Optional[_net.RateLimiter] = None) -> Optional[list[dict]]:
+    """Author candidates for ``name``. Returns ``None`` when the FETCH FAILED (e.g. OpenAlex 429 after
+    retries) vs ``[]`` for a genuine no-match — the caller must not treat a throttled fetch as "no
+    author" and stamp the founder done (that permanently drops it from the retry work-list)."""
     if not name or not name.strip():
         return []
     url = f"{BASE}/authors?search={quote(name.strip())}&per-page={int(per_page)}{_mailto(mailto)}"
-    return parse_authors(_get(url, limiter=limiter) or {})
+    payload = _get(url, limiter=limiter)
+    if payload is None:                    # fetch failed after retries — signal retry, don't say no-match
+        return None
+    return parse_authors(payload)
 
 
 def _name_match(a: str, b: str) -> bool:

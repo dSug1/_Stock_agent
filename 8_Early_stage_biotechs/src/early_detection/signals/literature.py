@@ -87,13 +87,16 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
         fid = f["id"]
         name = f["name"]
         hints = [h for h in (f.get("institution"), f.get("company_name")) if h]
-        author = None
         try:
             cands = search_authors(name, mailto=mailto, limiter=_LIMITER)
-            author = openalex.pick_author(name, hints, cands)
         except Exception as exc:  # noqa: BLE001 — fail-soft per founder
-            log.warning("literature: author search failed for %s: %s", name, exc)
-
+            log.warning("literature: author search errored for %s (left for retry): %s", name, exc)
+            continue
+        if cands is None:                  # fetch failed after retries (throttled) — retry later
+            log.warning("literature: author search unavailable for %s (left for retry)", name)
+            continue
+        # cands == [] is a GENUINE no-match → stamp so we don't re-query a founder with no OpenAlex trail
+        author = openalex.pick_author(name, hints, cands)
         if not author:
             store.set_founder_literature(fid, author_id=None, foundational_work_id=None)
             continue

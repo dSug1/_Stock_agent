@@ -38,7 +38,10 @@ one loud signal:
     building on the founding science? Weigh the independent-citation counts, not raw citation volume.
  2. Capital-markets conviction — specialist healthcare funds crossing 5%+, insider/registration activity.
  3. Academic pedigree — founder-scientist lineage to a credible institution; a resolved foundational paper.
- 4. Mechanism novelty & translational stage — first-in-class potential; how far the science has traveled.
+ 4. Mechanism novelty & translational stage — first-in-class potential; how far the science has traveled,
+    incl. clinical stage (company-led trials + furthest phase reached) and REGULATORY designations
+    (Breakthrough/Fast-Track/Orphan/RMAT/Rare-Pediatric) — FDA validation the mechanism is promising,
+    independent of the citation trail. Weigh Breakthrough/RMAT above the more routine Orphan/Fast-Track.
  5. Base-rate discipline — MOST early biotechs fail. A high score requires VARIANT PERCEPTION: what does
     this evidence show that the market is under-weighting? Absence of a signal is not negative evidence.
 
@@ -121,7 +124,8 @@ def score_candidates(store: Store, cfg: Config, *, client: AnthropicClient, limi
     pv = cfg.scoring_prompt_version
     run_id = _run_id()
     todo = store.scoring_candidates(pv, min_independent=cfg.prefilter_min_independent,
-                                    limit=limit, force=force)
+                                    limit=limit, force=force,
+                                    clinical_min_phase=cfg.prefilter_clinical_min_phase)
     res = ScoreResult(candidates=len(todo), est_usd=estimate_usd(cfg, len(todo), use_batch=use_batch))
     log.info("score: %d candidates cleared the pre-filter at prompt %s", len(todo), pv)
     by_id = {e.entity_id: e for e in todo}

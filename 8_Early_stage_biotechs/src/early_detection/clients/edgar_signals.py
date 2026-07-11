@@ -61,7 +61,8 @@ def recent_material_filings(cik: str, *, material_forms: set[str], lookback_days
     ci = _cik_int(cik)
     if ci is None:
         return []
-    payload = _net.safe_json(SUBMISSIONS.format(cik=ci), limiter=limiter)
+    # safe_json_retry: SEC 429s under sustained load; retry with Retry-After rather than drop the filer.
+    payload = _net.safe_json_retry(SUBMISSIONS.format(cik=ci), limiter=limiter)
     if not payload:
         return []
     cutoff = _cutoff(lookback_days, today)

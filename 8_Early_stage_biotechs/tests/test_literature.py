@@ -131,6 +131,18 @@ def test_unresolved_author_is_stamped_not_retried(store, cfg):
     assert len(store.founders_for_literature()) == 0                        # not retried
 
 
+def test_throttled_author_search_is_not_stamped(store, cfg):
+    # Regression: search_authors returns None when the FETCH failed (OpenAlex 429 after retries) vs []
+    # for a genuine no-match. A None must NOT stamp the founder — else only_missing drops it forever and
+    # a post-cooldown re-run can't recover it (this is how 147 founders got stuck).
+    _seed(store)
+    res = ingest_literature(store, cfg, search_authors=lambda name, **kw: None,
+                            author_works=lambda *a, **k: [], citing_works=lambda *a, **k: [])
+    assert res.authors_resolved == 0
+    assert store.founders_for("cik:1")[0]["literature_at"] is None          # NOT stamped
+    assert len(store.founders_for_literature()) == 1                        # still retryable
+
+
 def test_ingest_idempotent(store, cfg):
     _seed(store)
     fs = lambda name, **kw: openalex.parse_authors(_AUTHORS)

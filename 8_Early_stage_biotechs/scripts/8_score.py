@@ -73,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
 
     n = len(store.scoring_candidates(cfg.scoring_prompt_version,
                                      min_independent=cfg.prefilter_min_independent,
-                                     limit=args.limit, force=args.force))
+                                     limit=args.limit, force=args.force,
+                                     clinical_min_phase=cfg.prefilter_clinical_min_phase))
     if not resume_id:
         print(f"Stack-convergence scoring → {cfg.db_path}")
         print(f"  model={cfg.scoring_model}  prompt={cfg.scoring_prompt_version}  "

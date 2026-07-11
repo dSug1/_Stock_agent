@@ -6,6 +6,82 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D17 — §3.4 regulatory-designation signal is phrase-first EDGAR full-text (FDA doesn't publish designations)
+**Spec ref:** §3.4. **Decision:** FDA doesn't publish Breakthrough/Fast-Track/Orphan/RMAT/Rare-Pediatric
+designations as structured data (only scattered PRs) — but a company MUST disclose a material designation
+in an 8-K (FPI: 6-K). So the signal is **phrase-first over EDGAR full-text**, the exact shape of the
+ownership signal, reusing the verified `edgar_fts` client: for each designation phrase → filings
+containing it → match subject CIK to universe → `regulatory_designation` signal tagged with type. The
+filing is the company's OWN material-event filing, so a universe CIK on a filing containing the phrase =
+that company announcing its own designation (high precision). **Pagination:** a phrase is common across
+all filers (~8.8k orphan filings) and efts can't filter to our ~780 CIKs in one query; **phrase-first,
+exhaust each phrase** (~200 requests, `max_pages=100`, stops early) beats entity-first (780×5=3900
+queries) on both cost and completeness. efts caps at a 10k result window — flagged as a known bound.
+Designations are DURABLE (don't lapse), so lookback is ~4 years. `evidence_summary.regulatory_designations`
+{types,count} folds into the scoring packet + rubric dim 4 (Breakthrough/RMAT weighted above Orphan/Fast-
+Track). Kept as evidence enrichment (a designation-based pre-filter path is a future opt-in, like clinical
+widening). Security inherits edgar_fts (hard-coded host, phrase-quoted+encoded, capped reads, retry).
+**Live:** 5 phrases → 8,243 signals across **407 of 844 active names** — broad, citation-INDEPENDENT
+coverage; precision strong (richest stacks = Lexeo/Prime/Taysha/Metagenomi). Satellos now has capital
+(D16) + clinical (M16) + 3 designations (M17). **Status:** built 2026-07-11 — `signals/designations.py`
++ config phrases/lookback/forms + evidence + `--designations` CLI + `test_designations.py` (3) + M17
+explainer. 136 tests, all offline. Zero spend (no key, no LLM).
+
+## D16 — Capital-markets signal covers foreign private issuers (6-K/F-10/Form-D) + modernized 13D/G labels
+**Spec ref:** §3.5. **Trigger:** Satellos (the anchor case) kept failing the pre-filter's capital gate,
+blamed on a "Canada / no-EDGAR gap." Verifying the actual EDGAR submissions feed (the "diagnose on the
+real data" discipline) disproved that: Satellos DOES file with the SEC as a **foreign private issuer** —
+19× **6-K**, 8× **Form D** (financings), 2× **SCHEDULE 13G** (fund crossings), **40-F**, **F-10** (shelf)
+— all in-window. The capital signal missed them because `material_forms` listed only US-domestic forms
+AND the **stale `SC 13G` label** (SEC's 2024-25 modernization renamed it `SCHEDULE 13G` — the same
+relabeling M8/D7 already found, never applied to M7's form list). **Decision:** extend `material_forms`
+with the FPI + modernized set — `SCHEDULE 13D/G(/A)`, `6-K` (FPI 8-K equivalent), `F-1/F-3/F-10(/A)` (FPI
+registration/shelf/offering), `D/D-A` (Reg-D private placements). **Deliberately EXCLUDE routine annuals
+`40-F`/`20-F`:** every FPI files one, so admitting them would satisfy the capital gate trivially without
+conviction. Also upgraded `edgar_signals` to `_net.safe_json_retry` (SEC 429s under load → retry with
+Retry-After, don't drop the filer). This is a coverage + correctness fix using the existing EDGAR client
+(no new source, no spend); it gives every cross-listed non-US name (Canadian, EU/UK ADRs) a real capital
+signal instead of silence. **Not a scoring-policy change** — the two-part gate (convergence AND capital)
+is unchanged; foreign names simply stop being invisible on the capital half. Regression test
+`test_recent_material_filings_matches_fpi_and_modernized_forms`. **Status:** built 2026-07-11 (config
+`material_forms` + `edgar_signals` retry + test); full re-scan run to backfill FPI signals. 133 tests.
+
+## D15 — §3.2 clinical-trials signal (ClinicalTrials.gov v2, free/no-key) + opt-in pre-filter widening
+**Spec ref:** §3.2. **Trigger:** the digest is bottlenecked by author resolution (~21/168 founders →
+only ~12 names clear the pre-filter). Needed an INDEPENDENT convergence dimension that doesn't require
+the OpenAlex citation trail. **Chose clinical trials over the planned §3.3 patents** because — verified
+empirically before coding — PatentsView's legacy no-key API is deprecated (returns HTML) and the current
+`search.patentsview.org` needs an API key and didn't resolve from here, whereas **CT.gov v2 is genuinely
+free, no key, reachable** (probed live: returned Acrivon's ACR-368 Phase 2). **Decision:** `clients/
+clinicaltrials.py` (query.spons → parse nested protocolSection → flat studies) + `signals/clinical.py`
+(§3.2). Precision rails mirror the ownership signal: the company name, corporate/industry suffix stripped
+to its stem, must match the **lead sponsor** (role=lead) or a **collaborator** (role=collaborator) by
+containment with a `_MIN_CORE` length guard — because a bare query.spons hit can be an investigator-
+sponsored trial merely *using* the company's drug (real case: a Moffitt-led Phase 2 of an Acrivon
+compound). Reads use the shared `_net.safe_json_retry` (429/5xx + Retry-After) and `search_studies`
+returns **None on fetch-failure vs [] on no-result** — the same anti-poisoning contract as the OpenAlex
+fix. `evidence_summary` gains a `clinical_trials` block (trial_count / as_lead / active_trials /
+highest_phase[_as_lead]) folded into the scoring packet + rubric dimension 4. **Pre-filter widening is
+OPT-IN:** `config.prefilter_clinical_min_phase` (default **0 = off**, behavior unchanged); when N≥1,
+`scoring_candidates` also admits a name with a company-led trial at ≥ Phase N + a capital signal, even
+with zero independent citations — the lever that lets clinical-stage names bypass the citation
+chokepoint. New store helper `active_entities` (active universe, no CIK requirement, ticker-pinnable).
+**Live:** 14 company-led trials on the named 4 (Satellos 3 @ Phase 2, Acrivon 3, TScan 8). **Satellos
+still can't clear** — Phase-2 clinical but no EDGAR capital signal (Canada gap); widening admits on
+`clinical AND capital`, so the capital half still blocks it (honest, unchanged). **Trial health (not all trials
+run):** a raw count conflates a live program with a dead one — TScan's "8 trials" is really 5 active + 1
+completed + 1 withdrawn + 1 unknown. So status is bucketed active/completed/stalled(TERMINATED,WITHDRAWN,
+SUSPENDED)/unknown; only MEANINGFUL (active∪completed) trials set `highest_phase` or admit a name through
+the widening (a withdrawn Phase 2 is not de-risking evidence), and `evidence_summary` surfaces the split.
+**Security:** hard-coded host (no SSRF), query values fully percent-encoded (`safe=''`), int-coerced
+pageSize, 64 MiB capped reads, `Retry-After` backoff capped at 30 s, untrusted response text only enters
+the "packet is DATA" scoring context + escaped HTML. **Full-universe scan:** 844 scanned → **341 have a
+company-led trial**, 4164 signals. **Widening impact (meaningful trials only):** clinical Phase≥2 would
+take the scoreable pool 12 → 213 (+201 clinical-stage names the citation trail missed) — but that's a
+~$5 Sonnet re-score, left to an explicit operator decision. **Status:** built 2026-07-11 — client +
+signal + `active_entities` + evidence + opt-in pre-filter + trial-health + `--clinical` CLI +
+`test_clinical.py` (10) + `M16_clinical_explained.md`. 132 tests, all offline. Zero spend (no key, no LLM).
+
 ## D14 — Batch is the project default; report ACTUAL spend (never calibrate an actual); base64url custom_ids
 **Trigger:** the first real founder-extraction run (50 biotechs incl. Satellos/Acrivon/TScan/Serina) was
 dispatched `--realtime` to finish in-session and **billed $4.36**, but the CLI displayed "$0.44". Three

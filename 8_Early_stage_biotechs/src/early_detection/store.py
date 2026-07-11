@@ -546,6 +546,31 @@ class Store:
             sql += f" LIMIT {int(limit)}"
         return [self._row_to_entity(r) for r in self.conn.execute(sql)]
 
+    def active_entities(self, limit: int | None = None,
+                        tickers: "list[str] | None" = None) -> list[Entity]:
+        """Active-universe entities ($10M–$3B, live) — NO CIK requirement (name-keyed signals like the
+        clinical-trials search work for foreign filers too). ``tickers`` pins named companies to the
+        front of the work-list (guaranteed inside ``limit``), like ``entities_for_extraction``."""
+        active = "is_live=1 AND below_floor=0 AND above_ceiling=0"
+        picked: list[Entity] = []
+        seen: set[str] = set()
+        for tk in tickers or []:
+            for e in self.entities_by_ticker(tk):
+                if e.entity_id in seen:
+                    continue
+                if self.conn.execute(f"SELECT 1 FROM entity WHERE entity_id=? AND {active}",
+                                     (e.entity_id,)).fetchone():
+                    picked.append(e)
+                    seen.add(e.entity_id)
+        for r in self.conn.execute(
+                f"SELECT * FROM entity WHERE {active} ORDER BY in_existing_universe DESC, entity_id"):
+            e = self._row_to_entity(r)
+            if e.entity_id in seen:
+                continue
+            picked.append(e)
+            seen.add(e.entity_id)
+        return picked[:limit] if limit else picked
+
     def cik_to_entity_id(self, active_only: bool = True) -> dict[str, str]:
         """{zero-padded-CIK: entity_id} for matching efts filing CIKs back to the universe.
 
@@ -687,11 +712,38 @@ class Store:
     # ── scoring (Phase 2, §5.4) ────────────────────────────────────────────────
     def scoring_candidates(self, prompt_version: str, *, min_independent: int = 1,
                            require_capital: bool = True, limit: int | None = None,
-                           force: bool = False) -> list[Entity]:
-        """Rules-based pre-filter (§5.5): active-universe entities with ≥``min_independent``
-        independent-lab citations AND (if ``require_capital``) at least one ownership/capital-markets
-        signal, and not already scored at ``prompt_version`` (unless ``force``). This bounds the
-        expensive scoring call to genuinely-cornered candidates."""
+                           force: bool = False, clinical_min_phase: int = 0) -> list[Entity]:
+        """Rules-based pre-filter (§5.5): active-universe entities that show scientific convergence AND
+        (if ``require_capital``) at least one ownership/capital-markets signal, and not already scored at
+        ``prompt_version`` (unless ``force``). Bounds the expensive scoring call to genuinely-cornered
+        candidates.
+
+        Convergence gate = ≥``min_independent`` independent-lab citations. When ``clinical_min_phase`` > 0
+        (spec §3.2, opt-in) it is WIDENED to also admit a name with a **company-led** trial at ≥ that
+        phase — an independent convergence path that doesn't need the OpenAlex author-resolution trail."""
+        indep_clause = (
+            "(SELECT COUNT(*) FROM signal s WHERE s.entity_id=e.entity_id "
+            "AND s.signal_type='literature' "
+            "AND json_extract(s.raw_payload_json,'$.kind')='citation' "
+            "AND json_extract(s.raw_payload_json,'$.independence')='independent') >= ?")
+        params: list = [min_independent]
+        if clinical_min_phase and clinical_min_phase > 0:
+            from .clients.clinicaltrials import MEANINGFUL_STATUSES, PHASE_RANK
+            min_rank = PHASE_RANK.get(f"PHASE{int(clinical_min_phase)}", 0)
+            # only a company-led trial that is LIVE or COMPLETED counts — a stalled/withdrawn/unknown
+            # trial must not admit a name (it's not de-risking evidence).
+            status_in = ",".join("?" for _ in MEANINGFUL_STATUSES)
+            clinical_clause = (
+                "EXISTS (SELECT 1 FROM signal cs WHERE cs.entity_id=e.entity_id "
+                "AND cs.signal_type='clinical_trial' "
+                "AND json_extract(cs.raw_payload_json,'$.role')='lead' "
+                f"AND UPPER(json_extract(cs.raw_payload_json,'$.status')) IN ({status_in}) "
+                "AND CAST(json_extract(cs.raw_payload_json,'$.phase_rank') AS INTEGER) >= ?)")
+            gate = f"(({indep_clause}) OR {clinical_clause})"
+            params.extend(sorted(MEANINGFUL_STATUSES))
+            params.append(min_rank)
+        else:
+            gate = indep_clause
         cap_clause = (
             " AND EXISTS (SELECT 1 FROM signal s2 WHERE s2.entity_id=e.entity_id "
             "AND s2.signal_type IN ('ownership_crossing','capital_markets'))" if require_capital else "")
@@ -701,14 +753,12 @@ class Store:
         sql = f"""
             SELECT e.* FROM entity e
             WHERE e.is_live=1 AND e.below_floor=0 AND e.above_ceiling=0
-              AND (SELECT COUNT(*) FROM signal s WHERE s.entity_id=e.entity_id
-                   AND s.signal_type='literature'
-                   AND json_extract(s.raw_payload_json,'$.kind')='citation'
-                   AND json_extract(s.raw_payload_json,'$.independence')='independent') >= ?
+              AND {gate}
               {cap_clause}{scored_clause}
             ORDER BY e.in_existing_universe DESC, e.entity_id
         """
-        params: list = [min_independent] + ([] if force else [prompt_version])
+        if not force:
+            params.append(prompt_version)
         if limit:
             sql += " LIMIT ?"
             params.append(int(limit))
@@ -737,8 +787,40 @@ class Store:
                     for f in self.founders_for(entity_id)]
         # best (max) recency-decayed independence score across the entity's founders (§5.2), if refined
         scores = [f["independence_score"] for f in founders if f.get("independence_score") is not None]
+        # §3.2 clinical-trials aggregate. A raw count conflates a live program with a stalled one, so we
+        # bucket by status: "highest phase" is computed over MEANINGFUL (active + completed) trials only —
+        # a WITHDRAWN/TERMINATED/UNKNOWN trial must not inflate the phase or read as de-risking evidence.
+        trials = list(c.execute(
+            "SELECT json_extract(raw_payload_json,'$.phase_rank'), json_extract(raw_payload_json,'$.role'),"
+            " json_extract(raw_payload_json,'$.status') FROM signal "
+            "WHERE entity_id=? AND signal_type='clinical_trial'", (entity_id,)))
+        from .clients.clinicaltrials import (COMPLETED_STATUSES, MEANINGFUL_STATUSES, PHASE_RANK,
+                                             STALLED_STATUSES, trial_health)
+        _rank_to_phase = {v: k for k, v in PHASE_RANK.items()}
+
+        def _meaningful(row):
+            return (row[2] or "").upper() in MEANINGFUL_STATUSES
+        mean_all = [r[0] or 0 for r in trials if _meaningful(r)]
+        mean_lead = [r[0] or 0 for r in trials if _meaningful(r) and r[1] == "lead"]
+        clinical = {
+            "trial_count": len(trials),                      # total on file (all statuses)
+            "as_lead": sum(1 for r in trials if r[1] == "lead"),
+            "active_trials": sum(1 for r in trials if trial_health(r[2]) == "active"),
+            "completed_trials": sum(1 for r in trials if (r[2] or "").upper() in COMPLETED_STATUSES),
+            "stalled_trials": sum(1 for r in trials if (r[2] or "").upper() in STALLED_STATUSES),
+            # "highest phase" among live/finished trials only (stalled/unknown excluded)
+            "highest_phase": _rank_to_phase.get(max(mean_all), None) if mean_all and max(mean_all) else None,
+            "highest_phase_as_lead": _rank_to_phase.get(max(mean_lead), None) if mean_lead and max(mean_lead) else None,
+        }
+        # §3.4 regulatory designations: distinct types (breakthrough/fast_track/orphan/rmat/…) the
+        # company has disclosed — FDA validation of the mechanism, independent of the citation trail.
+        des_types = sorted({r[0] for r in c.execute(
+            "SELECT DISTINCT json_extract(raw_payload_json,'$.designation') FROM signal "
+            "WHERE entity_id=? AND signal_type='regulatory_designation'", (entity_id,)) if r[0]})
         return {
             "founders": founders,
+            "clinical_trials": clinical,
+            "regulatory_designations": {"types": des_types, "count": len(des_types)},
             "literature": {"independent_citations": lit.get("independent", 0),
                            "collaborator_citations": lit.get("collaborator", 0),
                            "same_institution_citations": lit.get("same_institution", 0),

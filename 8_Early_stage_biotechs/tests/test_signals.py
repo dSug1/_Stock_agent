@@ -29,7 +29,7 @@ def test_parse_recent_filings_zips_arrays():
 
 
 def test_recent_material_filings_filters_form_and_window(monkeypatch):
-    monkeypatch.setattr(edgar_signals._net, "safe_json", lambda url, **kw: _SUBMISSIONS)
+    monkeypatch.setattr(edgar_signals._net, "safe_json_retry", lambda url, **kw: _SUBMISSIONS)
     material = {"SC 13D", "8-K", "4", "424B5"}     # note: 10-K excluded
     got = edgar_signals.recent_material_filings("0001", material_forms=material,
                                                 lookback_days=180, today="2026-07-10")
@@ -39,8 +39,24 @@ def test_recent_material_filings_filters_form_and_window(monkeypatch):
     assert forms == ["4", "8-K", "SC 13D"]
 
 
+def test_recent_material_filings_matches_fpi_and_modernized_forms(monkeypatch):
+    # Regression: cross-listed FPIs (e.g. Satellos) file 6-K / Form-D / F-10 / SCHEDULE 13G, and SEC's
+    # modernized ownership labels are SCHEDULE 13x. All must be captured by the default material_forms.
+    fpi = {"filings": {"recent": {
+        "form":       ["6-K", "D", "F-10", "SCHEDULE 13G", "40-F"],
+        "filingDate": ["2026-07-08", "2026-06-20", "2026-06-01", "2026-05-15", "2026-04-01"],
+        "accessionNumber": ["a1", "a2", "a3", "a4", "a5"],
+        "primaryDocument": ["a.htm", "b.htm", "c.htm", "d.htm", "e.htm"]}}}
+    monkeypatch.setattr(edgar_signals._net, "safe_json_retry", lambda url, **kw: fpi)
+    material = set(Config().material_forms)
+    got = {f["form"] for f in edgar_signals.recent_material_filings(
+        "0001421642", material_forms=material, lookback_days=180, today="2026-07-10")}
+    assert {"6-K", "D", "F-10", "SCHEDULE 13G"} <= got     # FPI + modernized labels captured
+    assert "40-F" not in got                                # routine annual deliberately excluded
+
+
 def test_recent_material_filings_bad_cik_or_empty(monkeypatch):
-    monkeypatch.setattr(edgar_signals._net, "safe_json", lambda url, **kw: None)
+    monkeypatch.setattr(edgar_signals._net, "safe_json_retry", lambda url, **kw: None)
     assert edgar_signals.recent_material_filings("0001", material_forms={"8-K"}, lookback_days=90) == []
     assert edgar_signals.recent_material_filings(None, material_forms={"8-K"}, lookback_days=90) == []
 
