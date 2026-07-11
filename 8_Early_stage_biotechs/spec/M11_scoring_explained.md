@@ -58,7 +58,19 @@ cd 8_Early_stage_biotechs   # needs ANTHROPIC_API_KEY in repo-root .env
 PYTHONPATH=src ..\.venv\Scripts\python.exe -m pytest tests\test_scoring.py -q   # 6 offline tests (no spend)
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_score.py --realtime        # score cleared candidates (gated)
 PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_score.py --digest          # (re)write Outputs/digest.md, no spend
+PYTHONPATH=src ..\.venv\Scripts\python.exe scripts\8_render.py                   # interactive HTML digest (Outputs/digest.html), no spend
 ```
+
+## HTML render (M13)
+Beyond the Markdown digest, `render.py` + `scripts/8_render.py` (and `run_8_render.bat`) produce an
+interactive HTML digest following the repo's **template + data-sidecar split** convention: a stable,
+hash-versioned `Outputs/digest.html` (CSS + JS + DOM skeleton) plus a `digest_data.js` sidecar
+(`window.__DATA = …`) rewritten each run. It groups candidates by conviction flag (deep-dive first),
+has a green-highlight + localStorage acknowledge, collapsible per-candidate detail (mechanism,
+convergence dimensions, base rate, caveats, and the raw evidence — independent citations, crossing
+funds, founders), and filters incl. **cold-discovery-only**. Fully self-contained (no external
+resources), text escaped client-side (`escapeHtml`) — works by double-click under `file://`. Rendering
+is decoupled from the run (re-render anytime, no spend).
 
 ## Deferred (honest scope)
 - **§5.2 Claude independence refinement** feeding the scorer — upgrade the cheap self/same/independent
