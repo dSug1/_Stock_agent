@@ -116,7 +116,7 @@ RETRY_STATUSES = (429, 500, 502, 503, 504)
 def get_json_retry(url: str, *, accept: str = "application/json", timeout: float = 30,
                    limiter: Optional[RateLimiter] = None, retries: int = 4,
                    retry_statuses: tuple = RETRY_STATUSES, max_delay: float = 30.0,
-                   extra_headers: Optional[dict] = None) -> Any:
+                   extra_headers: Optional[dict] = None, data: Optional[bytes] = None) -> Any:
     """GET JSON, retrying transient ``retry_statuses`` (429 rate-limit, 5xx) with backoff that HONORS the
     server's ``Retry-After`` header. Raises on a non-retryable status or once ``retries`` is exhausted.
 
@@ -130,7 +130,7 @@ def get_json_retry(url: str, *, accept: str = "application/json", timeout: float
             headers = {"User-Agent": user_agent(), "Accept": accept, "Accept-Encoding": "identity"}
             if extra_headers:
                 headers.update(extra_headers)
-            req = urllib.request.Request(url, headers=headers)
+            req = urllib.request.Request(url, headers=headers, data=data)  # data → POST
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(capped_read(resp))
         except urllib.error.HTTPError as e:

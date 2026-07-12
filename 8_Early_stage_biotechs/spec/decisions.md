@@ -6,6 +6,56 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D20 — Canada (TSX) Wikidata provider — thin, and it empirically confirms the SEDAR+ gap
+**Spec ref:** §2.2. **Decision:** add a Wikidata Canada provider (`providers/canada.py`, `--ca-wikidata`,
+reusing the shared builder) as the TSX/TSXV complement to `edgar_canada` (FPI path). **Probed first:**
+Wikidata CA returned ~8 listed names, **most already covered** (Zymeworks/Arbutus/AbCellera/Bausch are
+NYSE/Nasdaq cross-listed → already in via EDGAR/D16). Live build added **6 entities** — the genuinely-new
+TSX-only value is minimal. This **empirically confirms** the plan's finding: the TSX-only universe is
+poorly served by keyless sources; real coverage needs a TMX/SEDAR+ listing scrape (no clean API, bot-
+protected — deferred). Also a minor known dedup gap: cross-listed CA names came in as new entities rather
+than merging with their EDGAR twins, because our EDGAR entities key on CIK+ticker while Wikidata keys on
+ISIN (no shared key → union-find can't merge); an ISIN backfill on EDGAR entities would close it. Opt-in +
+mktcap_unknown, same as M18/M19. **Status:** built 2026-07-12 (`providers/canada.py` + `--ca-wikidata` +
+`test_nordic.py` canada case). 141 tests. Completes the operator's international market list; Korea/Japan
+remain free-API-key-gated (DART/EDINET); TSX-only + EU per-country capital + EMA designations deferred.
+
+## D19 — Europe-broad universe via Wikidata; per-market logic factored into a shared builder
+**Spec ref:** §2.2, `international_expansion_plan.md`. **Decision:** extend the M18 Wikidata approach to
+non-Nordic Western Europe (DE/FR/UK/CH/NL/BE/IT/ES/IE/AT). Since it's the same query over a different
+country set, the logic was factored into `providers/_wikidata_universe.py` (`load_biotech_listings(
+country_qids, provenance)` — ISIN/ticker admission rail, LEI-not-listed guard, dedup, fail-soft);
+`nordic.py`/`europe.py` are thin wrappers. **Probed first:** Wikidata gave **89 EU listed biotechs with a
+security id** (vs Korea's 0 — KR needs DART's key); ESMA FIRDS returned HTML and EMA designation files
+404'd, so those stay deferred. Opt-in (`--europe`, default OFF) for the same reason as Nordic (no cap →
+mktcap_unknown → mega-caps can't be ceiling-dropped until a European cap-enrich exists). **Live:** 63 EU
+entities, 0 queued; inherited CT.gov clinical verified (Argenx 16 company-led trials, Abivax 20,
+Immunocore 15, MorphoSys 11) — the provider-lights-up-signals thesis holds a second time. Korea was
+attempted first but **blocked**: its universe + capital both route through DART, which needs a free API
+key (no keyless path; Wikidata KR has 0 security ids) — operator opted to skip to Europe. **Status:** built
+2026-07-12 — `providers/_wikidata_universe.py` + `europe.py` + refactored `nordic.py` + `8_universe.py
+--europe` + `test_nordic.py` (4, now covers both). 140 tests, all offline. Zero spend.
+
+## D18 — First non-US market (Nordic) via Wikidata SPARQL; a universe provider lights up inherited signals
+**Spec ref:** §2.2 (non-US enumeration), `international_expansion_plan.md`. **Decision:** the pipeline is
+source-pluggable, so a new market is primarily an ENUMERATOR — once a name is an entity, the market-
+agnostic signals (CT.gov clinical, FDA-designations-via-6-K + FPI capital for cross-listed, OpenAlex
+literature, GLEIF LEI) cover it for free. Nordic source chosen by PROBING (CT.gov-style discipline):
+ESMA FIRDS + EMA returned HTML/antibot and the Nasdaq-Nordic feed timed out — **only Wikidata SPARQL
+returned clean JSON**. So `clients/wikidata.py` (SPARQL, hard-coded host, safe_json_retry, capped) +
+`providers/nordic.py` enumerate SE/DK/NO/FI/IS biotech+pharma → `Listing` → identity flow. **Precision
+rail:** admit only on a SECURITY id (ISIN or ticker), NOT LEI alone — every legal entity (incl. PRIVATE
+cos like LEO Pharma/Fertin) can hold an LEI, but this is a LISTED universe; that fix tightened 29→15
+genuinely-listed names. **Opt-in (`--nordic`), default OFF:** Wikidata gives no market cap, so names enter
+`mktcap_unknown` (kept, recall-safe) and the $3B ceiling can't yet drop the Nordic mega-caps — so the
+provider must not pollute the default US/CA build until a Nordic cap-enrich exists. **Honest limits (§9):**
+Wikidata skews large/known → a SEED, not complete micro-cap coverage (Spotlight/NGM scrape deferred);
+cap-enrich (licensed provider) is the gating follow-up. **Live:** 15 Nordic entities, 0 queued; inherited
+CT.gov clinical verified on them (Zealand 18 company-led trials, Bavarian Nordic 15, Camurus 9) — the
+provider-lights-up-signals thesis proven. **Status:** built 2026-07-12 — `clients/wikidata.py` +
+`providers/nordic.py` + `universe`/`8_universe.py --nordic` (opt-in) + `test_nordic.py` (4) + M18
+explainer. 140 tests, all offline. Zero spend (no key, no LLM). `clients/wikidata.py` reusable for KR/JP/EU seeds.
+
 ## D17 — §3.4 regulatory-designation signal is phrase-first EDGAR full-text (FDA doesn't publish designations)
 **Spec ref:** §3.4. **Decision:** FDA doesn't publish Breakthrough/Fast-Track/Orphan/RMAT/Rare-Pediatric
 designations as structured data (only scattered PRs) — but a company MUST disclose a material designation
