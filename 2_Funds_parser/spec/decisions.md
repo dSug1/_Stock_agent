@@ -6,7 +6,32 @@
 
 **Update discipline.** At the end of every module step: did anything get decided, calibrated, renamed, or deviate from spec? If yes, append or revise the entry for that module with a link to the code line of record (`[file.py:NN](../src/path/file.py#L<n>)`). If no, state that explicitly in the end-of-step summary.
 
-**Last updated:** 2026-04-22 (Modules 1 + 3 implemented; Module 2 schema extended for share-type fields + ticker_source on cusip_ticker_map; Boxer Capital CIK retargeted after Oct-2024 IMA handoff)
+**Last updated:** 2026-07-12 (SEC company_tickers.json incompleteness documented in the Layer-1 name→ticker fallback; "Janus Henderson Group PLC" broad-filer seed entry removed)
+
+---
+
+## Layer 1 — SEC ticker resolution: company_tickers.json is INCOMPLETE (2026-07-12)
+
+Surfaced by a cross-module coverage audit ([8_Early_stage_biotechs](../../8_Early_stage_biotechs) D23):
+SEC's `company_tickers.json` / `company_tickers_exchange.json` (used by [sec_ticker_resolver.py](../src/layer_1/sec_ticker_resolver.py))
+has only **~9,304 entries and genuinely MISSES currently-listed filers** — verified absent: Apellis (APLS,
+CIK 1492422), Terns (TERN), Day One (DAWN). Impact on **this** module is minor: that resolver is a
+**last-resort name→ticker fallback**; the comprehensive CUSIP→ticker primary is **OpenFIGI**, which
+resolves those names fine (they are in `holdings`). Fix applied: the resolver's docstring now states the
+file is genuinely incomplete (a non-match is NOT proof of delisting) and points to EDGAR
+`browse-edgar getcompany` / the submissions feed as the authoritative source. (No behavioural change to the
+primary path.) **Same file was a latent bug in module 8's EDGAR provider** — fixed there with a submissions
+fallback (D23).
+
+## Fund seed — removed the "Janus Henderson Group PLC" broad-filer entry (2026-07-12)
+
+The seed row labelled "Janus Henderson Investors (Biotech Fund)" pointed at CIK 0001274173 = **JANUS
+HENDERSON GROUP PLC** — the whole $-manager's 13F (~2,288 mostly-non-biotech positions: Broadcom, Nvidia,
+Netflix…), not the biotech fund. 13F-HR is filed at the manager level, so a biotech *sub-fund* has no
+separate filing to isolate. Tracking it as a specialist polluted the holdings with non-biotech names.
+**Removed** from the fund seed (operator). Consumers should treat a filer holding hundreds of distinct
+names as a diversified manager, not a specialist (module 8's 13F seed provider auto-excludes filers with
+> 500 distinct holdings for exactly this reason).
 
 ---
 

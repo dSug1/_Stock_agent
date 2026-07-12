@@ -61,7 +61,7 @@ def gather_listings(cfg: Config, *, use_m6: bool = True, use_us: bool = True,
     if use_m6:   # the existing-universe priority tier is market-independent (spec §2.4)
         out["m6"] = m6_seed.load_m6_listings(cfg.m6_store_path)
     if use_fund13f:   # specialist-fund holdings seed (D23) — closes EDGAR-enumeration gaps, CIK-keyed
-        out["fund13f"] = fund13f.load_fund13f_listings(cfg.fund_store_path, cfg.sic_allow)
+        out["fund13f"] = fund13f.load_fund13f_listings(cfg.fund_store_path)
     if use_us and "US" in cfg.markets:
         out["edgar_us"] = edgar_us.load_us_listings(cfg.sic_allow, max_pages=max_pages)
     if use_ca and "CA" in cfg.markets:

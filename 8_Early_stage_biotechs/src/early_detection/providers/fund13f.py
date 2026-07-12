@@ -2,37 +2,51 @@
 
 Opens ``2_Funds_parser/2_fundparser.db`` **READ-ONLY** (`mode=ro`) and emits a ``Listing`` per name the
 tracked specialist biotech funds hold — closing a real coverage gap: the EDGAR SIC enumeration is
-page-capped, so some small/mid US therapeutics that top specialists (Baker Bros / OrbiMed / RA Capital /
-Perceptive …) own weren't in the universe (Apellis, Celcuity, Terns, Day One, Arcellx, …). A name a
-specialist fund holds is thesis-relevant by construction, so it belongs in the universe. Module 8 never
-writes to 2_Funds_parser's store.
+page-capped AND SEC's ``company_tickers.json`` is incomplete (missing e.g. Apellis/Terns/Day One), so some
+small/mid US therapeutics that top specialists (Baker Bros / OrbiMed / RA Capital / Perceptive …) own
+weren't in the universe. A name a specialist fund holds is thesis-relevant by construction.
 
-Two disciplines make this clean:
-  * **Exclude broad/mis-scoped filers** — a filer holding more than ``max_holdings_per_filer`` distinct
-    names in the latest quarter is a diversified manager, not a biotech specialist (e.g. the mis-mapped
-    "Janus Henderson Group PLC" whole-company 13F with ~2,300 mostly-non-biotech positions). Its
-    holdings would pollute the universe with utilities/insurers, so it's dropped by this generic rule.
-  * **Authoritative biotech filter by SIC** — each held ticker is resolved to a CIK (SEC cik↔ticker map)
-    and admitted ONLY if its SEC SIC is in the module's biotech allow-set. This catches biotech names a
-    keyword filter misses (Celcuity, Arcellx) and cleanly excludes the funds' non-biotech positions.
+Resolution: each held ticker is looked up via EDGAR ``browse-edgar?action=getcompany&ticker=…`` (one call,
+returns the authoritative **CIK + SIC + name** — and it covers ALL listed filers, unlike the incomplete
+company_tickers files). Admit only if the SIC is in the biotech-adjacent allow-set (therapeutics /
+diagnostics / tools / devices) — SIC (not a name keyword) catches keyword-less biotechs (Celcuity=8071,
+Arcellx) and cleanly rejects the funds' utility/insurer/ADR positions. CIK-keyed → union-find merges a
+held name with its EDGAR/M6 twin; a genuine gap becomes a NEW entity (mktcap_unknown until enriched).
 
-Fail-soft throughout (missing DB / unresolved ticker / SIC fetch failure → skip, never abort).
+Disciplines: exclude broad/mis-scoped filers (> ``max_holdings_per_filer`` distinct names = a diversified
+manager, e.g. the mis-mapped whole-company "Janus Henderson Group PLC" 13F). Fail-soft throughout.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Callable, Optional
+from urllib.parse import quote
 
-from ..clients import _net, sec
+from ..clients import _net
 from ..models import Listing
 
 log = logging.getLogger(__name__)
 
 _LIMITER = _net.RateLimiter(per_sec=8.0)   # SEC fair-access
-SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+GETCOMPANY = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={t}"
+              "&type=&dateb=&owner=include&count=1&output=atom")
+_RE_CIK = re.compile(r"<cik>(\d+)</cik>", re.I)
+_RE_SIC = re.compile(r"<assigned-sic>(\d+)</assigned-sic>", re.I)
+_RE_NAME = re.compile(r"<conformed-name>([^<]+)</conformed-name>", re.I)
+
+# Biotech-adjacent SIC → normalized sector. Broader than the EDGAR-enumeration set on purpose: the 13F
+# holdings are already pre-filtered to specialist-fund conviction, so we admit the full drug/dx/tools/device
+# span (and SEC classifies some real biotechs oddly — Celcuity is 8071 "medical labs", not a 283x).
+_SIC_SECTOR = {
+    "2833": "therapeutics", "2834": "therapeutics", "2836": "therapeutics",
+    "2835": "diagnostics", "8071": "diagnostics",
+    "8731": "tools_platform", "3826": "tools_platform", "3827": "tools_platform",
+    "3841": "devices", "3845": "devices",
+}
 
 
 def _connect_ro(path: Path) -> Optional[sqlite3.Connection]:
@@ -48,13 +62,22 @@ def _connect_ro(path: Path) -> Optional[sqlite3.Connection]:
         return None
 
 
-def _sic_of_cik(cik: int, *, limiter: Optional[_net.RateLimiter] = None) -> Optional[str]:
-    """The SEC SIC code for a CIK (from the submissions feed), or None. Fail-soft."""
-    payload = _net.safe_json_retry(SUBMISSIONS.format(cik=cik), limiter=limiter)
-    if not payload:
+def _lookup_ticker(ticker: str, *, limiter: Optional[_net.RateLimiter] = None) -> Optional[tuple]:
+    """EDGAR getcompany by ticker → (cik:int, sic:str, name:str), or None. Fail-soft. Works for ALL
+    listed filers (SEC's company_tickers.json is incomplete for some biotechs)."""
+    if limiter is not None:
+        limiter.wait()
+    try:
+        body = _net.get_bytes(GETCOMPANY.format(t=quote(ticker)), accept="application/atom+xml").decode(
+            "utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001 — fail-soft per ticker (unknown ticker → 404, etc.)
+        log.debug("fund13f: getcompany failed for %s: %s", ticker, exc)
         return None
-    sic = payload.get("sic")
-    return str(sic).strip() if sic else None
+    m_cik, m_sic = _RE_CIK.search(body), _RE_SIC.search(body)
+    if not m_cik:
+        return None
+    m_name = _RE_NAME.search(body)
+    return int(m_cik.group(1)), (m_sic.group(1) if m_sic else None), (m_name.group(1) if m_name else "")
 
 
 def _held_tickers(conn: sqlite3.Connection, max_holdings_per_filer: int) -> dict[str, str]:
@@ -75,13 +98,11 @@ def _held_tickers(conn: sqlite3.Connection, max_holdings_per_filer: int) -> dict
     return {r[0]: (r[1] or "") for r in rows}
 
 
-def load_fund13f_listings(fund_db_path: Path | str, sic_allow: Mapping[str, str], *,
-                          cik_map: Optional[dict] = None,
-                          sic_lookup: Optional[Callable[[int], Optional[str]]] = None,
+def load_fund13f_listings(fund_db_path: Path | str, *, lookup: Optional[Callable[[str], Optional[tuple]]] = None,
                           limiter: Optional[_net.RateLimiter] = None,
                           max_holdings_per_filer: int = 500) -> list[Listing]:
-    """Specialist-fund-held US biotechs → ``Listing`` records (SIC-filtered). ``cik_map``/``sic_lookup``
-    injectable for tests. Fail-open (→ [])."""
+    """Specialist-fund-held US biotechs → ``Listing`` records (EDGAR-resolved, SIC-filtered). ``lookup``
+    (ticker → (cik, sic, name)) injectable for tests. Fail-open (→ [])."""
     conn = _connect_ro(Path(fund_db_path))
     if conn is None:
         return []
@@ -96,30 +117,22 @@ def load_fund13f_listings(fund_db_path: Path | str, sic_allow: Mapping[str, str]
         return []
 
     lim = limiter or _LIMITER
-    if cik_map is None:
-        payload = _net.safe_json(sec.TICKERS_EXCHANGE, limiter=lim)
-        cik_map = sec.parse_cik_exchange(payload) if payload else {}
-    # invert {cik: (ticker, exchange, name)} → {UPPER(ticker): (cik, exchange, name)}
-    tk2cik = {info[0].upper(): (cik, info[1], info[2]) for cik, info in cik_map.items() if info and info[0]}
-    sic_lookup = sic_lookup or (lambda cik: _sic_of_cik(cik, limiter=lim))
+    lookup = lookup or (lambda tk: _lookup_ticker(tk, limiter=lim))
 
     listings: list[Listing] = []
-    resolved = admitted = 0
+    resolved = 0
     for tk, name in held.items():
-        info = tk2cik.get(tk)
-        if not info:                    # not a listed common equity in the SEC map (warrants/units, etc.)
-            continue
-        cik, exchange, exname = info
+        info = lookup(tk)
+        if not info or not info[0]:
+            continue                        # unresolved (warrant/unit/delisted) → skip
         resolved += 1
-        sic = sic_lookup(cik)
-        sector = sic_allow.get(sic) if sic else None
-        if sector is None:              # not a biotech-SIC filer → not thesis-relevant
+        cik, sic, exname = info
+        sector = _SIC_SECTOR.get(sic)
+        if sector is None:                  # not a biotech-adjacent SIC → not thesis-relevant
             continue
-        admitted += 1
         listings.append(Listing(
             name=exname or name,
             ticker=tk,
-            exchange=exchange or None,
             country="US",
             cik=f"{cik:010d}",
             sic=sic,
@@ -127,5 +140,6 @@ def load_fund13f_listings(fund_db_path: Path | str, sic_allow: Mapping[str, str]
             filer_type="domestic",
             provenance=["fund13f"],
         ))
-    log.info("fund13f: %d held tickers → %d resolved → %d biotech-SIC admitted", len(held), resolved, admitted)
+    log.info("fund13f: %d held tickers → %d resolved → %d biotech-SIC admitted",
+             len(held), resolved, len(listings))
     return listings

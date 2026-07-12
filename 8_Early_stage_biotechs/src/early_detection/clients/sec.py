@@ -25,8 +25,25 @@ log = logging.getLogger(__name__)
 
 BROWSE_EDGAR = "https://www.sec.gov/cgi-bin/browse-edgar"
 TICKERS_EXCHANGE = "https://www.sec.gov/files/company_tickers_exchange.json"
+SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 _CIK_RE = re.compile(r"CIK=(\d+)", re.IGNORECASE)
+
+
+def resolve_via_submissions(cik: int, *, limiter: Optional[_net.RateLimiter] = None) -> Optional[tuple]:
+    """(ticker, exchange, name) for a CIK from the submissions feed — the AUTHORITATIVE per-company source.
+
+    Fallback for the ``company_tickers_exchange.json`` gap: that file has only ~9.3k entries and is missing
+    real listed filers (e.g. Apellis CIK 1492422), so a SIC-enumerated CIK absent from it would be silently
+    dropped. Submissions carries every filer's own ``tickers``/``exchanges`` arrays. Fail-soft (→ None)."""
+    payload = _net.safe_json_retry(SUBMISSIONS.format(cik=cik), limiter=limiter)
+    if not payload:
+        return None
+    tickers = payload.get("tickers") or []
+    if not tickers:                       # not a listed equity (or FPI without a common ticker)
+        return None
+    exchanges = payload.get("exchanges") or []
+    return tickers[0], (exchanges[0] if exchanges else ""), (payload.get("name") or "")
 
 
 def _prefer_common(new: str, cur: str) -> bool:
@@ -121,27 +138,37 @@ def enumerate_sic(sic: str, *, limiter: Optional[_net.RateLimiter] = None,
 
 
 def build_us_listings(sic_map: Mapping[str, str], *, limiter: Optional[_net.RateLimiter] = None,
-                      max_pages: int = 30,
-                      cik_map: Optional[dict[int, tuple[str, str, str]]] = None) -> list[Listing]:
+                      max_pages: int = 30, cik_map: Optional[dict[int, tuple[str, str, str]]] = None,
+                      resolve_missing: bool = True,
+                      submissions_lookup: Optional[callable] = None) -> list[Listing]:
     """Enumerate the US listed universe across ``sic_map`` (SIC → normalized sector) → ``Listing``s.
 
-    ``cik_map`` may be injected (tests); otherwise fetched from ``company_tickers_exchange.json``.
-    Each admitted CIK becomes a Listing with ``cik`` zero-padded to 10 and ``sector_normalized`` set.
+    ``cik_map`` may be injected (tests); otherwise fetched from ``company_tickers_exchange.json``. That SEC
+    file is INCOMPLETE (~9.3k entries, missing real filers like Apellis) — so when a SIC-enumerated CIK is
+    absent from it, ``resolve_missing`` falls back to the authoritative submissions feed
+    (``resolve_via_submissions``) to recover the ticker. Without the fallback those companies are silently
+    dropped (the latent bug the 13F-holdings audit surfaced). ``submissions_lookup`` injectable for tests.
     """
     if cik_map is None:
         payload = _net.safe_json(TICKERS_EXCHANGE, limiter=limiter)
         cik_map = parse_cik_exchange(payload) if payload else {}
     if not cik_map:
-        log.warning("SEC cik↔ticker map unavailable; US enumeration will be empty this run")
+        log.warning("SEC cik↔ticker map unavailable; US enumeration relies on the submissions fallback")
+    sub_lookup = submissions_lookup or (lambda cik: resolve_via_submissions(cik, limiter=limiter))
 
     listings: list[Listing] = []
     seen: set[int] = set()
+    recovered = 0
     for sic, sector in sic_map.items():
         for cik, name in enumerate_sic(str(sic), limiter=limiter, max_pages=max_pages):
             if cik in seen:
                 continue
             info = cik_map.get(cik)
-            if not info:                       # not a listed equity → skip
+            if not info and resolve_missing:   # not in the (incomplete) ticker file → submissions fallback
+                info = sub_lookup(cik)
+                if info:
+                    recovered += 1
+            if not info:                       # genuinely not a listed common equity → skip
                 continue
             seen.add(cik)
             ticker, exchange, exname = info
@@ -156,7 +183,8 @@ def build_us_listings(sic_map: Mapping[str, str], *, limiter: Optional[_net.Rate
                 filer_type="domestic",
                 provenance=["edgar_us"],
             ))
-    log.info("SEC: %d US listed listings across %d SIC codes", len(listings), len(sic_map))
+    log.info("SEC: %d US listed listings across %d SIC codes (%d recovered via submissions fallback)",
+             len(listings), len(sic_map), recovered)
     return listings
 
 

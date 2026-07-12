@@ -1,17 +1,24 @@
 """Fallback name -> ticker resolver using SEC's company_tickers.json.
 
-Used when OpenFIGI returns no US-equity match for a CUSIP but the
-filing provides a `name_of_issuer`. Matches are produced by
-case-insensitive, punctuation-stripped, suffix-stripped equality
-against the SEC's ~10k active-filer list.
+Used ONLY as a last-resort fallback when OpenFIGI (the comprehensive CUSIP->ticker
+primary) returns no US-equity match but the filing provides a `name_of_issuer`.
+Matches are case-insensitive, punctuation-stripped, suffix-stripped equality
+against SEC's company_tickers.json.
 
 Important limitations:
-- SEC's list contains only currently-active tickered filers. Delisted
-  issuers (acquired, renamed, or taken private) will not match.
-- Non-common-stock CUSIPs (preferred, warrants, bonds, ETFs) will
-  match the common-stock ticker of the same issuer, which is
-  technically a different security. Callers that care should inspect
-  `ticker_source='sec_name'` rather than trusting the ticker blindly.
+- SEC's company_tickers.json is INCOMPLETE: it has only ~9.3k entries and is
+  genuinely MISSING real, currently-listed filers (verified 2026-07-12: Apellis
+  APLS / Terns TERN / Day One DAWN are absent entirely). So this fallback can
+  miss an active company; a name it can't match is NOT proof the issuer is
+  delisted. (The primary OpenFIGI/CUSIP path is unaffected — it resolves those.)
+  The authoritative per-company source is EDGAR `browse-edgar getcompany?ticker`
+  / the submissions feed; module 8's EDGAR provider now falls back to submissions
+  for this reason — see `8_Early_stage_biotechs` D23.
+- SEC's list contains only currently-active tickered filers; delisted issuers
+  (acquired/renamed/taken private) will not match.
+- Non-common-stock CUSIPs (preferred, warrants, bonds, ETFs) match the common-
+  stock ticker of the same issuer (a different security); callers that care
+  should inspect `ticker_source='sec_name'` rather than trust the ticker blindly.
 """
 from __future__ import annotations
 

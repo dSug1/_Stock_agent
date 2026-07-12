@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="build + reconcile but do not write the DB")
     ap.add_argument("--stats", action="store_true", help="print store stats and exit (no build)")
     ap.add_argument("--no-m6", action="store_true", help="skip the Module-6 priority-tier seed")
+    ap.add_argument("--no-fund13f", action="store_true",
+                    help="skip the 2_Funds_parser 13F-holdings seed (specialist-fund-held biotechs)")
     ap.add_argument("--no-us", action="store_true", help="skip US EDGAR enumeration")
     ap.add_argument("--no-ca", action="store_true", help="skip Canada FPI enumeration")
     ap.add_argument("--nordic", action="store_true",
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
 
     res = build_universe(store, cfg, use_m6=not args.no_m6, use_us=not args.no_us,
                          use_ca=not args.no_ca, use_nordic=args.nordic, use_europe=args.europe,
-                         use_ca_wikidata=args.ca_wikidata,
+                         use_ca_wikidata=args.ca_wikidata, use_fund13f=not args.no_fund13f,
                          max_pages=args.max_pages, dry_run=args.dry_run)
 
     print(f"\nrun {res.run_id} — funnel:")

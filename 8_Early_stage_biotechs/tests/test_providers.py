@@ -56,6 +56,7 @@ def test_build_us_listings_populates_cik_and_sector(monkeypatch):
     listings = sec.build_us_listings(
         {"2834": "therapeutics"},
         cik_map=sec.parse_cik_exchange(_CIK_EXCHANGE_PAYLOAD),
+        submissions_lookup=lambda cik: None,   # offline: no submissions fallback network call
     )
     by_ticker = {l.ticker: l for l in listings}
     assert by_ticker["ACME"].cik == "0000000001"
@@ -68,8 +69,20 @@ def test_build_us_listings_populates_cik_and_sector(monkeypatch):
 def test_build_us_listings_skips_unlisted_cik(monkeypatch):
     monkeypatch.setattr(sec, "enumerate_sic", lambda sic, **kw: [(1, "ACME"), (99, "Private Co")])
     listings = sec.build_us_listings({"2834": "therapeutics"},
-                                     cik_map=sec.parse_cik_exchange(_CIK_EXCHANGE_PAYLOAD))
+                                     cik_map=sec.parse_cik_exchange(_CIK_EXCHANGE_PAYLOAD),
+                                     submissions_lookup=lambda cik: None)   # 99 unmapped + no fallback → skipped
     assert {l.cik for l in listings} == {"0000000001"}   # CIK 99 not in the listed map → skipped
+
+
+def test_build_us_listings_submissions_fallback_recovers_missing(monkeypatch):
+    # a SIC-enumerated CIK absent from the (incomplete) ticker file is recovered via submissions (the fix)
+    monkeypatch.setattr(sec, "enumerate_sic", lambda sic, **kw: [(1, "ACME"), (1492422, "APELLIS")])
+    listings = sec.build_us_listings(
+        {"2834": "therapeutics"}, cik_map=sec.parse_cik_exchange(_CIK_EXCHANGE_PAYLOAD),
+        submissions_lookup=lambda cik: ("APLS", "Nasdaq", "Apellis Pharmaceuticals, Inc.") if cik == 1492422 else None)
+    by = {l.ticker: l for l in listings}
+    assert set(by) == {"ACME", "APLS"}                    # APLS recovered despite being absent from the map
+    assert by["APLS"].cik == "0001492422" and by["APLS"].sector_normalized == "therapeutics"
 
 
 # ── M6 seed reader ────────────────────────────────────────────────────────────

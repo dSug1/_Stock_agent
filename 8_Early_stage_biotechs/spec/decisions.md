@@ -6,6 +6,52 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D23 — 13F-holdings seed provider (from 2_Funds_parser) closes EDGAR-enumeration gaps; render consolidated
+**Spec ref:** §2.2/§2.4. **Trigger:** a coverage audit of the 21 specialist biotech funds tracked in
+`2_Funds_parser` (Baker Bros/OrbiMed/RA Capital/Perceptive/RTW/…) vs the module-8 universe found **79%
+covered** (55% active + 24% correctly-excluded >$3B large-caps), but **~10 genuine small/mid US
+therapeutics missing** despite being held by top specialists — Apellis, Celcuity, Terns, Day One, Arcellx,
+Soleno, Definium, Sensei, Amicus, Centessa(UK). Root cause: the EDGAR SIC enumeration is **page-capped**
+(`--max-pages 30`), so not every filer under a biotech SIC is reached. A name a specialist fund holds is
+thesis-relevant by construction. **Decision:** add `providers/fund13f.py` — mirrors the M6 seed (D2): opens
+`2_Funds_parser/2_fundparser.db` **READ-ONLY**, emits a `Listing` per specialist-fund-held name.
+**Default-ON** (`use_fund13f=True`, `--no-fund13f` to skip), like M6. Two disciplines: (1) **exclude broad
+filers** — any filer holding > `max_holdings_per_filer` (500) distinct names in the latest quarter is a
+diversified manager, not a specialist (auto-drops the mis-scoped "Janus Henderson Group PLC" whole-company
+13F with ~2,300 mostly-non-biotech positions — a `2_Funds_parser` data issue, not ours). (2) **resolve + SIC filter via
+EDGAR** — each held ticker → `browse-edgar getcompany` (one call → CIK+SIC+name; covers ALL filers, unlike
+SEC's incomplete `company_tickers.json` which is missing Apellis/Terns/Day One — itself a root cause of the
+gaps + a latent bug in the EDGAR provider that uses the same file). Admit only biotech-adjacent SICs
+(therapeutics 2833/34/36, diagnostics/labs **2835/8071**, tools 8731/3826/3827, devices 3841/3845 — broader
+than the enumeration set on purpose; SEC classifies real biotechs like Celcuity under 8071). SIC (not a name
+keyword) catches keyword-less biotechs (Celcuity, Arcellx) and cleanly excludes utility/insurer/ADR positions.
+**First cut caught a real bug** (resolved via the incomplete SEC file + narrow SIC → added 0 gap entities);
+fixed after verifying against the actual gap tickers. **Live:** 442 held → 349 resolved → 291 admitted →
+**+33 net-new specialist-held biotechs** (Apellis/Terns/Day One/Celcuity/Arcellx/Amicus/Soleno/Centessa…),
+mktcap_unknown pending enrich.
+
+**The SEC-ticker-file incompleteness is ALSO fixed in the EDGAR provider itself.** `sec.build_us_listings`
+dropped any SIC-enumerated CIK absent from `company_tickers_exchange.json` (only ~9.3k entries, verified
+missing Apellis CIK 1492422) — so those companies never entered the universe even under a covered SIC.
+Fixed: `resolve_missing=True` (default) falls back to the **submissions feed** (`sec.resolve_via_
+submissions`, authoritative per-company `tickers`/`exchanges`) for any enumerated CIK not in the ticker
+map. Test `test_build_us_listings_submissions_fallback_recovers_missing`. This closes the gap for ALL
+biotech filers, not just specialist-held ones. **2_Funds_parser side:** its `sec_ticker_resolver` (a
+LAST-RESORT name→ticker fallback; OpenFIGI/CUSIP is the comprehensive primary) uses the same incomplete
+file — docstring corrected to state it's genuinely incomplete (misses Apellis/Terns/Day One), not a
+delisting proof; primary path unaffected. (The Janus-Group-PLC broad-filer entry in 2_Funds's seed —
+whole-company 13F, not the biotech fund — was removed by the operator; module 8's broad-filer exclusion
+also guards it.) **Also (render):** `run_8_render.bat` fixed + **wired into `run_8_Early_stage_biotechs.bat`**
+(the main bat now renders + opens the status/digest after the build). CIK-keyed → union-find merges with EDGAR/M6 twins; genuine gaps
+become new entities (mktcap_unknown until enriched). Fail-soft (missing DB / unresolved ticker / SIC failure
+→ skip). **Also (render consolidation):** the single `Outputs/pipeline_status.html` (`scripts/8_status.py`)
+now merges the status dashboard + the full interactive digest; `run_8_render.bat` runs 8_status, calls the
+venv python directly (robust; `activate.bat` dependency removed) and **auto-opens** the HTML (the "not
+working" report = it no longer opened). `render.py`/`8_render.py`/`test_render.py`/`digest.html`/
+`digest_data.js` deleted. **Status:** built 2026-07-12 — `providers/fund13f.py` + `config.fund_store_path`
++ universe wiring + `--no-fund13f` + `test_fund13f.py` (4). Note: `2_Funds_parser` should retarget the
+Janus CIK to its biotech sub-fund (its own data fix). Tests green.
+
 ## D22 — Clinical stage is ASYMMETRY, not a gate: phase-agnostic widening + asymmetry rubric (prompt v2)
 **Spec ref:** §3.2/§5.4. **Operator insight:** a Phase-2 pre-filter floor *eliminates* early-stage names —
 but early clinical stage = higher risk AND higher asymmetry, and is the *target* of early detection, not a

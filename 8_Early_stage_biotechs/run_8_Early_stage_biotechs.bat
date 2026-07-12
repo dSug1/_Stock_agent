@@ -17,4 +17,8 @@ echo.
 echo Done. Stats:
 "..\.venv\Scripts\python.exe" scripts\8_universe.py --stats
 
+echo.
+echo Rendering pipeline status + interactive digest...
+call "%~dp0run_8_render.bat"
+
 endlocal
