@@ -21,7 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .clients import gleif, market
+from .clients import gleif, market, openfigi
+from .clients._net import RateLimiter
 from .config import Config
 from .fx import FXConverter
 from .models import ReconRow
@@ -29,12 +30,16 @@ from .store import Store, now_iso
 
 log = logging.getLogger(__name__)
 
+# OpenFIGI keyless tier ≈ 25 req/min → pace conservatively (shared across an enrich-isin run).
+_OPENFIGI_LIMITER = RateLimiter(per_sec=0.4)
+
 
 @dataclass
 class EnrichResult:
     attempted: int = 0
     filled: int = 0
     below_floor: int = 0
+    above_ceiling: int = 0
     misses: int = 0
     by_ccy: dict[str, int] = field(default_factory=dict)
 
@@ -85,6 +90,61 @@ def enrich_caps(store: Store, cfg: Config, *, limit: int | None = None, per_sec:
 
     log.info("enrich done: filled=%d below_floor=%d misses=%d by_ccy=%s",
              res.filled, res.below_floor, res.misses, res.by_ccy)
+    return res
+
+
+def enrich_caps_isin(store: Store, cfg: Config, *, limit: int | None = None, per_sec: float = 0.4,
+                     resolve: Callable[[str], Optional[str]] | None = None,
+                     fetch: Callable[[str], Optional[dict]] | None = None,
+                     progress_every: int = 25) -> EnrichResult:
+    """Market-cap enrich for FOREIGN (Wikidata-seeded) names, keyed on ISIN not ticker.
+
+    ISIN → OpenFIGI primary-venue yfinance symbol → yfinance cap → USD → ``apply_cap`` (which sets the
+    floor/ceiling flags). This is what lets the $3B ceiling finally drop the foreign mega-caps that
+    entered ``mktcap_unknown`` from the Wikidata providers. ``resolve``/``fetch`` injectable for tests.
+
+    ``per_sec`` is low (0.4 ≈ one every 2.5s) because OpenFIGI's keyless tier is ~25 req/min. A resolve
+    miss (no symbol) or a fetch miss stamps ``enriched_at`` so it isn't retried; fail-open throughout."""
+    resolve = resolve or (lambda isin: openfigi.yf_symbol_for_isin(isin, limiter=_OPENFIGI_LIMITER))
+    fetch = fetch or market.fetch_market_cap
+    fx = FXConverter()
+    todo = store.entities_needing_cap_isin(limit=limit)
+    res = EnrichResult(attempted=len(todo))
+    min_interval = 1.0 / per_sec if per_sec > 0 else 0.0
+    log.info("enrich-isin: %d foreign entities need a cap (ISIN→OpenFIGI→yfinance)", len(todo))
+
+    last = 0.0
+    for i, ent in enumerate(todo, 1):
+        if min_interval:
+            gap = min_interval - (time.monotonic() - last)
+            if gap > 0:
+                time.sleep(gap)
+            last = time.monotonic()
+
+        sym = resolve(ent.isin)
+        info = (fetch(sym) or {}) if sym else {}
+        usd = fx.to_usd(info.get("mktcap_native"), info.get("currency"))
+        below = store.apply_cap(ent.entity_id, market_cap_usd=usd, currency=info.get("currency"),
+                                floor_usd=cfg.mktcap_floor_usd, ceiling_usd=cfg.mktcap_ceiling_usd,
+                                ipo_date=info.get("ipo_date"), enriched_at=now_iso())
+        if usd is None:
+            res.misses += 1
+            store.log(stage="enrich_isin", action="flagged", entity_id=ent.entity_id,
+                      reason="cap_unavailable", detail={"isin": ent.isin, "symbol": sym})
+        else:
+            res.filled += 1
+            ccy = (info.get("currency") or "USD").upper()
+            res.by_ccy[ccy] = res.by_ccy.get(ccy, 0) + 1
+            if below:
+                res.below_floor += 1
+            elif cfg.mktcap_ceiling_usd and usd > cfg.mktcap_ceiling_usd:
+                res.above_ceiling += 1
+        if progress_every and i % progress_every == 0:
+            log.info("enrich-isin: %d/%d (filled=%d below=%d above=%d misses=%d)",
+                     i, len(todo), res.filled, res.below_floor, res.above_ceiling, res.misses)
+
+    log.info("enrich-isin done: filled=%d below_floor=%d above_ceiling=%d misses=%d by_ccy=%s",
+             res.filled, res.below_floor, res.above_ceiling, res.misses, res.by_ccy)
     return res
 
 

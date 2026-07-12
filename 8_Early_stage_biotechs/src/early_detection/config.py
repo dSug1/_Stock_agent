@@ -78,7 +78,7 @@ class Config:
     cost_calibration_factor: float = 0.10             # scales script-computed cost → actual invoice [[cost calib]]
     # §5.4 stack-convergence scoring (the expensive, high-value call — full model, pre-filtered candidates)
     scoring_model: str = "claude-sonnet-5"            # stronger tier than extraction (§5.5)
-    scoring_prompt_version: str = "v1"
+    scoring_prompt_version: str = "v2"                # v2: clinical-stage asymmetry rubric (D22); v1 = pre-asymmetry
     scoring_max_output_tokens: int = 4000
     prefilter_min_independent: int = 1                # ≥ this many independent-lab citations to qualify
     # §3.2 clinical-trials signal (ClinicalTrials.gov v2, free, no key). Clinical stage is an INDEPENDENT
@@ -96,11 +96,15 @@ class Config:
         "Regenerative Medicine Advanced Therapy": "rmat",
         "Rare Pediatric Disease Designation": "rare_pediatric",
     })
-    # Optional pre-filter widening: when > 0, a candidate ALSO clears the pre-filter if it has a
-    # company-led trial at ≥ this phase (1..4) + a capital signal — even without an independent citation.
-    # Default 0 = OFF (behavior unchanged: independent-citation gate only). Set e.g. 2 to admit
-    # clinical-stage names the literature trail misses.
-    prefilter_clinical_min_phase: int = 0
+    # Clinical-stage pre-filter widening. A candidate ALSO clears if it has a MEANINGFUL (active/completed)
+    # company-led trial at ≥ this phase + a capital signal — even without an independent citation, so
+    # clinical-stage names the OpenAlex/founder trail misses still reach the Claude conviction call.
+    #   0 = OFF (independent-citation gate only)
+    #   1 = ANY clinical stage — includes early Phase 1 / first-in-human (DEFAULT). Early stage is the
+    #       high-risk / high-asymmetry TARGET of early detection, so it is NOT gated out; phase becomes
+    #       conviction EVIDENCE (the rubric weighs early-stage asymmetry), not an exclusion wall.
+    #   2..4 = raise the floor to Phase N+ (drops the early-stage asymmetric names — usually not what you want).
+    prefilter_clinical_min_phase: int = 1
 
     specialist_funds: tuple[str, ...] = (
         "Baker Bros", "RA Capital", "OrbiMed", "Perceptive Advisors", "BVF Partners",

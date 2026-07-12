@@ -22,7 +22,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from early_detection.config import load_config
-from early_detection.enrich import enrich_caps, enrich_lei
+from early_detection.enrich import enrich_caps, enrich_caps_isin, enrich_lei
 from early_detection.store import Store
 
 
@@ -32,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--per-sec", type=float, default=3.0, help="request rate (caps 3/s, LEI 5/s default)")
     ap.add_argument("--lei", action="store_true",
                     help="backfill LEIs via GLEIF (high-precision) instead of market caps")
+    ap.add_argument("--isin", action="store_true",
+                    help="FOREIGN cap enrich for Wikidata-seeded names: ISIN → OpenFIGI symbol → yfinance "
+                         "(lets the $3B ceiling drop foreign mega-caps)")
     ap.add_argument("--concurrency", type=int, default=8,
                     help="GLEIF fetch workers for --lei (default 8 ≈ 12/s; 429-retry is the safety net)")
     ap.add_argument("--recompute-floor", action="store_true",
@@ -55,6 +58,19 @@ def main(argv: list[str] | None = None) -> int:
         with_lei = store.conn.execute(
             "SELECT COUNT(*) FROM entity WHERE is_live=1 AND lei IS NOT NULL AND lei!=''").fetchone()[0]
         print(f"\n  entities with an LEI: {with_lei}")
+        store.close()
+        return 0
+
+    if args.isin:
+        print(f"Foreign cap enrich (ISIN→OpenFIGI→yfinance) → {cfg.db_path}  "
+              f"(floor ${cfg.mktcap_floor_usd:,.0f} / ceiling ${cfg.mktcap_ceiling_usd:,.0f})")
+        res = enrich_caps_isin(store, cfg, limit=args.limit, per_sec=args.per_sec if args.per_sec < 1 else 0.4)
+        print(f"\n  attempted:     {res.attempted}")
+        print(f"  filled:        {res.filled}")
+        print(f"  below floor:   {res.below_floor}")
+        print(f"  above ceiling: {res.above_ceiling}  (foreign mega-caps now excluded)")
+        print(f"  misses:        {res.misses}  (no symbol/cap → kept + mktcap_unknown)")
+        print(f"  by currency:   {res.by_ccy}")
         store.close()
         return 0
 

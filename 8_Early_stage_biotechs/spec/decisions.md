@@ -6,6 +6,47 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D22 — Clinical stage is ASYMMETRY, not a gate: phase-agnostic widening + asymmetry rubric (prompt v2)
+**Spec ref:** §3.2/§5.4. **Operator insight:** a Phase-2 pre-filter floor *eliminates* early-stage names —
+but early clinical stage = higher risk AND higher asymmetry, and is the *target* of early detection, not a
+weakness. The data confirmed it: a Phase-2 floor would drop **29 early-stage-only names** (Phase 1 /
+first-in-human, no Phase 2 yet) — the exact high-asymmetry bets the pipeline exists to surface. **Decision:**
+(1) **Phase-agnostic widening** — `prefilter_clinical_min_phase` default changed **0 → 1**, where 1 = "ANY
+clinical stage" (`min_rank=1`, EARLY_PHASE1 and up), so any name with a MEANINGFUL (active/completed)
+company-led trial + a capital signal reaches the Claude call regardless of phase; 2..4 raise the floor if an
+operator ever wants it. Phase is a FLOOR you can raise, no longer a wall that drops early names. (2) **Rubric
+enrichment (prompt v1 → v2)** — dimension 4 reframed as "Mechanism novelty & CLINICAL-STAGE ASYMMETRY": the
+scorer is told early stage is higher-risk/higher-asymmetry and the *target*, NOT to penalize a name for being
+early/small, that a first-in-class Phase-1 with independent validation is the ideal asymmetric bet, and to
+REWARD the novel-mechanism × early-stage mismatch; dimension 5 reserves "deprioritize" for a WEAK/UNVALIDATED
+mechanism, NEVER merely for being early-stage. Clinical stage/status already flows into the packet
+(`evidence_summary.clinical_trials`) — this makes the model USE it for asymmetry. Clinical runs BEFORE the
+Claude call (free signal), enriching it. **Live effect (no spend):** candidate pool 27 (citation-only) →
+**263** (any clinical stage), of which **29 are early-stage (Phase-1 lead)** kept in (Inovio/Palisade/ProMIS/
+Sutro/Caribou/Immutep…). **v2 note:** the 12 v1 scores are preserved but under the old rubric; the v2 digest
+is empty until a re-score under the asymmetry rubric (the paid step — ~263 candidates ≈ $2–7 Sonnet batch;
+may need `max_usd_per_run` raised or `--limit`). **Status:** built 2026-07-12 — config + `store.scoring_
+candidates` min_rank map + scoring SYSTEM_PROMPT + `test_clinical.py` (early-stage inclusion). 147 tests. Zero spend.
+
+## D21 — Foreign cap enrichment via ISIN → OpenFIGI → yfinance; the ceiling now works for all markets
+**Spec ref:** cross-cutting (M18/M19/D20 follow-up). **Problem:** the Wikidata-seeded foreign names
+entered `mktcap_unknown` (Wikidata has no cap), so the $3B ceiling couldn't drop their mega-caps — the one
+thing gating the foreign markets from scoring (why the providers were opt-in). The US cap path keys on
+`ticker_primary`+bare-ticker; foreign names have an **ISIN** and yfinance needs an **exchange-suffixed**
+symbol. **Decision:** `clients/openfigi.py` (free, no key) maps ISIN → FIGI records; the **first record is
+the primary venue** (verified Zealand→ZEAL/DC, Argenx→ARGX/BB, Abivax→ABVX/FP), whose Bloomberg exch code
+→ yfinance suffix (`DC→.CO`, `BB→.BR`, `FP→.PA`, `SS→.ST`, `GY→.DE`…); pan-EU MTF/composite codes are
+skipped. `enrich.enrich_caps_isin` (+ `store.entities_needing_cap_isin`, `8_enrich.py --isin`): ISIN →
+symbol → yfinance cap → USD → `apply_cap` (floor+ceiling flags), per-entity persist, fail-open (no
+symbol/cap → stamped, kept mktcap_unknown, not retried). Extended `_net.get_json_retry` to support a POST
+`data` body (OpenFIGI is POST). OpenFIGI keyless ≈25/min → paced 0.4/s + retry. **Live-verified before
+wiring:** Zealand $2.83B (active), Camurus $3.16B (ceiling-excluded), Vicore $0.34B / Synact $0.12B
+(micro active), Argenx $51B / Abivax $11.6B (excluded) — the ceiling now separates foreign small/mid-caps
+from mega-caps exactly as for US. **Limits:** static FX [INF] (live rates come with the licensed provider
+that also replaces local-only yfinance); unresolved names stay uncapped (recall-safe, pre-filter backstop);
+ticker-only-no-ISIN foreign names uncovered. **Status:** built 2026-07-12 — `clients/openfigi.py` +
+`enrich_caps_isin` + store work-list + `--isin` CLI + `test_enrich_isin.py` (5). 146 tests. Zero spend.
+
 ## D20 — Canada (TSX) Wikidata provider — thin, and it empirically confirms the SEDAR+ gap
 **Spec ref:** §2.2. **Decision:** add a Wikidata Canada provider (`providers/canada.py`, `--ca-wikidata`,
 reusing the shared builder) as the TSX/TSXV complement to `edgar_canada` (FPI path). **Probed first:**

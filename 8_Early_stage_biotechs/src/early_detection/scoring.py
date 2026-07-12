@@ -38,12 +38,22 @@ one loud signal:
     building on the founding science? Weigh the independent-citation counts, not raw citation volume.
  2. Capital-markets conviction — specialist healthcare funds crossing 5%+, insider/registration activity.
  3. Academic pedigree — founder-scientist lineage to a credible institution; a resolved foundational paper.
- 4. Mechanism novelty & translational stage — first-in-class potential; how far the science has traveled,
-    incl. clinical stage (company-led trials + furthest phase reached) and REGULATORY designations
-    (Breakthrough/Fast-Track/Orphan/RMAT/Rare-Pediatric) — FDA validation the mechanism is promising,
-    independent of the citation trail. Weigh Breakthrough/RMAT above the more routine Orphan/Fast-Track.
- 5. Base-rate discipline — MOST early biotechs fail. A high score requires VARIANT PERCEPTION: what does
-    this evidence show that the market is under-weighting? Absence of a signal is not negative evidence.
+ 4. Mechanism novelty & CLINICAL-STAGE ASYMMETRY — first-in-class potential, and where the mechanism sits
+    in the clinic (from the clinical_trials evidence: furthest company-led phase, active vs stalled) plus
+    REGULATORY designations (Breakthrough/RMAT/Orphan/Fast-Track/Rare-Pediatric = FDA validation the
+    mechanism is promising, independent of the citation trail; weigh Breakthrough/RMAT above routine
+    Orphan/Fast-Track).
+    CRITICAL FRAMING — read carefully: EARLY clinical stage (Phase 1 / first-in-human) is HIGHER RISK but
+    HIGHER ASYMMETRY, and it is the *target* of early detection, NOT a weakness. Do NOT penalize a name
+    for being early-stage or small. A first-in-class Phase 1 whose founding science is independently
+    validated is the IDEAL asymmetric bet — bigger upside precisely because it is under-recognized and
+    early; a crowded late-stage me-too is not. Weigh (mechanism novelty × independent validation)
+    AGAINST stage, and REWARD the mismatch: a genuinely novel, independently-corroborated mechanism that
+    is still early and under-covered is exactly what this pipeline exists to surface.
+ 5. Base-rate discipline & variant perception — MOST early biotechs fail, so conviction must come from
+    VARIANT PERCEPTION: what does this evidence show that the market under-weights? Reserve "deprioritize"
+    for a WEAK or UNVALIDATED mechanism — NEVER merely for being early-stage, small, or pre-revenue. An
+    early stage is not negative evidence; absence of a signal is not negative evidence.
 
 DISCIPLINE (non-negotiable):
 - Tag claims [V] (verified in the packet) vs [INF] (inferred). NEVER invent data not in the packet.

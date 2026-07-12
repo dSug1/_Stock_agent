@@ -399,6 +399,17 @@ class Store:
             sql += f" LIMIT {int(limit)}"
         return [self._row_to_entity(r) for r in self.conn.execute(sql)]
 
+    def entities_needing_cap_isin(self, limit: int | None = None) -> list[Entity]:
+        """Live entities with an ISIN but no cap and not yet cap-enriched — the FOREIGN (non-EDGAR)
+        enrich work-list. These are the Wikidata-seeded Nordic/EU/CA names: they carry an ISIN (not a
+        yfinance-ready ticker), so the cap path is ISIN → OpenFIGI symbol → yfinance (vs the ticker path
+        of ``entities_needing_cap``). ``enriched_at IS NULL`` so a resolved miss isn't retried every run."""
+        sql = ("SELECT * FROM entity WHERE is_live=1 AND isin IS NOT NULL "
+               "AND market_cap_usd IS NULL AND enriched_at IS NULL ORDER BY entity_id")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return [self._row_to_entity(r) for r in self.conn.execute(sql)]
+
     def apply_cap(self, entity_id: str, *, market_cap_usd: Optional[float], currency: Optional[str],
                   floor_usd: float, ceiling_usd: Optional[float] = None, ipo_date: Optional[str] = None,
                   enriched_at: Optional[str] = None) -> Optional[bool]:
@@ -729,7 +740,9 @@ class Store:
         params: list = [min_independent]
         if clinical_min_phase and clinical_min_phase > 0:
             from .clients.clinicaltrials import MEANINGFUL_STATUSES, PHASE_RANK
-            min_rank = PHASE_RANK.get(f"PHASE{int(clinical_min_phase)}", 0)
+            # min_phase → minimum phase_rank. 1 = ANY clinical stage (EARLY_PHASE1 rank 1 and up — keeps
+            # the early-stage asymmetric names); 2/3/4 raise the floor to that phase. (PHASE1 rank is 2.)
+            min_rank = 1 if int(clinical_min_phase) == 1 else PHASE_RANK.get(f"PHASE{int(clinical_min_phase)}", 0)
             # only a company-led trial that is LIVE or COMPLETED counts — a stalled/withdrawn/unknown
             # trial must not admit a name (it's not de-risking evidence).
             status_in = ",".join("?" for _ in MEANINGFUL_STATUSES)

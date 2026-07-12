@@ -138,6 +138,19 @@ def test_stalled_trials_excluded_from_phase_and_prefilter(store, cfg):
     assert store.scoring_candidates("v1", min_independent=1, force=True, clinical_min_phase=2) == []
 
 
+def test_prefilter_any_clinical_stage_includes_early_phase1(store, cfg):
+    # min_phase=1 = ANY clinical stage: an EARLY_PHASE1 / first-in-human name (the high-asymmetry target)
+    # must NOT be gated out; a Phase-2 floor (min_phase=2) would wrongly drop it.
+    store.upsert_entity(Entity(entity_id="cik:e", legal_name="Early Bio", ticker_primary="ERLY",
+                               jurisdiction="US"))
+    store.insert_signal(SignalRecord(signal_id="cape", entity_id="cik:e", signal_type="capital_markets",
+                                     source="edgar", raw_payload={"form": "8-K"}))
+    ingest_clinical(store, cfg, search=lambda name: [_study("NCTe", "Early Bio", ["EARLY_PHASE1"])])
+    assert [e.entity_id for e in store.scoring_candidates(
+        "v1", min_independent=1, force=True, clinical_min_phase=1)] == ["cik:e"]      # any stage → included
+    assert store.scoring_candidates("v1", min_independent=1, force=True, clinical_min_phase=2) == []  # floor drops it
+
+
 def test_prefilter_clinical_widening(store, cfg):
     # entity with a company-led Phase 2 trial + a capital signal but NO independent citation
     store.upsert_entity(Entity(entity_id="cik:9", legal_name="ClinCo Therapeutics", ticker_primary="CLNC",
