@@ -31,6 +31,10 @@ DEFAULT_SIC_ALLOW = {
 # Module 6 store, read READ-ONLY as the existing-universe priority tier (decision D2).
 DEFAULT_M6_STORE = COMPONENT_ROOT.parent / "6_Biotech_platform_discoverer" / "data" / "store.db"
 
+# Module 2 (funds parser) store, read READ-ONLY as a 13F-holdings universe seed (D23). Specialist-fund
+# holdings close EDGAR-enumeration gaps — any small/mid therapeutic a top biotech fund holds is in-scope.
+DEFAULT_FUND_STORE = COMPONENT_ROOT.parent / "2_Funds_parser" / "2_fundparser.db"
+
 
 @dataclass(frozen=True)
 class Config:
@@ -38,6 +42,7 @@ class Config:
 
     db_path: Path = DEFAULT_DB_PATH
     m6_store_path: Path = DEFAULT_M6_STORE
+    fund_store_path: Path = DEFAULT_FUND_STORE      # 2_Funds_parser 13F holdings (read-only seed, D23)
     mktcap_floor_usd: float = 10_000_000.0            # operator decision: $10M floor
     mktcap_ceiling_usd: float = 3_000_000_000.0       # $3B ceiling — the thesis is small/micro-cap (matches M6's band); flag, not delete
     sic_allow: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SIC_ALLOW))
@@ -134,6 +139,7 @@ def load_config(config_path: Path | None = None) -> Config:
 
     db_path = Path(raw["db_path"]).expanduser() if raw.get("db_path") else DEFAULT_DB_PATH
     m6_path = Path(raw["m6_store_path"]).expanduser() if raw.get("m6_store_path") else DEFAULT_M6_STORE
+    fund_path = Path(raw["fund_store_path"]).expanduser() if raw.get("fund_store_path") else DEFAULT_FUND_STORE
     sic_allow = dict(raw.get("sic_allow") or DEFAULT_SIC_ALLOW)
     markets = tuple(raw.get("markets") or ("US", "CA"))
 
@@ -162,6 +168,7 @@ def load_config(config_path: Path | None = None) -> Config:
     return Config(
         db_path=db_path,
         m6_store_path=m6_path,
+        fund_store_path=fund_path,
         mktcap_floor_usd=float(raw.get("mktcap_floor_usd", 10_000_000.0)),
         mktcap_ceiling_usd=float(raw.get("mktcap_ceiling_usd", 3_000_000_000.0)),
         sic_allow=sic_allow,
