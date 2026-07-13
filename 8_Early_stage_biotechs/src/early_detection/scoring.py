@@ -113,14 +113,17 @@ def _validate(data: dict) -> dict:
 
 
 def estimate_usd(cfg: Config, n: int, *, use_batch: bool = True) -> float:
-    """Pre-dispatch estimate. Packet ~1.2k in + ~0.9k out per candidate; NO web_search, so cost is
-    token-only and small. ``use_batch`` halves it (Batch API = 50%). The ``cost_calibration_factor`` is
-    NOT applied — it deflated a real spend 10× (see extraction.estimate_usd); actual is reported from
-    ``client.spent_usd`` after the run."""
+    """Pre-dispatch estimate. NO web_search, so cost is token-only. ``use_batch`` halves it (Batch API =
+    50%). The ``cost_calibration_factor`` is NOT applied — actual is reported from ``client.spent_usd``.
+
+    Token model CALIBRATED to a real invoice (2026-07-13, 272 v2 candidates, $3.69 batch = $0.0136/cand):
+    measured ~2.3k output tokens/candidate (the v2 asymmetry rubric is verbose — the old 900 assumption
+    was ~2.5× low), and ~2.1k EFFECTIVE input tokens/candidate once the cached system prompt is counted at
+    its ~1.25× cache-write premium. Prices come from the (intro-aware) PRICING table via ``_price``."""
     from .clients.anthropic_client import _price
     p = _price(cfg.scoring_model)
     factor = 0.5 if use_batch else 1.0
-    return n * (1200 * p["in"] + 900 * p["out"]) / 1_000_000 * factor
+    return n * (2100 * p["in"] + 2300 * p["out"]) / 1_000_000 * factor
 
 
 def _run_id() -> str:

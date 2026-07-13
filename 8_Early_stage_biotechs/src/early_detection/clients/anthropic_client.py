@@ -30,9 +30,12 @@ from . import _net  # noqa: F401 — import triggers .env load so ANTHROPIC_API_
 log = logging.getLogger(__name__)
 
 # USD per 1M tokens (input, output). Batch API halves both; cache reads ~0.1× input, writes ~1.25×.
+# NOTE (2026-07-13): claude-sonnet-5 is on INTRODUCTORY pricing $2/$10 through 2026-08-31 (list is
+# $3/$15). Using the list price over-reported a real $3.69 scoring batch as $5.53 (exactly 1.5×). Revert
+# to {"in": 3.0, "out": 15.0} on/after 2026-09-01. Verified against an actual Anthropic invoice.
 PRICING = {
     "claude-haiku-4-5":  {"in": 1.0, "out": 5.0},
-    "claude-sonnet-5":   {"in": 3.0, "out": 15.0},
+    "claude-sonnet-5":   {"in": 2.0, "out": 10.0},   # intro through 2026-08-31; then 3.0 / 15.0
     "claude-opus-4-8":   {"in": 5.0, "out": 25.0},
 }
 

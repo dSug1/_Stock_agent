@@ -101,7 +101,7 @@ def test_literature_stops_on_credit_reserve(tmp_path):
 def test_literature_runs_when_budget_unknown(tmp_path):
     store = Store(tmp_path / "u.db")
     _seed_two_founders(store)
-    cfg = Config(db_path=tmp_path / "u.db", openalex_credit_reserve=40)
+    cfg = Config(db_path=tmp_path / "u.db", openalex_credit_reserve=40, author_fallback_enabled=False)
     # CREDITS is reset (None) → the gate must NOT block; injected callables return no-match
 
     res = ingest_literature(store, cfg, search_authors=lambda name, **kw: [],

@@ -101,10 +101,51 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
                 name, hints, mailto=mailto,
                 max_candidates=cfg.author_fallback_max_candidates, orcid_token=orcid_token)
 
+    # Crossref-FIRST (D25 promotion): try the free resolver before the 10-credit OpenAlex author search,
+    # paying the search only as a recall backstop. Requires the fallback to exist.
+    crossref_first = cfg.author_crossref_first and do_fallback is not None
+
+    def _resolve(name: str, hints: list[str]) -> tuple[str, Optional[str], bool]:
+        """Resolve a founder to an OpenAlex author id. → (status, author_id, via_fallback) where status
+        is 'resolved' | 'no_match' (genuine — stamp done) | 'retry' (transient — leave unstamped).
+
+        crossref-first: free resolver → OpenAlex-search backstop only if it misses (credit saving).
+        search-first (legacy): 10-credit OpenAlex search → free resolver only if it misses (recall)."""
+        def _search():
+            cands = search_authors(name, mailto=mailto, limiter=_LIMITER)
+            if cands is None:                          # throttled/credit-exhausted → retry
+                return ("retry", None, False)
+            author = openalex.pick_author(name, hints, cands)
+            return ("resolved", author["id"], False) if author else ("miss", None, False)
+
+        if crossref_first:
+            fb = do_fallback(name, hints)
+            if fb and fb.author_id:                    # resolved FREE — the 10-credit search is skipped
+                return ("resolved", fb.author_id, True)
+            st, aid, _ = _search()                     # backstop (only reached when the free path missed)
+            if st == "resolved":
+                return ("resolved", aid, False)
+            if st == "retry":
+                return ("retry", None, False)
+            # both missed: stamp no-match, UNLESS the free path merely had a transient fetch failure
+            return ("retry", None, False) if (fb and fb.fetch_failed) else ("no_match", None, False)
+
+        st, aid, _ = _search()                         # search-first
+        if st == "resolved":
+            return ("resolved", aid, False)
+        if st == "retry":
+            return ("retry", None, False)
+        fb = do_fallback(name, hints) if do_fallback else None
+        if fb and fb.fetch_failed:
+            return ("retry", None, False)
+        if fb and fb.author_id:
+            return ("resolved", fb.author_id, True)
+        return ("no_match", None, False)
+
     todo = store.founders_for_literature(limit=limit, only_missing=True)
     res = LiteratureResult(founders=len(todo))
-    log.info("literature: %d founders to resolve (mailto=%s, fallback=%s)",
-             len(todo), bool(mailto), bool(do_fallback))
+    log.info("literature: %d founders to resolve (mailto=%s, fallback=%s, crossref_first=%s)",
+             len(todo), bool(mailto), bool(do_fallback), crossref_first)
 
     for i, f in enumerate(todo):
         # Stop BEFORE starting a founder we can't afford to finish — leaving it (and the rest) UNSTAMPED
@@ -122,30 +163,19 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
         name = f["name"]
         hints = [h for h in (f.get("institution"), f.get("company_name")) if h]
         try:
-            cands = search_authors(name, mailto=mailto, limiter=_LIMITER)
+            status, aid, via_fallback = _resolve(name, hints)
         except Exception as exc:  # noqa: BLE001 — fail-soft per founder
-            log.warning("literature: author search errored for %s (left for retry): %s", name, exc)
+            log.warning("literature: resolution errored for %s (left for retry): %s", name, exc)
             continue
-        if cands is None:                  # fetch failed after retries (throttled) — retry later
-            log.warning("literature: author search unavailable for %s (left for retry)", name)
+        if status == "retry":               # transient (throttle/credit/Crossref) — leave unstamped
+            log.warning("literature: %s unresolved this pass (left for retry)", name)
             continue
-        # cands == [] is a GENUINE no-match → stamp so we don't re-query a founder with no OpenAlex trail
-        author = openalex.pick_author(name, hints, cands)
-        if not author:
-            # Primary OpenAlex search didn't resolve — try the FREE Crossref/ORCID fallback (D25) before
-            # giving up, resolving to an OpenAlex author id via a cheap DOI→work map (no 10-credit search).
-            fb = do_fallback(name, hints) if do_fallback else None
-            if fb is not None and fb.fetch_failed:      # transient (Crossref/OpenAlex) → retry, don't stamp
-                log.warning("literature: fallback fetch failed for %s (left for retry)", name)
-                continue
-            aid_fb = fb.author_id if fb else None
-            if not aid_fb:                              # genuine no-match across all sources → stamp done
-                store.set_founder_literature(fid, author_id=None, foundational_work_id=None)
-                continue
-            res.authors_resolved_fallback += 1
-            author = {"id": aid_fb}                      # converge onto the resolved path below
+        if status == "no_match":            # genuine no academic trail across sources → stamp done
+            store.set_founder_literature(fid, author_id=None, foundational_work_id=None)
+            continue
         res.authors_resolved += 1
-        aid = author["id"]
+        if via_fallback:
+            res.authors_resolved_fallback += 1
 
         # recent publications by the founder
         pubs = _safe(author_works, aid, mailto=mailto, from_year=year - cfg.literature_pub_years,

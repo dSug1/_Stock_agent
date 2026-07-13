@@ -171,6 +171,24 @@ def parse_authors(payload: dict) -> list[dict]:
     return out
 
 
+def author_by_id(author_id: str, *, mailto: str = "",
+                 limiter: Optional[_net.RateLimiter] = None) -> Optional[dict]:
+    """Fetch a single OpenAlex author's profile (``{id, name, institutions}``, whole-career institutions
+    from last_known + affiliations). A single-record fetch is FREE (0 credits) — used by the fallback
+    resolver to verify a founder's institution hint against the author's career, not one paper's affiliation
+    (mirrors the primary ``pick_author`` discipline). Returns None on a fetch failure."""
+    if not author_id:
+        return None
+    aid = _short_id(author_id)
+    url = (f"{BASE}/authors/{quote(aid, safe='')}"
+           f"?select=id,display_name,last_known_institutions,affiliations{_mailto(mailto)}")
+    payload = _get(url, limiter=limiter)
+    if not payload:
+        return None
+    return {"id": _short_id(payload.get("id")), "name": payload.get("display_name"),
+            "institutions": _author_institutions(payload)}
+
+
 def search_authors(name: str, *, mailto: str = "", per_page: int = 10,
                    limiter: Optional[_net.RateLimiter] = None) -> Optional[list[dict]]:
     """Author candidates for ``name``. Returns ``None`` when the FETCH FAILED (e.g. OpenAlex 429 after

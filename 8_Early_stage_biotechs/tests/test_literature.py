@@ -71,7 +71,11 @@ def store(tmp_path):
 
 @pytest.fixture
 def cfg(tmp_path):
-    return Config(db_path=tmp_path / "l.db", literature_pub_years=4, literature_citation_years=6)
+    # These tests exercise the OpenAlex-search path with injected clients — disable the real Crossref/ORCID
+    # fallback so no test reaches the network (a test that wants the fallback injects resolve_fallback,
+    # which overrides this). Crossref-first ordering is covered explicitly in test_author_resolution.py.
+    return Config(db_path=tmp_path / "l.db", literature_pub_years=4, literature_citation_years=6,
+                  author_fallback_enabled=False)
 
 
 def _seed(store):

@@ -51,28 +51,19 @@ def _usable_hints(hints: list[str]) -> list[str]:
     return [h for h in hints if openalex._norm(h) not in bad]
 
 
-def _match_author_in_work(name: str, usable_hints: list[str], authors: list[dict]) -> Optional[str]:
-    """Pick the OpenAlex author id in a work whose name matches the founder and — if a hint is known —
-    whose OpenAlex institution matches. Mirrors ``openalex.pick_author`` (institution anchor, no guessing).
-    """
-    nm = openalex._norm(name)
-    matches = [a for a in authors
-               if a.get("id") and openalex._name_match(nm, openalex._norm(a.get("name") or ""))]
-    if not matches:
-        return None
-    if usable_hints:
-        inst = [a for a in matches
-                if any(any(openalex._norm(h) in openalex._norm(i) or openalex._norm(i) in openalex._norm(h)
-                           for i in a.get("institutions") or [])
-                       for h in usable_hints)]
-        return inst[0]["id"] if inst else None      # had a hint but no institution match → don't guess
-    return matches[0]["id"] if len(matches) == 1 else None
+def _hint_ok(usable_hints: list[str], institutions: list[str]) -> bool:
+    """Does any usable institution hint match any of the author's (career) institutions? (containment,
+    normalized both ways — the same test ``openalex.pick_author`` applies to its author candidates)."""
+    return any(any(openalex._norm(h) in openalex._norm(i) or openalex._norm(i) in openalex._norm(h)
+                   for i in institutions)
+               for h in usable_hints)
 
 
 def resolve(name: str, hints: list[str], *, mailto: str = "", max_candidates: int = 3,
             orcid_dois: Optional[list[str]] = None,
             cr_search: Callable = crossref.search_author_works,
-            oa_work_by_doi: Callable = openalex.work_by_doi) -> FallbackResult:
+            oa_work_by_doi: Callable = openalex.work_by_doi,
+            oa_author_by_id: Callable = openalex.author_by_id) -> FallbackResult:
     """Pure orchestration (clients injectable for offline tests). See the module docstring for the flow."""
     if not name or not name.strip():
         return FallbackResult(source="none")
@@ -85,6 +76,10 @@ def resolve(name: str, hints: list[str], *, mailto: str = "", max_candidates: in
     candidates = [w for w in cr if w.get("doi") and any(
         openalex._name_match(nm, openalex._norm(f"{a.get('given', '')} {a.get('family', '')}"))
         for a in (w.get("authors") or []))]
+    # Crossref returns author-RELEVANCE order (see crossref.search_author_works); sort the name-matched
+    # subset by citations locally so the founder's most-cited paper (the best identity anchor) is mapped
+    # to OpenAlex first.
+    candidates.sort(key=lambda w: w.get("cited_by_count") or 0, reverse=True)
 
     used_orcid = False
     if orcid_dois:
@@ -94,21 +89,32 @@ def resolve(name: str, hints: list[str], *, mailto: str = "", max_candidates: in
             candidates, used_orcid = confirmed, True
 
     usable = _usable_hints(hints)
+    src = "crossref+orcid" if used_orcid else "crossref"
     tried = 0
-    for w in candidates:                             # most-cited first (Crossref sort)
+    for w in candidates:                             # most-cited first (local sort above)
         if tried >= max_candidates:
             break
         doi = openalex.valid_doi(w.get("doi"))
         if not doi:
             continue
         tried += 1
-        work = oa_work_by_doi(doi, mailto=mailto)
+        work = oa_work_by_doi(doi, mailto=mailto)    # ~1 credit
         if work is None:                             # OpenAlex fetch failed / credit-exhausted → retry
             return FallbackResult(fetch_failed=True)
-        aid = _match_author_in_work(name, usable, work.get("authors") or [])
-        if aid:
-            return FallbackResult(author_id=aid, foundational_doi=doi,
-                                  source="crossref+orcid" if used_orcid else "crossref")
+        nmatch = [a for a in (work.get("authors") or [])
+                  if a.get("id") and openalex._name_match(nm, openalex._norm(a.get("name") or ""))]
+        for a in nmatch:
+            if usable:
+                # Verify the hint against the author's WHOLE-CAREER institutions (a single-record author
+                # fetch is FREE), not this one paper's affiliation — an old foundational paper often
+                # predates the founder's current institution. Mirrors the primary path's precision.
+                prof = oa_author_by_id(a["id"], mailto=mailto)
+                if prof is None:                     # profile fetch failed → transient, retry
+                    return FallbackResult(fetch_failed=True)
+                if _hint_ok(usable, prof.get("institutions") or []):
+                    return FallbackResult(author_id=a["id"], foundational_doi=doi, source=src)
+            elif len(nmatch) == 1:                    # no usable hint → accept only an unambiguous match
+                return FallbackResult(author_id=a["id"], foundational_doi=doi, source=src)
     return FallbackResult(source="none")             # genuine no-match across sources
 
 

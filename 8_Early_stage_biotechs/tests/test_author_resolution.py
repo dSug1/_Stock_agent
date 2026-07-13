@@ -60,8 +60,13 @@ _CR = [
 ]
 
 
-def _oa_work(_id, insts):
-    return {"id": _id, "title": "W", "authors": [{"id": _id, "name": "Stuart Rich", "institutions": insts}]}
+def _oa_work(_id):
+    """An OpenAlex work carrying one name-matching author id (institutions come from the profile fetch)."""
+    return {"id": _id, "title": "W", "authors": [{"id": _id, "name": "Stuart Rich", "institutions": []}]}
+
+
+def _prof(insts):
+    return lambda aid, **k: {"id": aid, "name": "Stuart Rich", "institutions": insts}
 
 
 def test_resolve_happy_path_crossref():
@@ -69,54 +74,68 @@ def test_resolve_happy_path_crossref():
 
     def oa(doi, **kw):
         calls.append(doi)
-        return _oa_work("A1", ["Northwestern University"])
+        return _oa_work("A1")
 
-    r = resolve("Stuart Rich", ["Northwestern University"], cr_search=lambda n, **k: _CR, oa_work_by_doi=oa)
+    r = resolve("Stuart Rich", ["Northwestern University"], cr_search=lambda n, **k: _CR,
+                oa_work_by_doi=oa, oa_author_by_id=_prof(["Northwestern University"]))
     assert r.author_id == "A1" and r.source == "crossref" and r.foundational_doi == "10.1161/found"
     assert calls == ["10.1161/found"]                 # only the name-matched work was mapped
 
 
 def test_resolve_institution_mismatch_returns_no_match():
-    r = resolve("Stuart Rich", ["Harvard University"], cr_search=lambda n, **k: _CR,
-                oa_work_by_doi=lambda doi, **k: _oa_work("A1", ["Northwestern University"]))
+    # hint verified against the author's CAREER institutions (profile) — none match → no resolution
+    r = resolve("Stuart Rich", ["Stanford University"], cr_search=lambda n, **k: _CR,
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"), oa_author_by_id=_prof(["Northwestern"]))
     assert r.author_id is None and r.source == "none" and r.fetch_failed is False
 
 
 def test_resolve_no_hint_unique_name_accepts():
+    # no usable hint → accept an unambiguous name match without fetching the profile
+    def _no_profile(aid, **k):  # pragma: no cover
+        raise AssertionError("profile must not be fetched when there is no usable hint")
+
     r = resolve("Stuart Rich", [], cr_search=lambda n, **k: _CR,
-                oa_work_by_doi=lambda doi, **k: _oa_work("A1", []))
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"), oa_author_by_id=_no_profile)
     assert r.author_id == "A1"
 
 
 def test_resolve_crossref_fetch_failure_is_transient():
     r = resolve("Stuart Rich", ["Northwestern"], cr_search=lambda n, **k: None,
-                oa_work_by_doi=lambda doi, **k: _oa_work("A1", ["Northwestern"]))
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"), oa_author_by_id=_prof(["Northwestern"]))
     assert r.fetch_failed is True and r.author_id is None
 
 
 def test_resolve_openalex_budget_failure_is_transient():
     r = resolve("Stuart Rich", ["Northwestern"], cr_search=lambda n, **k: _CR,
-                oa_work_by_doi=lambda doi, **k: None)       # DOI→work map failed (credit-exhausted)
+                oa_work_by_doi=lambda doi, **k: None, oa_author_by_id=_prof(["Northwestern"]))
+    assert r.fetch_failed is True
+
+
+def test_resolve_author_profile_failure_is_transient():
+    r = resolve("Stuart Rich", ["Northwestern"], cr_search=lambda n, **k: _CR,
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"),
+                oa_author_by_id=lambda aid, **k: None)      # profile fetch failed → retry
     assert r.fetch_failed is True
 
 
 def test_resolve_orcid_confirms_and_tags_source():
     r = resolve("Stuart Rich", ["Northwestern University"], cr_search=lambda n, **k: _CR,
-                oa_work_by_doi=lambda doi, **k: _oa_work("A1", ["Northwestern University"]),
-                orcid_dois=["10.1161/found"])
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"),
+                oa_author_by_id=_prof(["Northwestern University"]), orcid_dois=["10.1161/found"])
     assert r.author_id == "A1" and r.source == "crossref+orcid"
 
 
 def test_resolve_orcid_no_overlap_falls_back_to_crossref():
     r = resolve("Stuart Rich", ["Northwestern University"], cr_search=lambda n, **k: _CR,
-                oa_work_by_doi=lambda doi, **k: _oa_work("A1", ["Northwestern University"]),
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"),
+                oa_author_by_id=_prof(["Northwestern University"]),
                 orcid_dois=["10.9999/unrelated"])            # no overlap → don't over-narrow to empty
     assert r.author_id == "A1" and r.source == "crossref"
 
 
 def test_resolve_name_mismatch_no_candidates():
     r = resolve("Jane Doe", ["MIT"], cr_search=lambda n, **k: _CR,
-                oa_work_by_doi=lambda doi, **k: _oa_work("A1", ["MIT"]))
+                oa_work_by_doi=lambda doi, **k: _oa_work("A1"), oa_author_by_id=_prof(["MIT"]))
     assert r.author_id is None and r.source == "none"
 
 
@@ -128,10 +147,10 @@ def test_resolve_caps_candidate_maps():
 
     def oa(doi, **kw):
         calls.append(doi)
-        return _oa_work("A1", ["Harvard"])              # never matches the Northwestern hint
+        return _oa_work("A1")
 
     r = resolve("Stuart Rich", ["Northwestern"], max_candidates=2, cr_search=lambda n, **k: many,
-                oa_work_by_doi=oa)
+                oa_work_by_doi=oa, oa_author_by_id=_prof(["Harvard"]))   # never matches the hint
     assert r.author_id is None and len(calls) == 2      # stopped after the cap
 
 
@@ -202,3 +221,41 @@ def test_literature_fallback_transient_leaves_unstamped(store, tmp_path):
         resolve_fallback=lambda name, hints: FallbackResult(fetch_failed=True))
     assert res.authors_resolved == 0
     assert store.founders_for("cik:1")[0]["literature_at"] is None    # left for retry, not stamped
+
+
+# ── crossref-first (D25 promotion): free resolver runs BEFORE the 10-credit search ────────────────
+def test_crossref_first_skips_the_10credit_search(store, tmp_path):
+    _seed(store)
+    cfg = Config(db_path=tmp_path / "ar.db", author_crossref_first=True)   # default
+
+    def _no_search(*a, **k):  # pragma: no cover
+        raise AssertionError("the 10-credit OpenAlex author search must be SKIPPED when Crossref resolves")
+
+    res = ingest_literature(
+        store, cfg, today_year=2026, search_authors=_no_search,
+        author_works=lambda aid, *, sort="", per_page=25, **kw: (
+            [{"id": "Wf", "title": "F", "year": 1991, "date": "1991-01-01", "cited_by_count": 9,
+              "institutions": [], "author_names": []}] if sort.startswith("cited_by_count") else []),
+        citing_works=lambda wid, **kw: [],
+        resolve_fallback=lambda name, hints: FallbackResult(author_id="Afb", source="crossref"))
+    assert res.authors_resolved == 1 and res.authors_resolved_fallback == 1
+    assert store.founders_for("cik:1")[0]["openalex_author_id"] == "Afb"
+
+
+def test_crossref_first_backstops_to_search_on_fallback_miss(store, tmp_path):
+    from early_detection.clients import openalex
+    _seed(store)
+    cfg = Config(db_path=tmp_path / "ar.db", author_crossref_first=True)
+    authors = [{"id": "A1", "display_name": "Stuart Rich", "works_count": 9, "cited_by_count": 99,
+                "institutions": ["Northwestern University"]}]
+
+    res = ingest_literature(
+        store, cfg, today_year=2026,
+        search_authors=lambda name, **kw: authors,                     # backstop resolves
+        author_works=lambda aid, *, sort="", per_page=25, **kw: (
+            [{"id": "Wf", "title": "F", "year": 1991, "date": "1991-01-01", "cited_by_count": 9,
+              "institutions": [], "author_names": []}] if sort.startswith("cited_by_count") else []),
+        citing_works=lambda wid, **kw: [],
+        resolve_fallback=lambda name, hints: FallbackResult(source="none"))   # free path misses
+    assert res.authors_resolved == 1 and res.authors_resolved_fallback == 0   # resolved via the backstop
+    assert store.founders_for("cik:1")[0]["openalex_author_id"] == "A1"

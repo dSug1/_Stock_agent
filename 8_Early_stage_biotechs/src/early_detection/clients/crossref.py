@@ -74,16 +74,20 @@ def parse_author_works(payload: dict) -> list[dict]:
     return out
 
 
-def search_author_works(name: str, *, mailto: str = "", rows: int = 20,
+def search_author_works(name: str, *, mailto: str = "", rows: int = 25,
                         limiter: Optional[_net.RateLimiter] = None) -> Optional[list[dict]]:
-    """Works by an author NAME (``query.author``), most-cited first. Returns **None on a FETCH FAILURE**
-    (so the caller leaves the founder for retry, not a false no-match) vs ``[]`` on a genuine empty result.
-    ``rows`` is int-coerced and bounded by Crossref."""
+    """Works by an author NAME (``query.author``), in Crossref's default **author-relevance** order.
+    Returns **None on a FETCH FAILURE** (so the caller leaves the founder for retry, not a false no-match)
+    vs ``[]`` on a genuine empty result. ``rows`` is int-coerced and bounded by Crossref.
+
+    NB: do NOT sort by ``is-referenced-by-count`` here — ``query.author`` is a loose token search, and a
+    global citation sort surfaces mega-cited consortium papers that merely CONTAIN a matching name token
+    (e.g. "Stuart Pocock" for "Stuart Rich"), burying the real author. Relevance ranks true name matches
+    first; the resolver then sorts the name-MATCHED subset by citations locally to pick the foundational."""
     if not name or not name.strip():
         return []
     url = (f"{BASE}/works?query.author={quote(name.strip(), safe='')}&rows={int(rows)}"
-           f"&select=DOI,title,author,is-referenced-by-count,issued"
-           f"&sort=is-referenced-by-count&order=desc{_safe_mailto(mailto)}")
+           f"&select=DOI,title,author,is-referenced-by-count,issued{_safe_mailto(mailto)}")
     payload = _net.safe_json_retry(url, limiter=limiter or _LIMITER, accept="application/json")
     if payload is None:
         return None

@@ -83,6 +83,12 @@ class Config:
     # opt-in precision booster (active only if ORCID_CLIENT_ID/_SECRET are in the env; secrets NEVER in yaml).
     author_fallback_enabled: bool = True
     author_fallback_max_candidates: int = 3            # cap OpenAlex DOI→work maps tried per founder
+    # Crossref-FIRST (D25 promotion): try the free Crossref/ORCID resolver BEFORE the 10-credit OpenAlex
+    # author search, and only pay the 10-credit search as a recall BACKSTOP when the free path can't
+    # resolve. A Crossref miss on a non-academic founder makes zero OpenAlex calls, so this saves ~8–9
+    # credits per academic founder while keeping full recall. Set False to revert to search-first (the
+    # free resolver then runs only as a fallback after the primary search misses).
+    author_crossref_first: bool = True
     # Specialist healthcare/biotech fund watchlist (spec §3.5) — a 5%+ crossing (SC 13D/G) by one of
     # these is the headline capital-markets signal. Queried against EDGAR full-text (efts). Names are
     # matched case/normalization-insensitively against filing display_names.
@@ -198,5 +204,6 @@ def load_config(config_path: Path | None = None) -> Config:
         author_fallback_enabled=bool(raw.get("author_fallback_enabled", defaults.author_fallback_enabled)),
         author_fallback_max_candidates=int(raw.get("author_fallback_max_candidates",
                                                    defaults.author_fallback_max_candidates)),
+        author_crossref_first=bool(raw.get("author_crossref_first", defaults.author_crossref_first)),
         **extraction_kwargs,
     )

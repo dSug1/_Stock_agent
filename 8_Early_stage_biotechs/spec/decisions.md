@@ -6,6 +6,78 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D26 — Promote the Crossref/ORCID resolver to PRIMARY (crossref-first); the 10-credit search is a backstop
+**Spec ref:** §3.1/§5.5, completes the D25 "make the fallback primary" deferral. **Operator ask:** "promote
+the fallback to primary for credit savings." **Evidence it's safe:** the 10-ticker batch (2026-07-13)
+resolved 10/10 real scientific founders (Walter Gilbert, LeRoy Hood, Jeffrey Ravetch, Colin Masters…) and
+rejected 13/13 non-scientist founders (CEOs/VCs/inventors) — precision held, so the free resolver can lead.
+**Decision:** `config.author_crossref_first` (default **True**) inverts the order — try the free
+Crossref(+ORCID)→OpenAlex-author-id resolver FIRST, and pay the 10-credit OpenAlex author search only as a
+recall **backstop** when the free path can't resolve. **Why it saves:** a Crossref miss on a non-academic
+founder makes ZERO OpenAlex calls; an academic founder resolves for ~1 credit (DOI→work map; author-profile
+verification is free). **Live-measured: resolving Tibor Keler cost 1 credit vs ~10** (a 10× saving); the
+free path also resolved Stuart Rich / Stephen Elledge at ~1–2 credits each.
+
+**Recall preserved (no loss vs search-first):** when the free path misses, the backstop runs the full
+10-credit search + `pick_author` exactly as before, so any founder the search would have resolved still is.
+The only cost case is a founder Crossref surfaces but can't institution-verify AND the search then also
+misses — a few wasted credits, rare. **Fail-open contract kept:** a transient Crossref failure falls through
+to the backstop; if the backstop ALSO can't resolve while Crossref was transiently down, the founder is left
+UNSTAMPED for retry (never a false no-match); OpenAlex budget-exhaustion short-circuits both paths → retry.
+Set `author_crossref_first: false` in `config.yaml` to revert to search-first (free resolver as a
+post-search fallback). **Implementation:** the resolution order lives in a `literature._resolve` helper
+returning `resolved|no_match|retry`; both orders share the pubs+citation emission. **Status:** built
+2026-07-13 — `config.author_crossref_first` + `literature._resolve` rewrite + `test_author_resolution.py`
+crossref-first cases (search skipped when free path resolves; backstop fires on a miss) + legacy literature
+tests pinned offline. **178 tests.** `spec/D25_author_resolution_fallback_explained.md` updated.
+[[reference_openalex_credit_quota]]
+
+## D25 — Free author-resolution fallback (Crossref + optional ORCID) relieves the 10-credit chokepoint
+**Spec ref:** §3.1 (literature signal; author resolution is its bottleneck), follow-up to D24. **Operator
+ask:** "build free ORCID/Crossref taking into consideration cybersecurity." **Why:** author resolution is
+the bottleneck twice over — OpenAlex `/authors?search=` costs **10 credits** (D24: ~100/day free) AND
+resolves only ~40% of founders. **Decision:** when the primary OpenAlex author search fails to resolve a
+founder (`pick_author` → None), fall back to a FREE resolver that yields an OpenAlex author id without a
+second 10-credit search:
+1. **Crossref** `query.author` (free, keyless, **no quota**) → the founder's works in **author-relevance**
+   order (NOT a citation sort — `query.author` is a loose token search, and a global citation sort surfaces
+   mega-cited consortium papers merely CONTAINING a name token, e.g. "Stuart Pocock" for "Stuart Rich",
+   burying the real author). Keep only works whose author list truly name-matches (`openalex._name_match`);
+   sort THAT subset by citations locally.
+2. **(optional) ORCID** — if `ORCID_CLIENT_ID`/`_SECRET` are in the ENV, keep only DOIs the founder
+   authored per their ORCID record (persistent-identity precision). Absent creds → Crossref-only, fully
+   functional.
+3. For each candidate DOI (most-cited first, capped 3): map **DOI → OpenAlex work** (`filter=doi:`, **~1
+   credit**), find the name-matching author, verify the institution hint against that author's **whole-
+   career** institutions via the OpenAlex **author profile** (`/authors/{id}` = **FREE, 0 credits**) — not
+   the one paper's affiliation (a foundational paper predates the founder's current institution). First
+   verified match wins. The existing cheap OpenAlex path (pubs + `cites:`) then continues on that author id.
+
+**Net cost ≈ 1–2 OpenAlex credits per recovered founder vs 10**, and it resolves founders the search
+missed. **Precision-first** (wrong author → wrong citations → false signal): surname always required, +
+career-institution match when a hint is known, else only an unambiguous unique name; ambiguous → no
+resolution. **Fail-open/lossless:** any transient fetch failure (Crossref down / OpenAlex credit-exhausted
+/ ORCID token fail) → `fetch_failed` → founder left UNSTAMPED for retry, never a false no-match.
+
+**Cybersecurity (3 new fetch surfaces — Crossref/ORCID/OpenAlex-DOI, built to `SECURITY_AUDIT.md`):**
+(a) **No SSRF** — hosts are hard-coded HTTPS constants; only query VALUES vary, percent-encoded; no
+user/config URL fetched. (b) **DOI path-injection guard** — `openalex.valid_doi` regex-validates a
+third-party DOI to `10.<4-9>/…`, **rejects `..`** + non-DOI junk (`javascript:`/`http://`), then it's
+encoded into a query VALUE not a path (validation + encoding, defence-in-depth). (c) **ORCID secrets from
+ENV only**, never yaml/CLI, secret+body+token **never logged** (error logs carry only the exception type),
+memory-only. (d) **JSON-only** (no XML → no entity-expansion). (e) 64 MiB capped reads + bounded rows.
+(f) Response content is DATA (matched+stored; never executed/SQL/unescaped). (g) `mailto` regex-validated
+before use. (h) per-source limiters + Retry-After + fail-open.
+
+**Live-verified:** Stuart Rich → `A5011075689`, Stephen Elledge → `A5025914907` (whole-career institution
+match), a nonexistent name correctly unresolved; ~1–2 credits/founder. **Status:** built 2026-07-13 —
+`clients/crossref.py` + `clients/orcid.py` (opt-in) + `signals/author_resolution.py` + `openalex.work_by_doi`
+/`authors_of_work`/`author_by_id`/`valid_doi` + literature wiring + `config.author_fallback_enabled`/
+`_max_candidates` + `test_author_resolution.py` (18). **176 tests**, all offline. See
+`spec/D25_author_resolution_fallback_explained.md`. [[reference_openalex_credit_quota]]. **Deferred:**
+OpenCitations for a zero-OpenAlex-credit citation path; making the fallback PRIMARY (try Crossref before
+the 10-credit search) once precision is trusted at scale.
+
 ## D24 — OpenAlex enforces a credit/USD quota now; a credit-budget guard + credit-safe daily runner
 **Spec ref:** §3.1/§5.2 (the OpenAlex-backed literature + independence signals), operator asks
 (2026-07-13): "check if OpenAlex is still 429; run a daily pass that stays within the credit budget and
