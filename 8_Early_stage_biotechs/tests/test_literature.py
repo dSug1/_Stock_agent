@@ -123,10 +123,15 @@ def test_ingest_resolves_author_and_emits_signals(store, cfg):
 
 
 def test_unresolved_author_is_stamped_not_retried(store, cfg):
+    from early_detection.signals.author_resolution import FallbackResult
     _seed(store)
+    # inject a no-match fallback so the test stays fully offline (the real one would hit Crossref)
     res = ingest_literature(store, cfg, search_authors=lambda name, **kw: [],
-                            author_works=lambda *a, **k: [], citing_works=lambda *a, **k: [])
+                            author_works=lambda *a, **k: [], citing_works=lambda *a, **k: [],
+                            resolve_fallback=lambda name, hints: FallbackResult(source="none"))
     assert res.authors_resolved == 0
+    # genuine no-match across primary + fallback → stamped done (not retried)
+    assert store.founders_for("cik:1")[0]["literature_at"] is not None
     assert store.founders_for("cik:1")[0]["literature_at"] is not None      # stamped
     assert len(store.founders_for_literature()) == 0                        # not retried
 

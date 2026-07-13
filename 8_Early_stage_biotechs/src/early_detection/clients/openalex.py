@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import unicodedata
 from typing import Optional
 from urllib.parse import quote
@@ -32,6 +33,78 @@ _NONALNUM = re.compile(r"[^a-z0-9 ]+")
 # at 5/s here AND retry with Retry-After/backoff in ``_get`` (belt-and-suspenders): the limiter avoids
 # most 429s, the retry recovers the rest so no citation signal is silently dropped.
 _LIMITER = _net.RateLimiter(per_sec=5.0)
+
+
+# ── credit / USD quota (the 2026 OpenAlex model) ─────────────────────────────
+# As of mid-2026 OpenAlex enforces a CREDIT budget on top of the per-second rate limit: each response
+# carries ``X-RateLimit-Remaining`` (credits left this window), ``X-RateLimit-Limit`` (~1000),
+# ``X-RateLimit-Reset`` (seconds to reset, ~daily) and ``X-RateLimit-Remaining-USD`` (~$0.10 budget).
+# Cost is PER-ENDPOINT, not per-call — an ``/authors?search=`` costs ~10 credits, a ``/works`` list
+# query ~1 — so ~1000 credits ≈ only ~100 author searches/day on the free tier. We do NOT hardcode these
+# prices: the tracker reads the server's own remaining count after every call, so it self-corrects. A
+# daily run reads this to STOP before the budget is gone rather than getting hard-429'd mid-sweep.
+class CreditTracker:
+    """Thread-safe view of OpenAlex's remaining credit budget, updated from response headers."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.remaining: Optional[int] = None       # credits left this window; None until first observed
+        self.limit: Optional[int] = None           # window budget (~1000)
+        self.reset: Optional[int] = None            # seconds until the window resets
+        self.remaining_usd: Optional[float] = None
+
+    @staticmethod
+    def _get_num(headers, name, cast):
+        try:
+            v = headers.get(name)
+            return cast(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def note(self, headers) -> None:
+        """Observe a response's quota headers (called via ``_net`` on success AND on a 429)."""
+        if headers is None:
+            return
+        rem = self._get_num(headers, "X-RateLimit-Remaining", int)
+        lim = self._get_num(headers, "X-RateLimit-Limit", int)
+        rst = self._get_num(headers, "X-RateLimit-Reset", int)
+        usd = self._get_num(headers, "X-RateLimit-Remaining-USD", float)
+        with self._lock:
+            if rem is not None:
+                self.remaining = rem
+            if lim is not None:
+                self.limit = lim
+            if rst is not None:
+                self.reset = rst
+            if usd is not None:
+                self.remaining_usd = usd
+
+    def exhausted(self, reserve: int = 0) -> bool:
+        """True once observed remaining credits fall to/below ``reserve``. False while unknown (None) so
+        the first call of a run is always allowed — it populates the tracker for the calls that follow."""
+        with self._lock:
+            return self.remaining is not None and self.remaining <= reserve
+
+    def status(self) -> dict:
+        with self._lock:
+            return {"remaining": self.remaining, "limit": self.limit,
+                    "reset_s": self.reset, "remaining_usd": self.remaining_usd}
+
+    def reset_state(self) -> None:
+        """Forget observed budget (tests / a fresh process)."""
+        with self._lock:
+            self.remaining = self.limit = self.reset = None
+            self.remaining_usd = None
+
+
+# Module-level shared tracker — every OpenAlex call feeds it, every budget check reads it.
+CREDITS = CreditTracker()
+
+# Last-ditch backstop inside ``_get``: even a loop-level reserve can't stop a call once a founder is
+# mid-flight, so the client refuses to fetch when the observed budget is truly gone (returns None →
+# callers treat it as a throttle → the founder is left UNSTAMPED for retry, never poisoned). The real
+# budget guard is the config-driven per-founder reserve enforced by the signal loops.
+_CREDIT_HARD_FLOOR = 0
 
 
 def _short_id(url: Optional[str]) -> Optional[str]:
@@ -52,9 +125,25 @@ def _mailto(mailto: str) -> str:
 
 
 def _get(url: str, *, limiter: Optional[_net.RateLimiter] = None) -> Optional[dict]:
-    """Fetch OpenAlex JSON through the shared pacer + Retry-After/backoff retry. A caller-supplied
-    ``limiter`` overrides the module default (kept for tests); production always shares ``_LIMITER``."""
-    return _net.safe_json_retry(url, limiter=limiter or _LIMITER, accept="application/json")
+    """Fetch OpenAlex JSON through the shared pacer + Retry-After/backoff retry, feeding every response's
+    quota headers into ``CREDITS``. A caller-supplied ``limiter`` overrides the module default (kept for
+    tests); production always shares ``_LIMITER``. Returns None (→ callers treat as a throttle, leave the
+    founder for retry) when the observed credit budget is already gone — so a hard-quota window doesn't
+    burn retry/backoff time on calls that can only 429."""
+    if CREDITS.exhausted(_CREDIT_HARD_FLOOR):
+        log.warning("openalex: credit budget exhausted (remaining=%s, resets in ~%ss) — skipping fetch",
+                    CREDITS.remaining, CREDITS.reset)
+        return None
+    return _net.safe_json_retry(url, limiter=limiter or _LIMITER, accept="application/json",
+                                on_headers=CREDITS.note)
+
+
+def probe_credits(mailto: str = "") -> dict:
+    """One cheap (~1-credit) call to populate ``CREDITS`` before a run, so a daily runner can report the
+    budget and bail early if it's already spent. Uses a ``/works`` LIST query (cheap), never an author
+    search (10 credits). Returns the tracker status dict."""
+    _get(f"{BASE}/works?per-page=1&select=id{_mailto(mailto)}")
+    return CREDITS.status()
 
 
 # ── authors ──────────────────────────────────────────────────────────────────
@@ -129,6 +218,65 @@ def pick_author(name: str, hints: list[str], candidates: list[dict]) -> Optional
 
 
 # ── works ────────────────────────────────────────────────────────────────────
+
+# A DOI from a third-party (Crossref/ORCID) response is UNTRUSTED input that we splice into a request.
+# Validate it to the bare ``10.<registrant>/<suffix>`` shape and reject anything else, so a malicious or
+# malformed DOI can't inject a path/host (defence-in-depth on top of the hard-coded BASE host).
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[-._;()/:a-z0-9<>\[\]]+$", re.IGNORECASE)
+
+
+def valid_doi(doi: Optional[str]) -> Optional[str]:
+    """Normalize (strip a ``doi.org`` / ``doi:`` prefix) and validate a DOI. Returns the bare DOI, or None
+    for anything that isn't a well-formed DOI."""
+    if not doi:
+        return None
+    d = doi.strip()
+    for pre in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "doi:"):
+        if d.lower().startswith(pre):
+            d = d[len(pre):]
+            break
+    if ".." in d:                       # no legitimate DOI contains '..'; reject path-traversal shapes
+        return None
+    return d if _DOI_RE.match(d) else None
+
+
+def authors_of_work(work: dict) -> list[dict]:
+    """Per-author ``{id, name, institutions}`` for a single OpenAlex work — lets the fallback resolver map
+    a founder (name + institution hint) to the author's OpenAlex id after resolving the foundational paper
+    via Crossref/ORCID (a DOI), instead of the 10-credit author search."""
+    out = []
+    for au in work.get("authorships") or []:
+        a = au.get("author") or {}
+        out.append({
+            "id": _short_id(a.get("id")),
+            "name": a.get("display_name"),
+            "institutions": [i.get("display_name") for i in (au.get("institutions") or [])
+                             if i.get("display_name")],
+        })
+    return out
+
+
+def work_by_doi(doi: str, *, mailto: str = "",
+                limiter: Optional[_net.RateLimiter] = None) -> Optional[dict]:
+    """Resolve a DOI → its OpenAlex work (``{id, title, authors:[{id,name,institutions}]}``) via the cheap
+    (~1-credit) ``filter=doi:`` query — the fallback path's bridge from a Crossref/ORCID-resolved paper to
+    the OpenAlex citation graph, avoiding the 10-credit author search. Returns None on an invalid DOI or a
+    fetch failure (credit-exhausted/throttled → caller leaves the founder for retry)."""
+    d = valid_doi(doi)
+    if not d:
+        return None
+    url = (f"{BASE}/works?filter=doi:{quote(d, safe='')}&per-page=1"
+           f"&select=id,display_name,authorships{_mailto(mailto)}")
+    payload = _get(url, limiter=limiter)
+    if not payload:
+        return None
+    results = payload.get("results") or []
+    if not results:
+        return None
+    w = results[0]
+    return {"id": _short_id(w.get("id")), "title": w.get("display_name"),
+            "authors": authors_of_work(w)}
+
 
 def parse_works(payload: dict) -> list[dict]:
     """works response → [{id, title, year, date, cited_by_count, doi, institutions[], author_names[],

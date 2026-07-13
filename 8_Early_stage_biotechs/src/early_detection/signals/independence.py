@@ -40,6 +40,8 @@ class IndependenceResult:
     founders: int = 0
     refined: int = 0
     citations: int = 0
+    stopped_early: bool = False       # True if the OpenAlex credit reserve halted the run
+    budget_left: int = 0              # founders left unrefined when it stopped (retry next window)
     by_relationship: dict = field(default_factory=lambda: {
         "self": 0, "collaborator": 0, "same_institution": 0, "industry": 0, "independent": 0})
 
@@ -80,7 +82,18 @@ def refine_independence(store: Store, cfg: Config, *, limit: int | None = None,
     res = IndependenceResult(founders=len(todo))
     log.info("independence: %d resolved founders to refine", len(todo))
 
-    for f in todo:
+    for i, f in enumerate(todo):
+        # Budget guard (see literature): stop before a founder we can't finish, leaving the rest
+        # unstamped for the next window. Independence never runs an author search, but coauthor_ids +
+        # citing_works still spend credits — so it shares the same reserve so a combined daily run
+        # (literature then independence, one process, one budget) doesn't overrun.
+        if openalex.CREDITS.exhausted(cfg.openalex_credit_reserve):
+            res.stopped_early = True
+            res.budget_left = len(todo) - i
+            log.warning("independence: OpenAlex credit reserve reached (remaining=%s, resets in ~%ss) — "
+                        "stopping; %d founders left for the next window",
+                        openalex.CREDITS.remaining, openalex.CREDITS.reset, res.budget_left)
+            break
         aid = f["openalex_author_id"]
         found_id = f["foundational_work_id"]
         hints = [h for h in (f.get("institution"), f.get("company_name")) if h]

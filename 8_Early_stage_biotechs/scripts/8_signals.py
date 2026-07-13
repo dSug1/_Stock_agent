@@ -22,6 +22,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:  # noqa: BLE001
         pass
 
+from early_detection.clients import openalex
 from early_detection.config import load_config
 from early_detection.signals.capital_markets import ingest_capital_markets
 from early_detection.signals.clinical import ingest_clinical
@@ -53,6 +54,19 @@ def _print_stats(store: Store) -> None:
     print(f"  entities with a signal: {with_sig}")
     if by_form:
         print("  by form: " + ", ".join(f"{f}={n}" for f, n in by_form))
+
+
+def _print_openalex_budget(r) -> None:
+    """Surface the OpenAlex credit budget + whether the run stopped early on it (r = a signal result)."""
+    st = openalex.CREDITS.status()
+    if st.get("remaining") is not None:
+        hrs = (st["reset_s"] / 3600.0) if st.get("reset_s") else None
+        reset = f", resets in ~{hrs:.1f}h" if hrs is not None else ""
+        print(f"  OpenAlex credits:   {st['remaining']}/{st.get('limit')} left"
+              f" (${st.get('remaining_usd')} USD{reset})")
+    if getattr(r, "stopped_early", False):
+        print(f"  ⚠ STOPPED on credit reserve — {r.budget_left} founder(s) left for the next window; "
+              f"re-run after reset (they are UNSTAMPED, resume losslessly).")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -121,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n  founders refined:   {r.refined}")
         print(f"  citations classified: {r.citations}")
         print(f"  by relationship:    {r.by_relationship}")
+        _print_openalex_budget(r)
         _print_stats(store)
         store.close()
         return 0
@@ -129,11 +144,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Ingesting literature/citation signals → {cfg.db_path}  (OpenAlex, founder-keyed)")
         r = ingest_literature(store, cfg, limit=args.limit)
         print(f"\n  founders scanned:      {r.founders}")
-        print(f"  authors resolved:      {r.authors_resolved}")
+        print(f"  authors resolved:      {r.authors_resolved}  (via free Crossref/ORCID fallback: {r.authors_resolved_fallback})")
         print(f"  publications:          {r.publications}")
         print(f"  citations:             {r.citations}")
         print(f"  independent citations: {r.independent_citations}")
         print(f"  by independence:       {r.by_independence}")
+        _print_openalex_budget(r)
         _print_stats(store)
         store.close()
         return 0

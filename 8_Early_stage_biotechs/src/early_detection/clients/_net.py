@@ -113,16 +113,32 @@ def get_text(url: str, **kw: Any) -> str:
 RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 
+def _notify_headers(cb: Optional[Any], headers: Any) -> None:
+    """Best-effort header observation for a caller-supplied callback; never raises into the fetch path."""
+    if cb is None or headers is None:
+        return
+    try:
+        cb(headers)
+    except Exception:  # noqa: BLE001 — observation must never break the request
+        log.debug("on_headers callback raised; ignoring", exc_info=True)
+
+
 def get_json_retry(url: str, *, accept: str = "application/json", timeout: float = 30,
                    limiter: Optional[RateLimiter] = None, retries: int = 4,
                    retry_statuses: tuple = RETRY_STATUSES, max_delay: float = 30.0,
-                   extra_headers: Optional[dict] = None, data: Optional[bytes] = None) -> Any:
+                   extra_headers: Optional[dict] = None, data: Optional[bytes] = None,
+                   on_headers: Optional[Any] = None) -> Any:
     """GET JSON, retrying transient ``retry_statuses`` (429 rate-limit, 5xx) with backoff that HONORS the
     server's ``Retry-After`` header. Raises on a non-retryable status or once ``retries`` is exhausted.
 
     This is the reusable version of the per-client retry ``edgar_fts._get_json`` already relies on — a
     bare 429 with no retry silently becomes "no results" (see ``safe_json``), which for OpenAlex dropped
-    a whole founder's citation signal and (worse) let the independence refinement stamp it as score-0."""
+    a whole founder's citation signal and (worse) let the independence refinement stamp it as score-0.
+
+    ``on_headers``, if given, is called with the response headers (an object supporting ``.get(name)``)
+    on BOTH success and a retryable HTTPError — so a caller can observe quota headers (e.g. OpenAlex's
+    ``X-RateLimit-Remaining`` credit count) without changing the JSON return contract. Header-observation
+    failures never break the fetch."""
     for attempt in range(retries + 1):
         if limiter is not None:
             limiter.wait()
@@ -132,8 +148,11 @@ def get_json_retry(url: str, *, accept: str = "application/json", timeout: float
                 headers.update(extra_headers)
             req = urllib.request.Request(url, headers=headers, data=data)  # data → POST
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(capped_read(resp))
+                body = capped_read(resp)
+                _notify_headers(on_headers, getattr(resp, "headers", None))
+                return json.loads(body)
         except urllib.error.HTTPError as e:
+            _notify_headers(on_headers, getattr(e, "headers", None))
             if e.code in retry_statuses and attempt < retries:
                 ra = (e.headers.get("Retry-After") if e.headers else None)
                 # Retry-After may be seconds (int) or an HTTP-date; use it when numeric, else backoff.
@@ -158,7 +177,8 @@ def safe_json(url: str, **kw: Any) -> Optional[Any]:
 
 def safe_json_retry(url: str, **kw: Any) -> Optional[Any]:
     """Fail-open wrapper over :func:`get_json_retry` — returns None only after retries are exhausted, so
-    a transient 429/5xx is recovered rather than silently dropped on the first hit."""
+    a transient 429/5xx is recovered rather than silently dropped on the first hit. Forwards ``on_headers``
+    (quota-header observation) through ``**kw``."""
     try:
         return get_json_retry(url, **kw)
     except Exception as exc:  # noqa: BLE001 — fail-open after retries

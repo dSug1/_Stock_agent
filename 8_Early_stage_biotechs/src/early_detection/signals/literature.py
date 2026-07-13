@@ -21,10 +21,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Optional
 
-from ..clients import openalex
+from ..clients import openalex, orcid
 from ..config import Config
 from ..models import SignalRecord
 from ..store import Store, now_iso
+from . import author_resolution
 
 log = logging.getLogger(__name__)
 
@@ -37,10 +38,14 @@ _NONALNUM = re.compile(r"[^a-z0-9 ]+")
 @dataclass
 class LiteratureResult:
     founders: int = 0
+    processed: int = 0                # founders actually attempted this run (before any budget stop)
     authors_resolved: int = 0
+    authors_resolved_fallback: int = 0   # of authors_resolved, how many came via the Crossref/ORCID fallback
     publications: int = 0
     citations: int = 0
     independent_citations: int = 0
+    stopped_early: bool = False       # True if the OpenAlex credit reserve halted the run
+    budget_left: int = 0              # founders left unprocessed when it stopped (retry next window)
     by_independence: dict = field(default_factory=lambda: {"self": 0, "same_institution": 0, "independent": 0})
 
 
@@ -74,16 +79,45 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
                       today_year: Optional[int] = None,
                       search_authors: Callable = openalex.search_authors,
                       author_works: Callable = openalex.author_works,
-                      citing_works: Callable = openalex.citing_works) -> LiteratureResult:
-    """Resolve founders → OpenAlex authors and ingest publication + citation signals. The three OpenAlex
-    calls are injectable for offline tests. Persists per founder."""
+                      citing_works: Callable = openalex.citing_works,
+                      resolve_fallback: Optional[Callable] = None) -> LiteratureResult:
+    """Resolve founders → OpenAlex authors and ingest publication + citation signals. The OpenAlex calls
+    (and the free Crossref/ORCID ``resolve_fallback``) are injectable for offline tests. Persists per
+    founder."""
     mailto = cfg.openalex_mailto or _env_email()
     year = today_year or date.today().year
+
+    # Free author-resolution fallback (D25): used when the primary OpenAlex author search fails to resolve
+    # a founder. Injected in tests; in production it is the real Crossref (+optional ORCID) resolver, with
+    # the ORCID token fetched ONCE per run (only if ORCID_CLIENT_ID/_SECRET are set — else Crossref-only).
+    do_fallback = resolve_fallback
+    if do_fallback is None and cfg.author_fallback_enabled:
+        orcid_token = orcid.get_token() if orcid.credentials() else None
+        if orcid_token:
+            log.info("literature: ORCID precision booster active")
+
+        def do_fallback(name: str, hints: list[str]):  # noqa: E306
+            return author_resolution.resolve_founder(
+                name, hints, mailto=mailto,
+                max_candidates=cfg.author_fallback_max_candidates, orcid_token=orcid_token)
+
     todo = store.founders_for_literature(limit=limit, only_missing=True)
     res = LiteratureResult(founders=len(todo))
-    log.info("literature: %d founders to resolve (mailto=%s)", len(todo), bool(mailto))
+    log.info("literature: %d founders to resolve (mailto=%s, fallback=%s)",
+             len(todo), bool(mailto), bool(do_fallback))
 
-    for f in todo:
+    for i, f in enumerate(todo):
+        # Stop BEFORE starting a founder we can't afford to finish — leaving it (and the rest) UNSTAMPED
+        # so a re-run next window resumes losslessly. Checked here (between founders), never mid-founder,
+        # so a half-processed founder is never stamped/poisoned. Unknown budget (first call) → proceeds.
+        if openalex.CREDITS.exhausted(cfg.openalex_credit_reserve):
+            res.stopped_early = True
+            res.budget_left = len(todo) - i
+            log.warning("literature: OpenAlex credit reserve reached (remaining=%s, resets in ~%ss) — "
+                        "stopping; %d founders left for the next window",
+                        openalex.CREDITS.remaining, openalex.CREDITS.reset, res.budget_left)
+            break
+        res.processed += 1
         fid = f["id"]
         name = f["name"]
         hints = [h for h in (f.get("institution"), f.get("company_name")) if h]
@@ -98,8 +132,18 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
         # cands == [] is a GENUINE no-match → stamp so we don't re-query a founder with no OpenAlex trail
         author = openalex.pick_author(name, hints, cands)
         if not author:
-            store.set_founder_literature(fid, author_id=None, foundational_work_id=None)
-            continue
+            # Primary OpenAlex search didn't resolve — try the FREE Crossref/ORCID fallback (D25) before
+            # giving up, resolving to an OpenAlex author id via a cheap DOI→work map (no 10-credit search).
+            fb = do_fallback(name, hints) if do_fallback else None
+            if fb is not None and fb.fetch_failed:      # transient (Crossref/OpenAlex) → retry, don't stamp
+                log.warning("literature: fallback fetch failed for %s (left for retry)", name)
+                continue
+            aid_fb = fb.author_id if fb else None
+            if not aid_fb:                              # genuine no-match across all sources → stamp done
+                store.set_founder_literature(fid, author_id=None, foundational_work_id=None)
+                continue
+            res.authors_resolved_fallback += 1
+            author = {"id": aid_fb}                      # converge onto the resolved path below
         res.authors_resolved += 1
         aid = author["id"]
 
@@ -132,9 +176,9 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
                       extra={"foundational_work_id": found_id, "independence": indep,
                              "citing_institutions": cw.get("institutions")})
 
-    log.info("literature done: authors=%d pubs=%d citations=%d (independent=%d) by=%s",
-             res.authors_resolved, res.publications, res.citations, res.independent_citations,
-             res.by_independence)
+    log.info("literature done: authors=%d (fallback=%d) pubs=%d citations=%d (independent=%d) by=%s",
+             res.authors_resolved, res.authors_resolved_fallback, res.publications, res.citations,
+             res.independent_citations, res.by_independence)
     return res
 
 

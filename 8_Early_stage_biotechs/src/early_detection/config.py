@@ -71,6 +71,18 @@ class Config:
     literature_pub_years: int = 4                      # recent-publication window
     literature_citation_years: int = 6                 # window for citations of the foundational paper
     literature_max_citing: int = 200                   # cap citing-works fetched per foundational paper
+    # OpenAlex credit-budget guard (the 2026 quota model). The signal loops STOP before starting a new
+    # founder once observed remaining credits fall to/below this reserve — sized to comfortably finish a
+    # founder in flight (author search ~10 + a few 1-credit works/citation pages) so a run never poisons
+    # a half-processed founder and never blows the ~1000-credit/day free budget. Raise if you hold a paid
+    # OpenAlex prepaid key (bigger budget); the tracker reads the real remaining count regardless.
+    openalex_credit_reserve: int = 40
+    # Free author-resolution fallback (Crossref + optional ORCID, decision D25). When OpenAlex's author
+    # search fails to resolve a founder, resolve via Crossref (free/keyless/no-quota) → foundational DOI →
+    # a cheap (~1-credit) OpenAlex DOI→work map, instead of a second 10-credit author search. ORCID is an
+    # opt-in precision booster (active only if ORCID_CLIENT_ID/_SECRET are in the env; secrets NEVER in yaml).
+    author_fallback_enabled: bool = True
+    author_fallback_max_candidates: int = 3            # cap OpenAlex DOI→work maps tried per founder
     # Specialist healthcare/biotech fund watchlist (spec §3.5) — a 5%+ crossing (SC 13D/G) by one of
     # these is the headline capital-markets signal. Queried against EDGAR full-text (efts). Names are
     # matched case/normalization-insensitively against filing display_names.
@@ -182,5 +194,9 @@ def load_config(config_path: Path | None = None) -> Config:
         literature_pub_years=int(raw.get("literature_pub_years", defaults.literature_pub_years)),
         literature_citation_years=int(raw.get("literature_citation_years", defaults.literature_citation_years)),
         literature_max_citing=int(raw.get("literature_max_citing", defaults.literature_max_citing)),
+        openalex_credit_reserve=int(raw.get("openalex_credit_reserve", defaults.openalex_credit_reserve)),
+        author_fallback_enabled=bool(raw.get("author_fallback_enabled", defaults.author_fallback_enabled)),
+        author_fallback_max_candidates=int(raw.get("author_fallback_max_candidates",
+                                                   defaults.author_fallback_max_candidates)),
         **extraction_kwargs,
     )

@@ -6,6 +6,53 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D24 — OpenAlex enforces a credit/USD quota now; a credit-budget guard + credit-safe daily runner
+**Spec ref:** §3.1/§5.2 (the OpenAlex-backed literature + independence signals), operator asks
+(2026-07-13): "check if OpenAlex is still 429; run a daily pass that stays within the credit budget and
+doesn't lose results on a 429; run it for the existing pipeline." **Finding:** the 2026-07-11 IP lockout
+has cleared (probed live: `200 OK`), but OpenAlex now enforces a **credit/USD quota ON TOP of the 5/s
+rate limit** — every response carries `X-RateLimit-Limit` (~**1000 credits**/window), `-Remaining`,
+`-Reset` (~**21.6h ≈ daily**), `-Limit-USD` (~**$0.10**), `-Remaining-USD`, and `-Prepaid-Remaining-USD`/
+`-Onetime-Remaining` (a **prepay** path). **Cost is PER-ENDPOINT, not per-call:** `/authors?search=` =
+**10 credits**, a `/works` list/`cites:` page = **1 credit** — so the free tier is only ~**100 author
+searches/day**, and author RESOLUTION (the digest bottleneck) is also the budget hog. The handoff's prior
+framing (OpenAlex = purely a 5/s rate limit) is now stale.
+
+**Decision — read the budget and stop before exhausting it; never hardcode the prices.** Built:
+1. **`_net` header observation** — `get_json_retry`/`safe_json_retry` take an optional `on_headers`
+   callback, invoked with the response headers on BOTH success and a retryable HTTPError (so a 429's
+   `remaining=0` is observed too). Defensive (`getattr(resp,"headers",None)`, swallows callback errors) —
+   never breaks the fetch; no change to the JSON return contract.
+2. **`openalex.CreditTracker` + module-shared `CREDITS`** — `note(headers)` updates remaining/limit/reset/
+   USD; `exhausted(reserve)` is False while unknown (first call always allowed → it populates the tracker)
+   and True once observed remaining ≤ reserve. `_get` feeds every response into it and short-circuits to
+   None (→ callers treat it as a throttle → founder left UNSTAMPED for retry) once the budget is truly
+   gone. **We read the server's own remaining count after each call, so per-endpoint prices self-correct
+   — nothing is hardcoded.** `probe_credits()` = one cheap 1-credit `/works` call to populate the budget
+   before a run.
+3. **Per-founder budget gate** — `config.openalex_credit_reserve` (default **40**, sized to comfortably
+   finish a founder in flight: author search ~10 + a few 1-credit pages). The literature + independence
+   loops check it at the TOP of each founder iteration (never mid-founder → a half-processed founder is
+   never stamped/poisoned) and STOP, leaving the rest unstamped; results carry `stopped_early`/`budget_left`.
+4. **`scripts/8_openalex_daily.py` (+ `run_8_openalex_daily.bat`)** — probe budget → literature then
+   independence IN ONE PROCESS (shared `CREDITS` → the budget carries across both passes) → report
+   remaining credits + reset + backlog counts. Bails early (no expensive sweep) if already at the reserve.
+   This is now the canonical way to run OpenAlex; the individual `8_signals --literature/--independence`
+   commands also print the budget.
+
+**"Don't lose results on interruption" is satisfied by:** per-founder persistence (unchanged) + the
+anti-poisoning None-on-throttle contract (D14/M16) + the between-founders-only gate (never stamps a
+partial founder) → a re-run next window resumes losslessly. **Free author-resolution fallbacks** that
+sidestep the 10-credit search (recorded for the deferred build): **ORCID Public API** (free; needs free
+OAuth public-API creds, NOT paid membership) + **Crossref REST** (free, NO key, `mailto` polite pool, no
+credit quota). **Live drain (2026-07-13):** literature 36/36 founders (4 authors resolved, 759 independent
+citations) + independence 46/46 (5821 independent post-refinement); 987→454 credits, well within budget;
+backlog 0/0. **NEXT (paid, operator-gated):** `8_score.py --force` to fold the new citations into
+conviction. **Status:** built 2026-07-13 — `_net.on_headers` + `openalex.CreditTracker`/`probe_credits` +
+`config.openalex_credit_reserve` + literature/independence gates + `8_openalex_daily.py` + bat +
+`test_openalex_credits.py` (8). **158 tests**, all offline. Zero LLM spend (OpenAlex credits only).
+[[reference_openalex_credit_quota]]
+
 ## D23 — 13F-holdings seed provider (from 2_Funds_parser) closes EDGAR-enumeration gaps; render consolidated
 **Spec ref:** §2.2/§2.4. **Trigger:** a coverage audit of the 21 specialist biotech funds tracked in
 `2_Funds_parser` (Baker Bros/OrbiMed/RA Capital/Perceptive/RTW/…) vs the module-8 universe found **79%
