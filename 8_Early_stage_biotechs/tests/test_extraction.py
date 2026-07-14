@@ -137,19 +137,30 @@ def test_realtime_mode(store, cfg):
     assert res.extracted == 2 and res.total_founders == 1
 
 
-def test_estimate_is_batch_aware_and_not_calibration_deflated():
-    # Regression for the $4.36-billed-but-"$0.44"-displayed bug: the estimate must NOT be scaled by
-    # cost_calibration_factor (that deflated a real web-search-heavy spend 10×), and batch must be
-    # cheaper than realtime (Batch API = 50% token cost; the per-search fee is identical either way).
-    c = Config(extraction_model="claude-haiku-4-5", extraction_web_search_max_uses=4)
+def test_estimate_batch_calibrated_realtime_at_list():
+    # 2026-07-14 finding: BATCH web-search bills ~0.10× the computed list total (measured: a 200-name
+    # batch reported $10.99 vs a real $1.01 invoice), so the batch estimate/report ARE calibration-scaled;
+    # REALTIME is accurate at list (D14: a $4.36 realtime run reported raw). Batch is far cheaper than
+    # realtime (50% token discount AND the 0.10 batch calibration).
+    c = Config(extraction_model="claude-haiku-4-5", extraction_web_search_max_uses=4,
+               cost_calibration_factor=0.1)
     batch = extraction.estimate_usd(c, 50, use_batch=True)
     realtime = extraction.estimate_usd(c, 50, use_batch=False)
-    assert batch < realtime                                  # batch strictly cheaper
-    # calibration factor is ignored now — changing it does not move the estimate
-    hi = extraction.estimate_usd(Config(cost_calibration_factor=1.0, extraction_model="claude-haiku-4-5"), 50)
-    lo = extraction.estimate_usd(Config(cost_calibration_factor=0.1, extraction_model="claude-haiku-4-5"), 50)
-    assert hi == lo
-    # per-search fee (exact) is present and not deflated: 50 entities × 4 searches × $0.01 = $2.00 floor
+    assert batch < realtime
+    # REALTIME must NOT be calibration-scaled — changing the factor does not move it (regression on the
+    # $4.36→"$0.44" display bug)
+    rt_hi = extraction.estimate_usd(Config(cost_calibration_factor=1.0, extraction_model="claude-haiku-4-5"),
+                                    50, use_batch=False)
+    rt_lo = extraction.estimate_usd(Config(cost_calibration_factor=0.1, extraction_model="claude-haiku-4-5"),
+                                    50, use_batch=False)
+    assert rt_hi == rt_lo
+    # BATCH IS calibration-scaled — a 10× factor change moves it 10×
+    b_hi = extraction.estimate_usd(Config(cost_calibration_factor=1.0, extraction_model="claude-haiku-4-5"),
+                                   50, use_batch=True)
+    b_lo = extraction.estimate_usd(Config(cost_calibration_factor=0.1, extraction_model="claude-haiku-4-5"),
+                                   50, use_batch=True)
+    assert b_hi == pytest.approx(b_lo * 10)
+    # realtime per-search fee (exact, at list) present: 50 entities × 4 searches × $0.01 = $2.00 floor
     assert realtime > 50 * 4 * 0.01
 
 

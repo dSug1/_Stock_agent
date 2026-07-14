@@ -53,13 +53,20 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Daily credit-budget-safe OpenAlex run (literature + §5.2).")
     ap.add_argument("--limit", type=int, default=None, help="cap founders attempted (also budget-bounded)")
     ap.add_argument("--no-independence", action="store_true", help="run the literature pass only")
+    ap.add_argument("--crossref-only", action="store_true",
+                    help="skip the 10-credit OpenAlex author-search backstop when the free Crossref/ORCID "
+                         "resolver misses (D29) — a Crossref miss then costs ~0 credits, ~3-5x more "
+                         "founders/window; best for cold micro-cap tranches (small recall-tail tradeoff)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
 
+    import dataclasses
     cfg = load_config()
+    if args.crossref_only:
+        cfg = dataclasses.replace(cfg, author_search_backstop=False)   # per-run override (cfg is frozen)
     store = Store(cfg.db_path)
     mailto = cfg.openalex_mailto or ""
 
@@ -75,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # 2) Literature pass (author resolution + citations) — the expensive author searches.
-    print("\n[1/2] literature/citation signal (OpenAlex, founder-keyed)…")
+    mode = "crossref-ONLY (no 10-credit backstop)" if not cfg.author_search_backstop else \
+           "crossref-first (+search backstop)" if cfg.author_crossref_first else "search-first"
+    print(f"\n[1/2] literature/citation signal (OpenAlex, founder-keyed)  [{mode}]…")
     lit = ingest_literature(store, cfg, limit=args.limit)
     print(f"  founders processed:    {lit.processed}/{lit.founders}")
     print(f"  authors resolved:      {lit.authors_resolved}  (free Crossref/ORCID fallback: {lit.authors_resolved_fallback})")

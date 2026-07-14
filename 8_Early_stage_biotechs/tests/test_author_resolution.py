@@ -259,3 +259,45 @@ def test_crossref_first_backstops_to_search_on_fallback_miss(store, tmp_path):
         resolve_fallback=lambda name, hints: FallbackResult(source="none"))   # free path misses
     assert res.authors_resolved == 1 and res.authors_resolved_fallback == 0   # resolved via the backstop
     assert store.founders_for("cik:1")[0]["openalex_author_id"] == "A1"
+
+
+# ── crossref-ONLY (D29): free resolver misses → NO 10-credit backstop ──────────────────────────────
+def test_crossref_only_skips_backstop_on_miss(store, tmp_path):
+    _seed(store)
+    cfg = Config(db_path=tmp_path / "ar.db", author_crossref_first=True, author_search_backstop=False)
+
+    def _no_search(*a, **k):  # pragma: no cover
+        raise AssertionError("crossref-only must NOT run the 10-credit search when the free path misses")
+
+    res = ingest_literature(
+        store, cfg, today_year=2026, search_authors=_no_search,
+        author_works=lambda *a, **k: [], citing_works=lambda *a, **k: [],
+        resolve_fallback=lambda name, hints: FallbackResult(source="none"))   # genuine free-path miss
+    assert res.authors_resolved == 0
+    # genuine miss → stamped done (no wasted 10-credit search), not retried
+    assert store.founders_for("cik:1")[0]["literature_at"] is not None
+
+
+def test_crossref_only_still_resolves_via_free_path(store, tmp_path):
+    _seed(store)
+    cfg = Config(db_path=tmp_path / "ar.db", author_crossref_first=True, author_search_backstop=False)
+    res = ingest_literature(
+        store, cfg, today_year=2026, search_authors=lambda *a, **k: (_ for _ in ()).throw(AssertionError()),
+        author_works=lambda aid, *, sort="", per_page=25, **kw: (
+            [{"id": "Wf", "title": "F", "year": 1991, "date": "1991-01-01", "cited_by_count": 9,
+              "institutions": [], "author_names": []}] if sort.startswith("cited_by_count") else []),
+        citing_works=lambda wid, **kw: [],
+        resolve_fallback=lambda name, hints: FallbackResult(author_id="Afb", source="crossref"))
+    assert res.authors_resolved == 1 and res.authors_resolved_fallback == 1
+    assert store.founders_for("cik:1")[0]["openalex_author_id"] == "Afb"
+
+
+def test_crossref_only_transient_failure_left_for_retry(store, tmp_path):
+    _seed(store)
+    cfg = Config(db_path=tmp_path / "ar.db", author_crossref_first=True, author_search_backstop=False)
+    res = ingest_literature(
+        store, cfg, search_authors=lambda *a, **k: (_ for _ in ()).throw(AssertionError()),
+        author_works=lambda *a, **k: [], citing_works=lambda *a, **k: [],
+        resolve_fallback=lambda name, hints: FallbackResult(fetch_failed=True))   # Crossref transient
+    assert res.authors_resolved == 0
+    assert store.founders_for("cik:1")[0]["literature_at"] is None    # NOT stamped — retry next window

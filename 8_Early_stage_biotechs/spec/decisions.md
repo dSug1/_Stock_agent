@@ -6,6 +6,29 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D29 — Crossref-ONLY mode: drop the 10-credit search backstop for cold micro-cap tranches
+**Spec ref:** §3.1/§5.5, follow-up to D26. **Operator ask:** "build the cross-ref only." **Trigger:** the
+first credit-safe OpenAlex pass on the 306 cold-first micro-cap founders (2026-07-14) resolved **38 authors,
+34 via the free Crossref/ORCID fallback (89%)** — but burned **963 credits for only 101 founders (~9.5
+each)** and stopped on the reserve with 205 left. Decomposed: the ~34 free resolutions were cheap (~1–3
+credits), the drain was the **~63 non-academic founders each paying the 10-credit backstop search** (~630
+credits) before failing — CEOs/VCs with no publication trail that the OpenAlex author-search can't resolve
+either. The backstop's marginal recall was tiny: only **4** founders resolved via the primary search vs 34
+via Crossref (~4% of the pool) at 630 credits. **Decision:** `config.author_search_backstop` (default
+**True** = keep the backstop, safe) — when False (or `8_openalex_daily.py --crossref-only`), crossref-first
+skips the 10-credit OpenAlex author search when the free resolver misses and stamps no-match directly. A
+Crossref miss on a non-academic founder then makes **zero** OpenAlex calls (Crossref finds no works → the
+resolver's DOI→work map never fires), so non-academic founders cost ~0 credits instead of 10 → **~3–5× more
+founders per ~1000-credit window**. **Recall tradeoff (honest):** loses founders Crossref misses but the
+OpenAlex search would catch (~4% empirically); acceptable for cold micro-cap tranches where non-academic
+founders dominate, hence default-off. **Fail-open kept:** a transient Crossref/OpenAlex-map failure still
+returns `retry` (unstamped, next-window retry) — only a genuine miss stamps no-match. Logic in
+`literature._resolve` (a `backstop` gate on the crossref-first branch); `--crossref-only` overrides the
+frozen cfg via `dataclasses.replace`. **Status:** built 2026-07-14 — `config.author_search_backstop` +
+`_resolve` gate + `8_openalex_daily.py --crossref-only` + `test_author_resolution.py` (3 crossref-only
+cases: miss→no-match-no-search, free-path resolves, transient→retry). **181 tests.** Zero spend.
+[[reference_openalex_credit_quota]]
+
 ## D26 — Promote the Crossref/ORCID resolver to PRIMARY (crossref-first); the 10-credit search is a backstop
 **Spec ref:** §3.1/§5.5, completes the D25 "make the fallback primary" deferral. **Operator ask:** "promote
 the fallback to primary for credit savings." **Evidence it's safe:** the 10-ticker batch (2026-07-13)

@@ -104,12 +104,16 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
     # Crossref-FIRST (D25 promotion): try the free resolver before the 10-credit OpenAlex author search,
     # paying the search only as a recall backstop. Requires the fallback to exist.
     crossref_first = cfg.author_crossref_first and do_fallback is not None
+    # Crossref-ONLY (D29): drop the 10-credit backstop when the free path misses (only meaningful in
+    # crossref-first). A Crossref miss on a non-academic founder then costs ~0 OpenAlex credits, not 10.
+    backstop = cfg.author_search_backstop
 
     def _resolve(name: str, hints: list[str]) -> tuple[str, Optional[str], bool]:
         """Resolve a founder to an OpenAlex author id. → (status, author_id, via_fallback) where status
         is 'resolved' | 'no_match' (genuine — stamp done) | 'retry' (transient — leave unstamped).
 
         crossref-first: free resolver → OpenAlex-search backstop only if it misses (credit saving).
+        crossref-only (backstop off): free resolver only — a miss stamps no-match, no 10-credit search.
         search-first (legacy): 10-credit OpenAlex search → free resolver only if it misses (recall)."""
         def _search():
             cands = search_authors(name, mailto=mailto, limiter=_LIMITER)
@@ -122,6 +126,10 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
             fb = do_fallback(name, hints)
             if fb and fb.author_id:                    # resolved FREE — the 10-credit search is skipped
                 return ("resolved", fb.author_id, True)
+            if not backstop:                           # crossref-ONLY: no 10-credit search
+                # transient Crossref/OpenAlex-map failure → retry (give the free path another window);
+                # genuine miss → stamp no-match, spending zero on a 10-credit search.
+                return ("retry", None, False) if (fb and fb.fetch_failed) else ("no_match", None, False)
             st, aid, _ = _search()                     # backstop (only reached when the free path missed)
             if st == "resolved":
                 return ("resolved", aid, False)
@@ -144,8 +152,8 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
 
     todo = store.founders_for_literature(limit=limit, only_missing=True)
     res = LiteratureResult(founders=len(todo))
-    log.info("literature: %d founders to resolve (mailto=%s, fallback=%s, crossref_first=%s)",
-             len(todo), bool(mailto), bool(do_fallback), crossref_first)
+    log.info("literature: %d founders to resolve (mailto=%s, fallback=%s, crossref_first=%s, backstop=%s)",
+             len(todo), bool(mailto), bool(do_fallback), crossref_first, backstop)
 
     for i, f in enumerate(todo):
         # Stop BEFORE starting a founder we can't afford to finish — leaving it (and the rest) UNSTAMPED

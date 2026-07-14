@@ -89,6 +89,13 @@ class Config:
     # credits per academic founder while keeping full recall. Set False to revert to search-first (the
     # free resolver then runs only as a fallback after the primary search misses).
     author_crossref_first: bool = True
+    # Crossref-ONLY (D29): when crossref-first and the free resolver MISSES, skip the 10-credit OpenAlex
+    # author search backstop entirely and stamp the founder no-match. A Crossref miss on a non-academic
+    # founder (CEO/VC — no publication trail) then costs ~0 OpenAlex credits instead of 10. Trades a small
+    # recall tail (founders Crossref misses but the OpenAlex search would catch — empirically ~4% on a
+    # micro-cap tranche) for ~3–5× more founders per credit window. Default True = keep the backstop (safe);
+    # set False (or `--crossref-only`) for cold micro-cap tranches where non-academic founders dominate.
+    author_search_backstop: bool = True
     # Specialist healthcare/biotech fund watchlist (spec §3.5) — a 5%+ crossing (SC 13D/G) by one of
     # these is the headline capital-markets signal. Queried against EDGAR full-text (efts). Names are
     # matched case/normalization-insensitively against filing display_names.
@@ -205,5 +212,6 @@ def load_config(config_path: Path | None = None) -> Config:
         author_fallback_max_candidates=int(raw.get("author_fallback_max_candidates",
                                                    defaults.author_fallback_max_candidates)),
         author_crossref_first=bool(raw.get("author_crossref_first", defaults.author_crossref_first)),
+        author_search_backstop=bool(raw.get("author_search_backstop", defaults.author_search_backstop)),
         **extraction_kwargs,
     )

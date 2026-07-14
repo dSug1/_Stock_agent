@@ -116,17 +116,24 @@ def estimate_usd(cfg: Config, n: int, *, use_batch: bool = True) -> float:
     differently — this is the fix for the run that billed $4.36 but displayed "$0.44":
       - TOKENS: web_search injects large result contexts into input, so the old ~1.5k-input model was
         an order of magnitude low. Empirically (50-entity Haiku realtime run) it's ~30k input + ~2.5k
-        output per entity. The ``cost_calibration_factor`` is deliberately NOT applied — that factor was
-        derived for a NON-web-search token workload and understated THIS one ~10×.
-      - WEB SEARCH: billed EXACTLY per search (``web_search_cost_per_search``); never calibrated.
-    ``use_batch`` halves the token cost (Batch API = 50%); the per-search fee is the same either way.
-    Actual spend is always reported from ``client.spent_usd`` after the run, never this estimate."""
+        output per entity.
+      - WEB SEARCH: list is $0.01/search.
+    ``use_batch`` halves the token cost (Batch API = 50%). **Batch calibration:** the list token+search
+    total badly OVER-states the real BATCH web-search bill (measured 2026-07-14: est $12.25 vs a real
+    $1.01 invoice for 200 names, ~0.10×) — Anthropic's batch web-search billing is far below list — so
+    ``cost_calibration_factor`` IS applied in batch mode; realtime is accurate at list (D14: $4.36 real),
+    so it is not. The realtime report path likewise stays raw; only batch is calibrated (see
+    ``extract_founders``)."""
     from .clients.anthropic_client import _price
     p = _price(cfg.extraction_model)
     factor = 0.5 if use_batch else 1.0
     tok = (30_000 * p["in"] + 2_500 * p["out"]) / 1_000_000 * factor   # web_search-inflated input [INF]
-    search = cfg.extraction_web_search_max_uses * 0.01                  # exact per-search fee
-    return n * (tok + search)
+    search = cfg.extraction_web_search_max_uses * 0.01                  # per-search fee (list)
+    raw = n * (tok + search)
+    # BATCH web-search bills ~0.10× the computed number (measured 2026-07-14: est $12.25 vs a real $1.01
+    # invoice for 200 names) — Anthropic's batch web-search billing is far below list token+search rates.
+    # Realtime is accurate at list (D14: a $4.36 realtime run), so calibrate only for batch.
+    return raw * cfg.cost_calibration_factor if use_batch else raw
 
 
 def extract_founders(store: Store, cfg: Config, *, client: AnthropicClient, limit: int | None = None,
@@ -176,11 +183,14 @@ def extract_founders(store: Store, cfg: Config, *, client: AnthropicClient, limi
                                  cfg.extraction_max_output_tokens, validate=_validate, tools=tools,
                                  concurrency=concurrency, on_result=_persist)
 
-    # Report the ACTUAL measured spend — client.spent_usd already sums real token cost (at the correct
-    # batch/realtime price) + exact web-search fees. Do NOT scale it by cost_calibration_factor: that
-    # factor corrects a pre-dispatch *token estimate* (see estimate_usd), not a measured actual. Scaling
-    # an actual is how a real $4.36 web-search-heavy realtime run got mis-displayed as "$0.44".
-    res.spent_usd = client.spent_usd
+    # Reported spend. REALTIME: client.spent_usd IS the real bill (D14: a $4.36 realtime run) — report raw.
+    # BATCH web-search: client.spent_usd OVER-counts ~10× — the web-search RESULT tokens land as per-item
+    # cache_write/input and get priced at token rates, but Anthropic bills batch web-search far lower
+    # (per-search fee collapses the result-token cost; batch collapses the per-item cache writes). Measured
+    # 2026-07-14: a 200-name batch reported $10.99 but the real invoice was $1.01 (ratio 0.092 ≈ the M6
+    # 0.10). A token-only batch (scoring) reconciles exactly, so this is web-search-batch-specific. Apply
+    # the batch calibration only. [[project_anthropic_cost_calibration]]
+    res.spent_usd = client.spent_usd * cfg.cost_calibration_factor if use_batch else client.spent_usd
     log.info("extract done: extracted=%d with_founders=%d founders=%d spent=$%.2f (%d web searches)",
              res.extracted, res.with_founders, res.total_founders, res.spent_usd, client.web_searches)
     return res
