@@ -26,3 +26,8 @@ gleif_enrich: false
 # cold-first extraction tranche (est ~$12.25 Haiku batch); prevents the guard aborting collection
 # mid-batch and losing paid work. Lower back toward ~5 for routine small runs if desired.
 max_usd_per_run: 15.0
+
+# Raised 2026-07-14: the v2 asymmetry rubric emits ~2.3k output tokens/candidate; 4000 truncated 8 of
+# 272 (invalid JSON -> dropped). 6000 leaves headroom so no candidate is lost. (Higher cap does not raise
+# per-candidate cost -- billing is on ACTUAL output tokens, not the cap.)
+scoring_max_output_tokens: 6000
