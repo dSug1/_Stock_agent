@@ -6,6 +6,27 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D30 — CIK backfill recovers no-CIK US names into the capital gate (data-completeness, not a market gap)
+**Spec ref:** §3.5, cross-cutting. **Trigger:** during the full-universe sweep, 279/930 active names lacked
+a capital-markets signal (the pre-filter's hard gate) → "digestible universe" capped at 651. Investigating
+the 279 (`no-CIK 167 + has-CIK-but-no-material-filing 112`) showed the no-CIK bucket wasn't all foreign: ~87
+were jurisdiction=US, and several (Assertio, KalVista, Avanos, Biodesix…) are **genuine SEC registrants we
+were simply missing a CIK for** — they entered via the fund13f/Wikidata providers without one, and the CIK
+never got backfilled. The capital signal gates on CIK, so they were invisible to it despite active SEC
+filing. **Decision:** `scripts/8_cik_backfill.py` — for each active entity with no CIK but a ticker, resolve
+ticker→CIK via EDGAR `browse-edgar getcompany` (reuses `fund13f._lookup_ticker`; free, no key) and set it
+**only when no other stored entity already holds that CIK** (collision guard → never a false union-find
+merge). Idempotent, fail-soft, `--dry-run`/`--us-only`/`--limit`. Then re-run `8_signals --capital-markets`
+(+`--designations`/`--ownership`) to reach the new CIKs. **NOT a universe rebuild** — it patches the CIK on
+existing rows so the downstream signals work; the union-find merge only matters on the next full build.
+**Live (2026-07-14, --us-only):** 87 scanned → **43 resolved (all 43 gained a capital signal)** + 13
+collisions (skipped — CIK already held = store dup) + 31 unresolved (genuinely foreign/non-filer).
+**Digestible universe 651 → 694**; scoring pool 294 → 310 eligible (+16 newly-clearing). The residual ~236
+without capital = truly-foreign (deferred native sources) + CA-FPI routine-only + quiet US shells — a real
+limit, not a data gap. Backfilled names were **already extracted (step 2a)** — CIK is signal-only, no
+re-extraction. **Status:** built + run 2026-07-14 (`scripts/8_cik_backfill.py`). Operational script (EDGAR
+I/O), no unit test; collision guard + dry-run are the safety. [[project_8_early_stage_biotechs_app]]
+
 ## D29 — Crossref-ONLY mode: drop the 10-credit search backstop for cold micro-cap tranches
 **Spec ref:** §3.1/§5.5, follow-up to D26. **Operator ask:** "build the cross-ref only." **Trigger:** the
 first credit-safe OpenAlex pass on the 306 cold-first micro-cap founders (2026-07-14) resolved **38 authors,

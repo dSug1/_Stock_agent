@@ -14,6 +14,28 @@ only whatever newly clears.
 
 ---
 
+## ⏳ CURRENT STATE — resume here (as of 2026-07-14, end of session)
+
+- ✅ **Step 1 done** — 294 candidates scored under v2 (13 deep-dive / 127 surveil / 154 deprioritize),
+  digest rendered to `Outputs/pipeline_status.html`. `scoring_max_output_tokens` is 6000 (no truncation).
+- ✅ **Step 2 done** — the whole active universe is founder-extracted (**940 entities, 1,650 founders**,
+  $3.35 real); free signals refreshed.
+- ✅ **CIK backfill done** — `8_cik_backfill.py --us-only` resolved 43 missing CIKs → +43 capital-covered,
+  so the **digestible universe is now 694** (was 651). Their designations/ownership signals were also run.
+- 🔻 **Step 3 IN PROGRESS** — OpenAlex crossref-only drain. **970 founders await literature resolution**
+  (+47 awaiting independence). Each ~1000-credit window clears ~140 founders → **~7 more windows**.
+  The credit window resets ~every 21h; a run when the budget is below the 40-reserve just bails (no-op).
+- ⬜ **Step 4 not started** — 16 candidates already clear the pre-filter unscored (310 eligible − 294
+  scored); more will clear as step 3 drains. Score them with a PLAIN `8_score.py --yes` (NO `--force`).
+
+**THE NEXT COMMAND** (after the OpenAlex budget resets — check with the probe below):
+```
+run_8_openalex_daily.bat --crossref-only        REM repeat each window until backlog = 0
+```
+Quick budget check (1 credit): `%PY% -c "from early_detection.clients import openalex; print(openalex.probe_credits('sugitania846@gmail.com'))"` — look at `remaining`; if < 40 it will bail, wait for `reset_s`.
+
+---
+
 ## Cost & time budget (whole sweep)
 
 | Step | Action | $ (real) | Time |
@@ -50,20 +72,36 @@ market caps — no enrich needed.)
 
 ---
 
-## Step 3 — OpenAlex crossref-only drain  (FREE, ~2–3 windows)
+## Step 2.5 — CIK backfill (FREE, EDGAR; done this session, re-runnable)
+
+Some active names arrived without an SEC CIK, so the capital-markets gate couldn't reach them even though
+they ARE SEC filers (Assertio, Avanos, Biodesix…). `8_cik_backfill.py` resolves ticker → CIK via EDGAR
+(collision-guarded, no false merge) so their capital signal lights up.
+```
+PYTHONPATH=src %PY% scripts\8_cik_backfill.py --us-only          REM (or drop --us-only for cross-listed FPIs)
+PYTHONPATH=src %PY% scripts\8_signals.py --capital-markets        REM light up the new CIKs (the gate)
+PYTHONPATH=src %PY% scripts\8_signals.py --designations           REM optional: extra evidence
+PYTHONPATH=src %PY% scripts\8_signals.py --ownership              REM optional: extra evidence
+```
+Already run this session: 43 CIKs resolved, digestible universe 651 → **694**. The remaining ~236 without a
+capital signal are genuinely foreign (need deferred native sources) or quiet US shells — a hard limit, not a
+data gap. **These backfilled names are already extracted (step 2a) — do NOT re-extract them.**
+
+---
+
+## Step 3 — OpenAlex crossref-only drain  (FREE, ~7 windows remaining)  ← YOU ARE HERE
 
 ```
 run_8_openalex_daily.bat --crossref-only
 ```
-- Resolves the new founders + citations. `--crossref-only` (D29) drops the 10-credit OpenAlex author-search
-  backstop, so non-academic founders (CEOs/VCs, no publication trail) cost **~0 credits** instead of 10 —
-  ~3–5× more founders per window. On the last run it cleared 205 literature + 93 independence in one
-  window (~845 credits).
-- **Budget-gated:** each window is ~1000 credits; the runner probes, drains until the reserve, and stops
-  losslessly. ~648 entities × ~2.1 founders ≈ ~1,360 new founders → **~2–3 windows**. The runner prints
-  `founders awaiting literature resolution: N` at the end — **re-run the same command after the budget
-  resets** (~19–22h) until that hits 0.
+- Resolves the founders → citations. `--crossref-only` (D29) drops the 10-credit OpenAlex author-search
+  backstop, so non-academic founders (CEOs/VCs, no publication trail) cost **~0 credits** instead of 10.
+- **Budget-gated:** each window is ~1000 credits; the runner probes, drains until the 40-reserve, and stops
+  losslessly. **As of 2026-07-14: 970 founders await literature resolution** (+47 awaiting independence);
+  at ~140 founders/window that is **~7 windows**. The runner prints `founders awaiting literature
+  resolution: N` at the end — **re-run the same command after the budget resets** (~21h) until N = 0.
 - Nothing is lost between windows (per-founder persist + anti-poisoning None-on-throttle). No dollar cost.
+- If a run prints `Budget at/below the 40-credit reserve — nothing run`, the window hasn't reset yet — wait.
 
 ---
 
