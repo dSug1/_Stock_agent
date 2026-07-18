@@ -84,7 +84,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--designations", action="store_true",
                     help="§3.4 FDA/regulatory designations (Breakthrough/Fast-Track/Orphan/RMAT) via EDGAR full-text")
     ap.add_argument("--tickers", default=None,
-                    help="comma-separated tickers to pin to the front of the work-list (with --clinical)")
+                    help="comma-separated tickers to pin to the front of the work-list "
+                         "(with --clinical or --literature)")
     ap.add_argument("--stats", action="store_true", help="print signal stats and exit")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of entities/founders this run")
     ap.add_argument("--concurrency", type=int, default=6, help="EDGAR fetch workers (default 6)")
@@ -141,8 +142,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.literature:
+        tickers = [t.strip() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
         print(f"Ingesting literature/citation signals → {cfg.db_path}  (OpenAlex, founder-keyed)")
-        r = ingest_literature(store, cfg, limit=args.limit)
+        r = ingest_literature(store, cfg, limit=args.limit, tickers=tickers)
         print(f"\n  founders scanned:      {r.founders}")
         print(f"  authors resolved:      {r.authors_resolved}  (via free Crossref/ORCID fallback: {r.authors_resolved_fallback})")
         print(f"  publications:          {r.publications}")

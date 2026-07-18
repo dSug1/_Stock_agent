@@ -77,6 +77,7 @@ def classify_independence(founder_name: str, hints: list[str], citing: dict) -> 
 
 def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
                       today_year: Optional[int] = None,
+                      tickers: Optional[list[str]] = None,
                       search_authors: Callable = openalex.search_authors,
                       author_works: Callable = openalex.author_works,
                       citing_works: Callable = openalex.citing_works,
@@ -150,7 +151,7 @@ def ingest_literature(store: Store, cfg: Config, *, limit: int | None = None,
             return ("resolved", fb.author_id, True)
         return ("no_match", None, False)
 
-    todo = store.founders_for_literature(limit=limit, only_missing=True)
+    todo = store.founders_for_literature(limit=limit, only_missing=True, tickers=tickers)
     res = LiteratureResult(founders=len(todo))
     log.info("literature: %d founders to resolve (mailto=%s, fallback=%s, crossref_first=%s, backstop=%s)",
              len(todo), bool(mailto), bool(do_fallback), crossref_first, backstop)

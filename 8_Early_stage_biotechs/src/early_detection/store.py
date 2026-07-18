@@ -679,18 +679,30 @@ class Store:
 
     # ── literature/citation resolution (Phase 2, §3.1) ─────────────────────────
     def founders_for_literature(self, limit: int | None = None,
-                                only_missing: bool = True) -> list[dict[str, Any]]:
+                                only_missing: bool = True,
+                                tickers: "list[str] | None" = None) -> list[dict[str, Any]]:
         """Founders (with entity + institution context) to run the literature signal for. By default
-        only those not yet resolved (``literature_at`` NULL); prioritizes the M6 priority tier."""
+        only those not yet resolved (``literature_at`` NULL); prioritizes the M6 priority tier.
+        ``tickers`` pins named companies' founders to the front of the work-list (guaranteed inside
+        ``limit``), like ``entities_for_extraction``/``active_entities``."""
         sql = ("SELECT f.*, e.legal_name AS company_name, e.in_existing_universe AS in_universe "
                "FROM founder f JOIN entity e ON e.entity_id=f.entity_id "
                "WHERE e.is_live=1 AND e.below_floor=0 AND e.above_ceiling=0")
         if only_missing:
             sql += " AND f.literature_at IS NULL"
-        sql += " ORDER BY e.in_existing_universe DESC, f.id"
-        if limit:
-            sql += f" LIMIT {int(limit)}"
-        return [dict(r) for r in self.conn.execute(sql)]
+        rows = [dict(r) for r in self.conn.execute(sql)]
+        if not tickers:
+            rows.sort(key=lambda r: (0 if r["in_universe"] else 1, r["id"]))
+            return rows[:limit] if limit else rows
+        pinned_eids: set[str] = set()
+        for tk in tickers:
+            for e in self.entities_by_ticker(tk):
+                pinned_eids.add(e.entity_id)
+        picked = [r for r in rows if r["entity_id"] in pinned_eids]
+        rest = [r for r in rows if r["entity_id"] not in pinned_eids]
+        rest.sort(key=lambda r: (0 if r["in_universe"] else 1, r["id"]))
+        ordered = picked + rest
+        return ordered[:limit] if limit else ordered
 
     def set_founder_literature(self, founder_id: int, *, author_id: Optional[str],
                                foundational_work_id: Optional[str]) -> None:

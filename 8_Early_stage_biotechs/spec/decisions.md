@@ -6,6 +6,33 @@ records where the build deviates from it and why. Phase-1 build detail is in
 
 ---
 
+## D31 — Targeted rescue tooling: `--tickers` for the literature signal (crossref-only false-negative recovery)
+**Trigger:** operator asked to add 9 named biotechs (Black Diamond, Amylyx, Tectonic, Tenaya, Tvardi, Tyra,
+Generate Biomedicines, Lexeo, Seaport) and rescue any excluded by a failed test. All 9 were already in the
+active universe (no floor/ceiling/mktcap_unknown exclusion). Two real gaps found: (1) several founders —
+Andrew Kruse & Timothy Springer (Tectonic), Ronald Crystal (Lexeo), Molly Gibson (Generate), Elizabeth Buck
+(Black Diamond), Daphne Zohar & Michael Chen (Seaport) — got a `no_match` literature stamp from the
+crossref-ONLY daily drain (D29), which never tries the 10-credit OpenAlex author-search backstop; several of
+these are unambiguously well-published academics (Springer especially) who should resolve under the normal
+backstop-enabled path. (2) Tenaya and Tyra had **0 extracted founders** despite `founder_extracted_at` being
+set — a genuine extraction gap, not a filter exclusion. **Decision:** (a) added `tickers` targeting to
+`Store.founders_for_literature` + wired `--tickers` into `8_signals.py --literature` (mirrors the existing
+`--tickers` pattern on `--clinical`/`8_extract`) so a specific company's founders can be pinned to the front
+of a **normal backstop-enabled** literature run without touching the crossref-only daily drain's global
+815-founder backlog. (b) Manually reset `literature_at=NULL` on the 7 misclassified founders (kept Buck's
+retry result — genuine no-match even with the backstop) so they re-enter the queue. (c) Reset
+`founder_extracted_at`/`founder_prompt_version=NULL` on Tenaya/Tyra and re-ran `8_extract --tickers` — found
+6 founders for Tenaya (Gladstone Institutes cardiovascular lineage: Srivastava/Bruneau/Conklin/Ding/
+Haldar/Olson) and 2 for Tyra (Todd Harris MIT, Daniel Bensen), cost $0.01 batch. **Result:** Seaport and
+Generate Biomedicines already had independent citations from already-resolved founders and cleared the
+pre-filter immediately — both scored `surveil` (58) in the same `8_score.py --yes` run that cleared the
+existing 39-candidate backlog ($0.64 actual). Tectonic/Tenaya/Tyra/Lexeo/Black Diamond's rescue is
+**gated on the OpenAlex credit window** (25/1000 credits left when the backstop run started — reserve hit
+after 1 founder; resets ~2026-07-19 ~00:00 UTC) — re-run `8_signals.py --literature --tickers
+BDTX,AMLX,TECX,TNYA,TVRD,TYRA,GENB,LXEO,SPTX --limit 20` after reset, then `--independence` with the same
+tickers, then `8_score.py --yes` again. **Status:** code shipped (2 files, tests green, 181 offline). Data
+rescue partially complete — see handoff RESUME HERE. [[project_8_early_stage_biotechs_app]]
+
 ## D30 — CIK backfill recovers no-CIK US names into the capital gate (data-completeness, not a market gap)
 **Spec ref:** §3.5, cross-cutting. **Trigger:** during the full-universe sweep, 279/930 active names lacked
 a capital-markets signal (the pre-filter's hard gate) → "digestible universe" capped at 651. Investigating
